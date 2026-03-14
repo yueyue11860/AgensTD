@@ -2,6 +2,7 @@ import type {
   AgentStatus,
   CoreReplaySnapshot,
   Difficulty,
+  GameAction,
   RankingTrend,
   Resources,
   RunEventPayload,
@@ -165,6 +166,30 @@ export interface Database {
           created_at?: string
         }
         Update: Partial<Database['public']['Tables']['run_events']['Insert']>
+        Relationships: []
+      }
+      run_actions: {
+        Row: {
+          id: number
+          run_id: string
+          tick: number
+          action: GameAction
+          accepted: boolean
+          validation_code: string | null
+          reason: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: number
+          run_id: string
+          tick?: number
+          action: GameAction
+          accepted?: boolean
+          validation_code?: string | null
+          reason?: string | null
+          created_at?: string
+        }
+        Update: Partial<Database['public']['Tables']['run_actions']['Insert']>
         Relationships: []
       }
       run_snapshots: {

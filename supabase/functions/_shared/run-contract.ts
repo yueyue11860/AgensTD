@@ -2,11 +2,15 @@ const DIFFICULTIES = ['EASY', 'NORMAL', 'HARD', 'HELL'] as const
 const RUN_STATUSES = ['queued', 'running', 'completed', 'failed', 'timeout'] as const
 const RUN_EVENT_TYPES = ['queued', 'started', 'tick', 'milestone', 'completed', 'failed', 'timeout'] as const
 const GAME_PHASES = ['PREP', 'COMBAT', 'RESOLUTION', 'DECISION'] as const
+const ACTION_TYPES = ['BUILD', 'UPGRADE', 'SELL', 'MODULATE', 'RETARGET', 'CAST', 'CONSUME', 'REPAIR', 'REROUTE', 'BUY', 'REFRESH_SHOP', 'CHOOSE_OPTION', 'PAUSE_OR_RESUME', 'NO_OP'] as const
+const ACTION_TARGET_KINDS = ['cell', 'tower', 'enemy', 'route', 'shop', 'option', 'global'] as const
 
 type Difficulty = (typeof DIFFICULTIES)[number]
 type RunStatus = (typeof RUN_STATUSES)[number]
 type RunEventType = (typeof RUN_EVENT_TYPES)[number]
 type GamePhase = (typeof GAME_PHASES)[number]
+type ActionType = (typeof ACTION_TYPES)[number]
+type ActionTargetKind = (typeof ACTION_TARGET_KINDS)[number]
 
 type JsonRecord = Record<string, unknown>
 
@@ -80,6 +84,19 @@ export interface RunnerProgressPayload {
   snapshot?: RunnerReplaySnapshot
 }
 
+export interface RunnerActionIntent {
+  actionType: ActionType
+  targetKind: ActionTargetKind
+  targetId?: string
+  targetCell?: { x: number; y: number }
+  payload?: JsonRecord
+}
+
+export interface RunnerSubmitActionPayload {
+  runId: string
+  action: RunnerActionIntent
+}
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -106,6 +123,14 @@ function isRunEventType(value: unknown): value is RunEventType {
 
 function isGamePhase(value: unknown): value is GamePhase {
   return typeof value === 'string' && GAME_PHASES.includes(value as GamePhase)
+}
+
+function isActionType(value: unknown): value is ActionType {
+  return typeof value === 'string' && ACTION_TYPES.includes(value as ActionType)
+}
+
+function isActionTargetKind(value: unknown): value is ActionTargetKind {
+  return typeof value === 'string' && ACTION_TARGET_KINDS.includes(value as ActionTargetKind)
 }
 
 function assertOptionalNumber(value: unknown, fieldName: string) {
@@ -184,6 +209,30 @@ function isEventBatchEntry(value: unknown): value is RunnerEventBatchEntry {
   }
 
   return value.tick === undefined || isFiniteNumber(value.tick)
+}
+
+function isGridPoint(value: unknown): value is { x: number; y: number } {
+  return isRecord(value) && isFiniteNumber(value.x) && isFiniteNumber(value.y)
+}
+
+function isRunnerActionIntent(value: unknown): value is RunnerActionIntent {
+  if (!isRecord(value) || !isActionType(value.actionType) || !isActionTargetKind(value.targetKind)) {
+    return false
+  }
+
+  if (value.targetId !== undefined && !isString(value.targetId)) {
+    return false
+  }
+
+  if (value.targetCell !== undefined && !isGridPoint(value.targetCell)) {
+    return false
+  }
+
+  if (value.payload !== undefined && !isRecord(value.payload)) {
+    return false
+  }
+
+  return true
 }
 
 export function parseEnqueuePayload(value: unknown): RunnerEnqueuePayload {
@@ -291,5 +340,24 @@ export function parseRunProgressPayload(value: unknown): RunnerProgressPayload {
     eventPayload: isRecord(value.eventPayload) ? value.eventPayload : undefined,
     eventBatch: Array.isArray(value.eventBatch) ? value.eventBatch.filter(isEventBatchEntry) : undefined,
     snapshot: isReplaySnapshot(value.snapshot) ? value.snapshot : undefined,
+  }
+}
+
+export function parseSubmitActionPayload(value: unknown): RunnerSubmitActionPayload {
+  if (!isRecord(value)) {
+    throw new Error('Invalid submit action payload')
+  }
+
+  if (!isString(value.runId)) {
+    throw new Error('Invalid runId')
+  }
+
+  if (!isRunnerActionIntent(value.action)) {
+    throw new Error('Invalid action')
+  }
+
+  return {
+    runId: value.runId,
+    action: value.action,
   }
 }

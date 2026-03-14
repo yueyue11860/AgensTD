@@ -22,14 +22,15 @@ Deno.serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceRoleKey)
     const payload = parseEnqueuePayload(await req.json())
 
-    const { data, error } = await supabase.rpc('enqueue_run', {
+    const rpcPayload = {
       p_agent_id: payload.agentId,
       p_difficulty: payload.difficulty,
-      p_seed: payload.seed ?? null,
-      p_max_ticks: payload.maxTicks ?? 50000,
-      p_season_code: payload.seasonCode ?? null,
-      p_triggered_by: null,
-    })
+      ...(payload.seed !== undefined ? { p_seed: payload.seed } : {}),
+      ...(payload.maxTicks !== undefined ? { p_max_ticks: payload.maxTicks } : {}),
+      ...(payload.seasonCode !== undefined ? { p_season_code: payload.seasonCode } : {}),
+    }
+
+    const { data, error } = await supabase.rpc('enqueue_run', rpcPayload)
 
     if (error) {
       throw error

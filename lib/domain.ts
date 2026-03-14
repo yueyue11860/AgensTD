@@ -40,6 +40,8 @@ export type ActionValidationCode =
   | 'issued_tick_stale'
   | 'issued_tick_outside_window'
   | 'unsupported_tower_core'
+  | 'resource_insufficient'
+  | 'invalid_target'
   | 'timeout_fallback'
 
 export type CoreMapCellKind = 'path' | 'build' | 'blocked' | 'relay' | 'gate' | 'core' | 'hazard'
@@ -170,6 +172,7 @@ export interface CoreMapCell {
 export interface CoreQuickActionSlot {
   key: 'Q' | 'W' | 'E' | 'R'
   actionId: string
+  targetId?: string
   actionType: ActionType
   targetKind: ActionTargetKind
   label: string
@@ -441,6 +444,16 @@ export interface RunResultSummary {
   observationVersion?: number
   observation?: GameObservation
   lastAction?: GameActionResult
+}
+
+export interface RunActionLogEntry {
+  id: number
+  tick: number
+  action: GameAction
+  accepted: boolean
+  validation_code?: ActionValidationCode | null
+  reason?: string | null
+  created_at: string
 }
 
 export interface RunEventPayload {

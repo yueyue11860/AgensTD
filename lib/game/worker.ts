@@ -107,7 +107,9 @@ function createAutoplayAction(observation: GameObservation): GameAction {
   return {
     action_type: readySlot.actionType,
     target_kind: readySlot.targetKind,
-    target_id: readySlot.actionId,
+    target_id: readySlot.targetKind === 'tower'
+      ? (readySlot.targetId ?? observation.scenario.towers[0]?.id)
+      : (readySlot.targetId ?? readySlot.actionId),
     observation_version: observation.observation_version,
     issued_at_tick: observation.tick,
     payload: {

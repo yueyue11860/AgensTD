@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { cn } from '@/lib/utils'
-import type { CoreEnemyWave, CoreMapCell, CoreTowerBuild } from '@/lib/domain'
+import type { CoreEnemyWave, CoreMapCell, CoreTowerBuild, GridPoint } from '@/lib/domain'
 import { AlertTriangle, Crosshair, GitFork, RadioTower, Shield, Skull } from 'lucide-react'
 
 interface CoreMapProps {
@@ -15,6 +15,10 @@ interface CoreMapProps {
   showFrame?: boolean
   showHeader?: boolean
   layout?: 'square' | 'landscape'
+  selectedCell?: GridPoint | null
+  selectedTowerId?: string | null
+  onCellSelect?: (cell: CoreMapCell, tower?: CoreTowerBuild) => void
+  enableLocalHotkeys?: boolean
 }
 
 const gridSize = 18
@@ -53,19 +57,30 @@ export function CoreMap({
   showFrame = true,
   showHeader = true,
   layout = 'square',
+  selectedCell,
+  selectedTowerId,
+  onCellSelect,
+  enableLocalHotkeys = true,
 }: CoreMapProps) {
-  const [selectedTowerId, setSelectedTowerId] = useState<string | null>(towers[0]?.id ?? null)
+  const [internalSelectedTowerId, setInternalSelectedTowerId] = useState<string | null>(towers[0]?.id ?? null)
+  const [internalSelectedCell, setInternalSelectedCell] = useState<GridPoint | null>(null)
   const [lastTriggeredActionId, setLastTriggeredActionId] = useState<string | null>(null)
 
   const cellMap = useMemo(() => {
     return new Map(cells.map((cell) => [`${cell.x},${cell.y}`, cell]))
   }, [cells])
 
-  const selectedTower = towers.find((tower) => tower.id === selectedTowerId) ?? towers[0]
+  const resolvedSelectedTowerId = selectedTowerId ?? internalSelectedTowerId
+  const resolvedSelectedCell = selectedCell ?? internalSelectedCell
+  const selectedTower = resolvedSelectedTowerId
+    ? towers.find((tower) => tower.id === resolvedSelectedTowerId) ?? null
+    : resolvedSelectedCell
+      ? null
+      : towers[0] ?? null
   const isLandscape = layout === 'landscape'
 
   useEffect(() => {
-    if (!selectedTower) {
+    if (!enableLocalHotkeys || !selectedTower) {
       return
     }
 
@@ -88,7 +103,7 @@ export function CoreMap({
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selectedTower])
+  }, [enableLocalHotkeys, selectedTower])
 
   return (
     <div className={cn(showFrame ? 'rounded-lg border border-border bg-card' : 'bg-transparent', className)}>
@@ -133,13 +148,20 @@ export function CoreMap({
                 <button
                   key={key}
                   type="button"
-                  onClick={() => tower && setSelectedTowerId(tower.id)}
+                  onClick={() => {
+                    setInternalSelectedCell({ x, y })
+                    if (tower) {
+                      setInternalSelectedTowerId(tower.id)
+                    }
+                    onCellSelect?.(cell ?? { x, y, kind: 'blocked' }, tower)
+                  }}
                   className={cn(
                     'relative min-h-0 rounded border text-left transition-colors',
                     !isLandscape && 'aspect-square',
                     cell ? cellStyles[cell.kind] : cellStyles.blocked,
                     tower && 'ring-1 ring-inset ring-primary/50',
-                    selectedTower?.id === tower?.id && 'ring-2 ring-primary'
+                    selectedTower?.id === tower?.id && 'ring-2 ring-primary',
+                    resolvedSelectedCell?.x === x && resolvedSelectedCell?.y === y && !tower && 'ring-2 ring-cold-blue'
                   )}
                   title={tower ? `${tower.name} T${tower.tier}` : cell?.kind ?? 'void'}
                 >
@@ -169,7 +191,26 @@ export function CoreMap({
           </div>
         </div>
 
-        {showIntel && selectedTower && <div className="space-y-3">
+        {showIntel && <div className="space-y-3">
+          {resolvedSelectedCell && !selectedTower ? (
+            <div className="rounded-lg border border-border bg-muted/20 p-3">
+              <div className="mb-3 flex items-center gap-2">
+                <Crosshair className="h-4 w-4 text-cold-blue" />
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">已选地块</p>
+                  <p className="text-sm font-medium">({resolvedSelectedCell.x}, {resolvedSelectedCell.y})</p>
+                </div>
+              </div>
+              <div className="rounded border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
+                {cellMap.get(`${resolvedSelectedCell.x},${resolvedSelectedCell.y}`)?.kind === 'build'
+                  ? '这是一个可建造地块。波前阶段可以在这里落下新的塔核。'
+                  : '当前格子不可建造，可重新选择其他 build 地块。'}
+              </div>
+            </div>
+          ) : null}
+
+          {selectedTower ? (
+          <>
           <div className="rounded-lg border border-border bg-muted/20 p-3">
             <div className="mb-3 flex items-center gap-2">
               <Crosshair className="h-4 w-4 text-primary" />
@@ -267,6 +308,8 @@ export function CoreMap({
               ))}
             </div>
           </div>
+          </>
+          ) : null}
         </div>}
       </div>
     </div>
