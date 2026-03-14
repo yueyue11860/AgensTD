@@ -7,7 +7,7 @@ import type {
   MvpBoundary,
   PhaseRule,
   PhaseState,
-} from '@/lib/domain'
+} from '../domain.ts'
 
 export const MVP_DIFFICULTY_ORDER: Difficulty[] = ['EASY', 'NORMAL', 'HARD', 'HELL']
 

@@ -32,6 +32,11 @@ pnpm dev
 pnpm dev
 pnpm lint
 pnpm build
+pnpm runner:process
+pnpm runner:process:live
+pnpm runner:watch
+pnpm runner:watch:live
+pnpm regression:deterministic
 ```
 
 ## 提交规范
@@ -55,3 +60,42 @@ fix: handle empty rankings state
 ## Supabase
 
 数据库结构和部署顺序见 [supabase/README.md](supabase/README.md)。
+
+本地 worker dry-run 可用下面的命令验证共享上报链路：
+
+```bash
+pnpm runner:process
+```
+
+连接真实 Supabase 环境后，可以直接处理单个排队 run：
+
+```bash
+pnpm runner:process:live
+```
+
+也可以启动轻量轮询 worker：
+
+```bash
+pnpm runner:watch -- --max-runs 3 --steps 6
+```
+
+真实环境下的常驻轮询入口：
+
+```bash
+pnpm runner:watch:live -- --max-runs 10 --steps 6 --poll-ms 5000
+```
+
+默认脚本会以 dry-run 模式执行一次轮询；接入真实环境时可去掉 `--dry-run`：
+
+```bash
+node --experimental-strip-types scripts/run-worker-loop.ts --max-runs 3 --steps 6
+```
+
+真实 runner 至少需要这些环境变量：
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+SUPABASE_SERVICE_ROLE_KEY=...
+RUNNER_SECRET=...
+```

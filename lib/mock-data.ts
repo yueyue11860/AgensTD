@@ -13,8 +13,8 @@ import type {
   Run,
   SeasonRanking,
   Tower,
-} from '@/lib/domain'
-import { MVP_CORE_TOWER_TYPES } from '@/lib/game/rules'
+} from './domain.ts'
+import { MVP_CORE_TOWER_TYPES } from './game/rules.ts'
 
 export type {
   Agent,

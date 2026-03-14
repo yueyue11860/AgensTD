@@ -7,6 +7,10 @@ export interface SupabaseServiceEnv extends SupabasePublicEnv {
   serviceRoleKey: string
 }
 
+export interface SupabaseRunnerInvokeEnv extends SupabasePublicEnv {
+  runnerSecret: string
+}
+
 function readPublicEnv(): SupabasePublicEnv | null {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -37,5 +41,19 @@ export function getSupabaseServiceEnv(): SupabaseServiceEnv | null {
   return {
     ...publicEnv,
     serviceRoleKey,
+  }
+}
+
+export function getSupabaseRunnerInvokeEnv(): SupabaseRunnerInvokeEnv | null {
+  const publicEnv = readPublicEnv()
+  const runnerSecret = process.env.RUNNER_SECRET ?? process.env.SUPABASE_RUNNER_SECRET
+
+  if (!publicEnv || !runnerSecret) {
+    return null
+  }
+
+  return {
+    ...publicEnv,
+    runnerSecret,
   }
 }

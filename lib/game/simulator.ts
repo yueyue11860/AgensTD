@@ -11,7 +11,7 @@ import {
   type RunResultSummary,
   type SimulationEvent,
   type SimulatorState,
-} from '@/lib/domain'
+} from '../domain.ts'
 import {
   createPhaseState,
   getActionWindowLabel,
@@ -19,9 +19,9 @@ import {
   MVP_CORE_TOWER_TYPES,
   PHASE_ORDER,
   PHASE_RULES,
-} from '@/lib/game/rules'
-import { buildReplaySnapshot, buildRunResultSummary } from '@/lib/game/replay'
-import { mockCoreScenario } from '@/lib/mock-data'
+} from './rules.ts'
+import { buildReplaySnapshot, buildRunResultSummary } from './replay.ts'
+import { mockCoreScenario } from '../mock-data.ts'
 
 interface SimulatorOptions {
   scenario?: CoreRunScenario

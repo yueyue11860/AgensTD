@@ -27,6 +27,12 @@ export interface RunnerResultSummary extends JsonRecord {
   actionWindow?: JsonRecord
 }
 
+export interface RunnerEventBatchEntry {
+  eventType: RunEventType
+  tick?: number
+  payload: JsonRecord
+}
+
 export interface RunnerReplaySnapshot {
   tick?: number
   timestamp: string
@@ -70,6 +76,7 @@ export interface RunnerProgressPayload {
   resultSummary?: RunnerResultSummary
   eventType?: RunEventType
   eventPayload?: JsonRecord
+  eventBatch?: RunnerEventBatchEntry[]
   snapshot?: RunnerReplaySnapshot
 }
 
@@ -171,6 +178,14 @@ function isReplaySnapshot(value: unknown): value is RunnerReplaySnapshot {
   )
 }
 
+function isEventBatchEntry(value: unknown): value is RunnerEventBatchEntry {
+  if (!isRecord(value) || !isRunEventType(value.eventType) || !isRecord(value.payload)) {
+    return false
+  }
+
+  return value.tick === undefined || isFiniteNumber(value.tick)
+}
+
 export function parseEnqueuePayload(value: unknown): RunnerEnqueuePayload {
   if (!isRecord(value)) {
     throw new Error('Invalid enqueue payload')
@@ -241,6 +256,10 @@ export function parseRunProgressPayload(value: unknown): RunnerProgressPayload {
     throw new Error('Invalid eventPayload')
   }
 
+  if (value.eventBatch !== undefined && (!Array.isArray(value.eventBatch) || !value.eventBatch.every(isEventBatchEntry))) {
+    throw new Error('Invalid eventBatch')
+  }
+
   if (value.snapshot !== undefined && !isReplaySnapshot(value.snapshot)) {
     throw new Error('Invalid snapshot')
   }
@@ -270,6 +289,7 @@ export function parseRunProgressPayload(value: unknown): RunnerProgressPayload {
     resultSummary: isResultSummary(value.resultSummary) ? value.resultSummary : undefined,
     eventType: isRunEventType(value.eventType) ? value.eventType : undefined,
     eventPayload: isRecord(value.eventPayload) ? value.eventPayload : undefined,
+    eventBatch: Array.isArray(value.eventBatch) ? value.eventBatch.filter(isEventBatchEntry) : undefined,
     snapshot: isReplaySnapshot(value.snapshot) ? value.snapshot : undefined,
   }
 }

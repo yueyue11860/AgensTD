@@ -7,6 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "runner:process": "node --experimental-strip-types scripts/process-queued-run.ts --dry-run",
+    "runner:process:live": "node --experimental-strip-types scripts/process-queued-run.ts",
+    "runner:watch": "node --experimental-strip-types scripts/run-worker-loop.ts --once --dry-run",
+    "runner:watch:live": "node --experimental-strip-types scripts/run-worker-loop.ts --poll-ms 5000",
+    "regression:deterministic": "node --experimental-strip-types scripts/deterministic-regression.ts",
     "prepare": "husky",
     "commitlint": "commitlint --edit"
   },

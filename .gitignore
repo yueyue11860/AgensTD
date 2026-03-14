@@ -15,4 +15,5 @@ next.user-config.*
 # Common ignores
 node_modules/
 .next/
+.tmp/
 .DS_Store

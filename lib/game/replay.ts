@@ -1,4 +1,4 @@
-import type { CoreReplaySnapshot, CoreRunScenario, GameActionResult, GameObservation, RunResultSummary } from '@/lib/domain'
+import type { CoreReplaySnapshot, CoreRunScenario, GameActionResult, GameObservation, RunResultSummary } from '../domain.ts'
 
 function parseWaveNumber(label: string) {
   const match = label.match(/Wave\s+(\d+)/i)
@@ -35,6 +35,7 @@ export function buildRunResultSummary(observation: GameObservation, lastAction?:
 
   return {
     summaryVersion: 1,
+    rulesVersion: scenario.rulesVersion,
     title: scenario.title,
     zoneName: scenario.zoneName,
     currentNode: scenario.currentNode,
@@ -43,6 +44,7 @@ export function buildRunResultSummary(observation: GameObservation, lastAction?:
     maintenanceDebt: scenario.maintenanceDebt,
     routePressure: scenario.routePressure,
     resources: { ...scenario.resources },
+    supportedTowerCores: [...scenario.supportedTowerCores],
     routeNodes: scenario.routeNodes.map((node) => ({ ...node })),
     cells: scenario.cells.map((cell) => ({ ...cell })),
     towers: scenario.towers.map((tower) => ({ ...tower, cell: { ...tower.cell }, quickActions: tower.quickActions.map((slot) => ({ ...slot })) })),
@@ -56,6 +58,9 @@ export function buildRunResultSummary(observation: GameObservation, lastAction?:
     },
     routeForecast: scenario.routeForecast.map((item) => ({ ...item })),
     objectiveStack: scenario.objectiveStack.map((item) => ({ ...item })),
+    phase: observation.phase,
+    phaseState: { ...observation.phase_state },
+    observationVersion: observation.observation_version,
     observation: {
       ...observation,
       phase_state: { ...observation.phase_state },

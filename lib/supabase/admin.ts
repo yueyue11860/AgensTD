@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
-import type { Database } from '@/lib/supabase/database.types'
-import { getSupabaseServiceEnv } from '@/lib/supabase/env'
+import type { Database } from './database.types.ts'
+import { getSupabaseServiceEnv } from './env.ts'
 
 export function getSupabaseAdminClient() {
   const env = getSupabaseServiceEnv()

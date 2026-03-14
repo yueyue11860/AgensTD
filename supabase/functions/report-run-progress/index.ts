@@ -57,15 +57,26 @@ Deno.serve(async (req) => {
       throw updateError
     }
 
-    if (body.eventType) {
+    const eventRows = body.eventBatch && body.eventBatch.length > 0
+      ? body.eventBatch.map((event) => ({
+          run_id: body.runId,
+          event_type: event.eventType,
+          tick: event.tick ?? body.currentTick ?? null,
+          payload: event.payload,
+        }))
+      : body.eventType
+        ? [{
+            run_id: body.runId,
+            event_type: body.eventType,
+            tick: body.currentTick ?? null,
+            payload: body.eventPayload ?? {},
+          }]
+        : []
+
+    if (eventRows.length > 0) {
       const { error: eventError } = await supabase
         .from('run_events')
-        .insert({
-          run_id: body.runId,
-          event_type: body.eventType,
-          tick: body.currentTick ?? null,
-          payload: body.eventPayload ?? {},
-        })
+        .insert(eventRows)
 
       if (eventError) {
         throw eventError

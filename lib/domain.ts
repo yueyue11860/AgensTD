@@ -417,6 +417,7 @@ export interface EnqueueRunResult {
 
 export interface RunResultSummary {
   summaryVersion?: number
+  rulesVersion?: string
   title?: string
   zoneName?: string
   currentNode?: string
@@ -425,6 +426,7 @@ export interface RunResultSummary {
   maintenanceDebt?: number
   routePressure?: string
   resources?: CoreResources
+  supportedTowerCores?: CoreTowerType[]
   routeNodes?: RouteNodeState[]
   cells?: CoreMapCell[]
   towers?: CoreTowerBuild[]
@@ -434,6 +436,9 @@ export interface RunResultSummary {
   actionWindow?: ActionWindow
   routeForecast?: RouteForecastItem[]
   objectiveStack?: ObjectiveItem[]
+  phase?: GamePhase
+  phaseState?: PhaseState
+  observationVersion?: number
   observation?: GameObservation
   lastAction?: GameActionResult
 }
@@ -443,11 +448,19 @@ export interface RunEventPayload {
   seed?: number
   max_ticks?: number
   phase?: GamePhase
+  summary?: RunResultSummary
+  snapshot?: CoreReplaySnapshot
   observation?: GameObservation
   action?: GameAction
   actionResult?: GameActionResult
   event?: SimulationEvent
   [key: string]: unknown
+}
+
+export interface ReportRunEventEntry {
+  eventType: RunEventType
+  tick?: number
+  payload: RunEventPayload
 }
 
 export interface ReportRunProgressPayload {
@@ -471,5 +484,6 @@ export interface ReportRunProgressPayload {
   resultSummary?: RunResultSummary
   eventType?: RunEventType
   eventPayload?: RunEventPayload
+  eventBatch?: ReportRunEventEntry[]
   snapshot?: CoreReplaySnapshot
 }
