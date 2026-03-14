@@ -2,12 +2,12 @@
 
 import { useState, useMemo } from 'react'
 import { cn } from '@/lib/utils'
-import { ReplaySnapshot } from '@/lib/mock-data'
+import type { CoreReplaySnapshot, ReplaySnapshot } from '@/lib/domain'
 import { Play, Pause, SkipBack, SkipForward, FastForward } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 interface TimelineProps {
-  snapshots: ReplaySnapshot[]
+  snapshots: Array<ReplaySnapshot | CoreReplaySnapshot>
   currentTick: number
   maxTicks: number
   onSeek?: (tick: number) => void

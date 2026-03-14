@@ -1,4 +1,5 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { parseEnqueuePayload } from '../_shared/run-contract.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -19,7 +20,7 @@ Deno.serve(async (req) => {
     }
 
     const supabase = createClient(supabaseUrl, supabaseServiceRoleKey)
-    const payload = await req.json()
+    const payload = parseEnqueuePayload(await req.json())
 
     const { data, error } = await supabase.rpc('enqueue_run', {
       p_agent_id: payload.agentId,

@@ -137,7 +137,7 @@ export function Header({ title, onMenuClick, showMenuButton = false }: HeaderPro
             </div>
             <DropdownMenuSeparator />
             <DropdownMenuItem className="flex flex-col items-start gap-1 p-3">
-              <span className="text-sm">TowerMaster-Pro 完成 NIGHTMARE 难度</span>
+              <span className="text-sm">TowerMaster-Pro 完成 HELL 难度</span>
               <span className="text-xs text-muted-foreground">2 分钟前</span>
             </DropdownMenuItem>
             <DropdownMenuItem className="flex flex-col items-start gap-1 p-3">

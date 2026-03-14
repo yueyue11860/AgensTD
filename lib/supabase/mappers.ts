@@ -1,27 +1,34 @@
 import type { Agent, Difficulty, DifficultyProgress, Resources, Run, SeasonRanking } from '@/lib/domain'
-import type { Database, Json } from '@/lib/supabase/database.types'
+import type { Database } from '@/lib/supabase/database.types'
 
-const difficultyOrder: Difficulty[] = ['NORMAL', 'HARD', 'HELL', 'NIGHTMARE', 'INFERNO']
+const difficultyOrder: Difficulty[] = ['EASY', 'NORMAL', 'HARD', 'HELL']
 
 const difficultyRequirements: Record<Difficulty, string[]> = {
-  NORMAL: [],
+  EASY: [],
+  NORMAL: ['通关 EASY'],
   HARD: ['通关 NORMAL'],
-  HELL: ['通关 HARD', 'Win rate > 50%'],
-  NIGHTMARE: ['通关 HELL', 'Total score > 500k'],
-  INFERNO: ['通关 NIGHTMARE', 'Season Top 10'],
+  HELL: ['通关 HARD'],
 }
 
-function asResources(value: Json): Resources {
-  const source = typeof value === 'object' && value && !Array.isArray(value) ? value : {}
+function asResources(value: unknown): Resources {
+  const source = typeof value === 'object' && value && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 
   return {
     gold: Number(source.gold ?? 0),
+    heat: Number(source.heat ?? 0),
+    heat_limit: Number(source.heat_limit ?? 100),
     mana: Number(source.mana ?? 0),
-    lives: Number(source.lives ?? 0),
-    max_lives: Number(source.max_lives ?? 0),
-    energy: Number(source.energy ?? 0),
-    max_energy: Number(source.max_energy ?? 0),
+    mana_limit: Number(source.mana_limit ?? 100),
+    repair: Number(source.repair ?? 0),
+    threat: Number(source.threat ?? 0),
+    fortress: Number(source.fortress ?? 0),
+    fortress_max: Number(source.fortress_max ?? 100),
   }
+}
+
+function asDifficultyList(value: string[] | null | undefined): Difficulty[] {
+  const valid = new Set<Difficulty>(difficultyOrder)
+  return (value ?? []).filter((item): item is Difficulty => valid.has(item as Difficulty))
 }
 
 export function mapAgentOverviewRow(row: Database['public']['Views']['agent_overview']['Row']): Agent {
@@ -77,7 +84,7 @@ export function mapSeasonRankingRow(row: Database['public']['Views']['season_ran
     win_rate: Number(row.win_rate ?? 0),
     avg_duration_ms: Number(row.avg_duration_ms ?? 0),
     highest_wave: Number(row.highest_wave ?? 0),
-    difficulty_cleared: row.difficulty_cleared ?? [],
+    difficulty_cleared: asDifficultyList(row.difficulty_cleared),
     last_match: row.last_match ?? new Date(0).toISOString(),
     trend: row.trend,
     rank_change: Number(row.rank_change ?? 0),

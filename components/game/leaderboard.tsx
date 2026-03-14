@@ -1,6 +1,7 @@
 'use client'
 
 import { cn } from '@/lib/utils'
+import type { Difficulty } from '@/lib/domain'
 import { SeasonRanking } from '@/lib/mock-data'
 import { Trophy, TrendingUp, TrendingDown, Minus, Medal } from 'lucide-react'
 import { DifficultyBadge } from './status-badge'
@@ -161,7 +162,7 @@ export function Leaderboard({ rankings, className, compact = false }: Leaderboar
                   {entry.difficulty_cleared.slice(-2).map((diff) => (
                     <DifficultyBadge
                       key={diff}
-                      difficulty={diff as 'NORMAL' | 'HARD' | 'HELL' | 'NIGHTMARE' | 'INFERNO'}
+                      difficulty={diff as Difficulty}
                     />
                   ))}
                 </div>

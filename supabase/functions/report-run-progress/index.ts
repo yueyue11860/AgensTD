@@ -1,4 +1,5 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { parseRunProgressPayload } from '../_shared/run-contract.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -13,7 +14,7 @@ Deno.serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')
     const supabaseServiceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-    const runnerSecret = Deno.env.get('SUPABASE_RUNNER_SECRET')
+    const runnerSecret = Deno.env.get('RUNNER_SECRET') ?? Deno.env.get('SUPABASE_RUNNER_SECRET')
     const providedSecret = req.headers.get('x-runner-secret')
 
     if (!supabaseUrl || !supabaseServiceRoleKey || !runnerSecret) {
@@ -25,34 +26,32 @@ Deno.serve(async (req) => {
     }
 
     const supabase = createClient(supabaseUrl, supabaseServiceRoleKey)
-    const body = await req.json()
-
-    const runId = body.runId as string
+    const body = parseRunProgressPayload(await req.json())
 
     const runPatch = {
       status: body.status,
-      start_time: body.startTime ?? undefined,
-      end_time: body.endTime ?? undefined,
-      duration_ms: body.durationMs ?? undefined,
-      current_tick: body.currentTick ?? 0,
-      max_ticks: body.maxTicks ?? 50000,
-      score: body.score ?? 0,
-      wave: body.wave ?? 0,
-      max_wave: body.maxWave ?? 50,
-      resources: body.resources ?? undefined,
-      towers_built: body.towersBuilt ?? 0,
-      enemies_killed: body.enemiesKilled ?? 0,
-      damage_dealt: body.damageDealt ?? 0,
-      damage_taken: body.damageTaken ?? 0,
-      is_live: body.isLive ?? false,
-      error_message: body.errorMessage ?? undefined,
-      result_summary: body.resultSummary ?? {},
+      ...(body.startTime !== undefined ? { start_time: body.startTime } : {}),
+      ...(body.endTime !== undefined ? { end_time: body.endTime } : {}),
+      ...(body.durationMs !== undefined ? { duration_ms: body.durationMs } : {}),
+      ...(body.currentTick !== undefined ? { current_tick: body.currentTick } : {}),
+      ...(body.maxTicks !== undefined ? { max_ticks: body.maxTicks } : {}),
+      ...(body.score !== undefined ? { score: body.score } : {}),
+      ...(body.wave !== undefined ? { wave: body.wave } : {}),
+      ...(body.maxWave !== undefined ? { max_wave: body.maxWave } : {}),
+      ...(body.resources !== undefined ? { resources: body.resources } : {}),
+      ...(body.towersBuilt !== undefined ? { towers_built: body.towersBuilt } : {}),
+      ...(body.enemiesKilled !== undefined ? { enemies_killed: body.enemiesKilled } : {}),
+      ...(body.damageDealt !== undefined ? { damage_dealt: body.damageDealt } : {}),
+      ...(body.damageTaken !== undefined ? { damage_taken: body.damageTaken } : {}),
+      ...(body.isLive !== undefined ? { is_live: body.isLive } : {}),
+      ...(body.errorMessage !== undefined ? { error_message: body.errorMessage } : {}),
+      ...(body.resultSummary !== undefined ? { result_summary: body.resultSummary } : {}),
     }
 
     const { error: updateError } = await supabase
       .from('competition_runs')
       .update(runPatch)
-      .eq('id', runId)
+      .eq('id', body.runId)
 
     if (updateError) {
       throw updateError
@@ -62,7 +61,7 @@ Deno.serve(async (req) => {
       const { error: eventError } = await supabase
         .from('run_events')
         .insert({
-          run_id: runId,
+          run_id: body.runId,
           event_type: body.eventType,
           tick: body.currentTick ?? null,
           payload: body.eventPayload ?? {},
@@ -77,7 +76,7 @@ Deno.serve(async (req) => {
       const { error: snapshotError } = await supabase
         .from('run_snapshots')
         .upsert({
-          run_id: runId,
+          run_id: body.runId,
           tick: body.currentTick ?? 0,
           snapshot: body.snapshot,
         }, { onConflict: 'run_id,tick' })

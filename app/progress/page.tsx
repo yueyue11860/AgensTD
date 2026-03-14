@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { useAgentProgress } from '@/hooks/use-agent-progress'
 import { useAgentsData } from '@/hooks/use-agents-data'
 import { cn } from '@/lib/utils'
+import type { Difficulty } from '@/lib/domain'
 import {
   Lock,
   Unlock,
@@ -17,24 +18,20 @@ import {
   Star,
   Flame,
   Shield,
-  Skull,
-  Crown,
 } from 'lucide-react'
 
-const difficultyIcons = {
+const difficultyIcons: Record<Difficulty, typeof Shield> = {
+  EASY: Shield,
   NORMAL: Shield,
   HARD: Target,
   HELL: Flame,
-  NIGHTMARE: Skull,
-  INFERNO: Crown,
 }
 
-const difficultyColors = {
-  NORMAL: 'from-slate/20 to-slate/5 border-slate/30',
-  HARD: 'from-cold-blue/20 to-cold-blue/5 border-cold-blue/30',
-  HELL: 'from-warning-orange/20 to-warning-orange/5 border-warning-orange/30',
-  NIGHTMARE: 'from-alert-red/20 to-alert-red/5 border-alert-red/30',
-  INFERNO: 'from-purple-500/20 to-purple-500/5 border-purple-500/30',
+const difficultyColors: Record<Difficulty, string> = {
+  EASY: 'from-slate/20 to-slate/5 border-slate/30',
+  NORMAL: 'from-cold-blue/20 to-cold-blue/5 border-cold-blue/30',
+  HARD: 'from-warning-orange/20 to-warning-orange/5 border-warning-orange/30',
+  HELL: 'from-alert-red/20 to-warning-orange/5 border-alert-red/30',
 }
 
 export default function ProgressPage() {
@@ -134,8 +131,8 @@ export default function ProgressPage() {
         {/* Difficulty Cards */}
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
           {progress.map((progressItem) => {
-            const Icon = difficultyIcons[progressItem.difficulty as keyof typeof difficultyIcons]
-            const colorClass = difficultyColors[progressItem.difficulty as keyof typeof difficultyColors]
+            const Icon = difficultyIcons[progressItem.difficulty]
+            const colorClass = difficultyColors[progressItem.difficulty]
             
             return (
               <div
@@ -169,7 +166,7 @@ export default function ProgressPage() {
                       )} />
                     </div>
                     <div>
-                      <DifficultyBadge difficulty={progressItem.difficulty as 'NORMAL' | 'HARD' | 'HELL' | 'NIGHTMARE' | 'INFERNO'} />
+                      <DifficultyBadge difficulty={progressItem.difficulty} />
                       {progressItem.cleared && (
                         <div className="mt-1 flex items-center gap-1 text-xs text-acid-green">
                           <Star className="h-3 w-3 fill-current" />

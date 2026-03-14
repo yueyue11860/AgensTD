@@ -1,8 +1,9 @@
 import { cn } from '@/lib/utils'
-import { Coins, Sparkles, Heart, Zap, Flame, Wrench, ShieldAlert } from 'lucide-react'
+import type { Resources } from '@/lib/domain'
+import { Coins, Sparkles, Flame, Wrench, ShieldAlert } from 'lucide-react'
 
 interface ResourceBarProps {
-  type: 'gold' | 'mana' | 'lives' | 'energy'
+  type: 'gold' | 'mana' | 'heat' | 'repair' | 'fortress'
   current: number
   max?: number
   showLabel?: boolean
@@ -25,20 +26,6 @@ const resourceConfig = {
     barColor: 'bg-cold-blue',
     label: '法力',
   },
-  lives: {
-    icon: Heart,
-    color: 'text-alert-red',
-    bgColor: 'bg-alert-red/20',
-    barColor: 'bg-alert-red',
-    label: '生命',
-  },
-  energy: {
-    icon: Zap,
-    color: 'text-acid-green',
-    bgColor: 'bg-acid-green/20',
-    barColor: 'bg-acid-green',
-    label: '能量',
-  },
   heat: {
     icon: Flame,
     color: 'text-warning-orange',
@@ -52,6 +39,13 @@ const resourceConfig = {
     bgColor: 'bg-cyber-cyan/15',
     barColor: 'bg-cyber-cyan',
     label: '维修',
+  },
+  fortress: {
+    icon: ShieldAlert,
+    color: 'text-alert-red',
+    bgColor: 'bg-alert-red/15',
+    barColor: 'bg-alert-red',
+    label: '主堡',
   },
 }
 
@@ -105,14 +99,7 @@ export function ResourceBar({
 
 // Combined Resources Panel
 interface ResourcesPanelProps {
-  resources: {
-    gold: number
-    mana: number
-    lives: number
-    max_lives: number
-    energy: number
-    max_energy: number
-  }
+  resources: Resources
   className?: string
 }
 
@@ -124,28 +111,17 @@ export function ResourcesPanel({ resources, className }: ResourcesPanelProps) {
       </div>
       <div className="space-y-2.5">
         <ResourceBar type="gold" current={resources.gold} size="sm" />
-        <ResourceBar type="mana" current={resources.mana} size="sm" />
-        <ResourceBar type="lives" current={resources.lives} max={resources.max_lives} size="sm" />
-        <ResourceBar type="energy" current={resources.energy} max={resources.max_energy} size="sm" />
+        <ResourceBar type="heat" current={resources.heat} max={resources.heat_limit} size="sm" />
+        <ResourceBar type="mana" current={resources.mana} max={resources.mana_limit} size="sm" />
+        <ResourceBar type="repair" current={resources.repair} size="sm" />
+        <ResourceBar type="fortress" current={resources.fortress} max={resources.fortress_max} size="sm" />
       </div>
     </div>
   )
 }
 
-interface HardcoreResourceState {
-  gold: number
-  heat: number
-  heat_limit: number
-  mana: number
-  mana_limit: number
-  repair: number
-  threat: number
-  fortress: number
-  fortress_max: number
-}
-
 interface HardcoreResourcesPanelProps {
-  resources: HardcoreResourceState
+  resources: Resources
   className?: string
 }
 

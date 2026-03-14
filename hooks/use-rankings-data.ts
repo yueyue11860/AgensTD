@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import type { SeasonRanking } from '@/lib/domain'
+import type { Difficulty, SeasonRanking } from '@/lib/domain'
 import { mockRankings } from '@/lib/mock-data'
 import { getSupabaseBrowserClient, hasSupabasePublicEnv } from '@/lib/supabase/browser'
 import { fetchSeasonRankings } from '@/lib/supabase/repositories'
@@ -14,7 +14,7 @@ interface RankingsDataState {
   isUsingFallback: boolean
 }
 
-export function useRankingsData(seasonCode: string, difficulty: string) {
+export function useRankingsData(seasonCode: string, difficulty: 'ALL' | Difficulty) {
   const [state, setState] = useState<RankingsDataState>({
     rankings: mockRankings,
     isLoading: hasSupabasePublicEnv(),

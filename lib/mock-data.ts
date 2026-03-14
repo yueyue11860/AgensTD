@@ -1,113 +1,35 @@
 // Mock Data for Roguelike Tower Defense AI Competition Platform
 
-export interface Agent {
-  id: string
-  name: string
-  version: string
-  owner: string
-  created_at: string
-  last_active: string
-  total_runs: number
-  win_rate: number
-  avg_score: number
-  status: 'active' | 'inactive' | 'training' | 'error'
-  avatar?: string
-}
+import type {
+  Agent,
+  CoreEnemyWave,
+  CoreMapCell,
+  CoreRunScenario,
+  CoreTowerBuild,
+  DifficultyProgress,
+  Enemy,
+  ReplaySnapshot,
+  RouteNodeState,
+  Run,
+  SeasonRanking,
+  Tower,
+} from '@/lib/domain'
+import { MVP_CORE_TOWER_TYPES } from '@/lib/game/rules'
 
-export interface Run {
-  run_id: string
-  agent_id: string
-  agent_name: string
-  difficulty: 'NORMAL' | 'HARD' | 'HELL' | 'NIGHTMARE' | 'INFERNO'
-  seed: number
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'timeout'
-  start_time: string
-  end_time?: string
-  duration_ms?: number
-  current_tick: number
-  max_ticks: number
-  score: number
-  wave: number
-  max_wave: number
-  resources: Resources
-  towers_built: number
-  enemies_killed: number
-  damage_dealt: number
-  damage_taken: number
-  is_live: boolean
-}
-
-export interface Resources {
-  gold: number
-  mana: number
-  lives: number
-  max_lives: number
-  energy: number
-  max_energy: number
-}
-
-export interface Tower {
-  id: string
-  type: 'CANNON' | 'LASER' | 'FROST' | 'TESLA' | 'MISSILE' | 'FLAME'
-  level: number
-  position: { x: number; y: number }
-  kills: number
-  damage_dealt: number
-  upgrades: number
-  status: 'active' | 'charging' | 'overheated' | 'disabled'
-}
-
-export interface Enemy {
-  id: string
-  type: 'GRUNT' | 'TANK' | 'SWIFT' | 'HEALER' | 'BOSS' | 'ELITE'
-  health: number
-  max_health: number
-  position: { x: number; y: number }
-  speed: number
-  armor: number
-  status: 'moving' | 'attacking' | 'stunned' | 'dead'
-}
-
-export interface ReplaySnapshot {
-  tick: number
-  timestamp: string
-  game_state: {
-    resources: Resources
-    towers: Tower[]
-    enemies: Enemy[]
-    wave: number
-    score: number
-  }
-  thumbnail?: string
-}
-
-export interface SeasonRanking {
-  rank: number
-  agent_id: string
-  agent_name: string
-  owner: string
-  score: number
-  wins: number
-  losses: number
-  win_rate: number
-  avg_duration_ms: number
-  highest_wave: number
-  difficulty_cleared: string[]
-  last_match: string
-  trend: 'up' | 'down' | 'stable'
-  rank_change: number
-}
-
-export interface DifficultyProgress {
-  difficulty: string
-  unlocked: boolean
-  cleared: boolean
-  best_score: number
-  best_wave: number
-  attempts: number
-  clear_rate: number
-  requirements: string[]
-}
+export type {
+  Agent,
+  CoreEnemyWave,
+  CoreMapCell,
+  CoreRunScenario,
+  CoreTowerBuild,
+  DifficultyProgress,
+  Enemy,
+  ReplaySnapshot,
+  RouteNodeState,
+  Run,
+  SeasonRanking,
+  Tower,
+} from '@/lib/domain'
 
 // Mock Agents
 export const mockAgents: Agent[] = [
@@ -188,7 +110,7 @@ export const mockRuns: Run[] = [
     score: 38750,
     wave: 23,
     max_wave: 50,
-    resources: { gold: 1250, mana: 340, lives: 8, max_lives: 10, energy: 75, max_energy: 100 },
+    resources: { gold: 1250, heat: 84, heat_limit: 100, mana: 340, mana_limit: 120, repair: 5, threat: 78, fortress: 62, fortress_max: 100 },
     towers_built: 18,
     enemies_killed: 1847,
     damage_dealt: 2450000,
@@ -199,7 +121,7 @@ export const mockRuns: Run[] = [
     run_id: 'run_20240312_002',
     agent_id: 'agent_004',
     agent_name: 'TowerMaster-Pro',
-    difficulty: 'NIGHTMARE',
+    difficulty: 'HELL',
     seed: 98712345,
     status: 'running',
     start_time: '2024-03-12T13:45:00Z',
@@ -208,7 +130,7 @@ export const mockRuns: Run[] = [
     score: 52400,
     wave: 31,
     max_wave: 50,
-    resources: { gold: 2100, mana: 520, lives: 6, max_lives: 8, energy: 45, max_energy: 100 },
+    resources: { gold: 2100, heat: 91, heat_limit: 110, mana: 520, mana_limit: 140, repair: 3, threat: 88, fortress: 48, fortress_max: 100 },
     towers_built: 24,
     enemies_killed: 2892,
     damage_dealt: 3820000,
@@ -230,7 +152,7 @@ export const mockRuns: Run[] = [
     score: 67200,
     wave: 50,
     max_wave: 50,
-    resources: { gold: 5200, mana: 890, lives: 4, max_lives: 10, energy: 100, max_energy: 100 },
+    resources: { gold: 5200, heat: 42, heat_limit: 120, mana: 890, mana_limit: 140, repair: 8, threat: 39, fortress: 74, fortress_max: 100 },
     towers_built: 28,
     enemies_killed: 4521,
     damage_dealt: 5920000,
@@ -241,7 +163,7 @@ export const mockRuns: Run[] = [
     run_id: 'run_20240312_004',
     agent_id: 'agent_005',
     agent_name: 'DefenseNet-Alpha',
-    difficulty: 'NORMAL',
+    difficulty: 'EASY',
     seed: 11122233,
     status: 'failed',
     start_time: '2024-03-12T11:00:00Z',
@@ -252,7 +174,7 @@ export const mockRuns: Run[] = [
     score: 8200,
     wave: 12,
     max_wave: 50,
-    resources: { gold: 0, mana: 0, lives: 0, max_lives: 15, energy: 0, max_energy: 100 },
+    resources: { gold: 0, heat: 100, heat_limit: 100, mana: 0, mana_limit: 100, repair: 0, threat: 100, fortress: 0, fortress_max: 100 },
     towers_built: 6,
     enemies_killed: 312,
     damage_dealt: 420000,
@@ -272,7 +194,7 @@ export const mockRuns: Run[] = [
     score: 0,
     wave: 0,
     max_wave: 50,
-    resources: { gold: 500, mana: 100, lives: 10, max_lives: 10, energy: 100, max_energy: 100 },
+    resources: { gold: 500, heat: 20, heat_limit: 100, mana: 100, mana_limit: 100, repair: 4, threat: 18, fortress: 100, fortress_max: 100 },
     towers_built: 0,
     enemies_killed: 0,
     damage_dealt: 0,
@@ -283,33 +205,32 @@ export const mockRuns: Run[] = [
 
 // Mock Replay Snapshots
 export const mockSnapshots: ReplaySnapshot[] = [
-  { tick: 0, timestamp: '2024-03-12T14:00:00Z', game_state: { resources: { gold: 500, mana: 100, lives: 10, max_lives: 10, energy: 100, max_energy: 100 }, towers: [], enemies: [], wave: 0, score: 0 } },
-  { tick: 5000, timestamp: '2024-03-12T14:05:00Z', game_state: { resources: { gold: 850, mana: 180, lives: 10, max_lives: 10, energy: 85, max_energy: 100 }, towers: [], enemies: [], wave: 5, score: 4200 } },
-  { tick: 10000, timestamp: '2024-03-12T14:10:00Z', game_state: { resources: { gold: 1100, mana: 280, lives: 9, max_lives: 10, energy: 70, max_energy: 100 }, towers: [], enemies: [], wave: 12, score: 15800 } },
-  { tick: 15000, timestamp: '2024-03-12T14:20:00Z', game_state: { resources: { gold: 1250, mana: 340, lives: 8, max_lives: 10, energy: 75, max_energy: 100 }, towers: [], enemies: [], wave: 23, score: 38750 } }
+  { tick: 0, timestamp: '2024-03-12T14:00:00Z', game_state: { resources: { gold: 500, heat: 18, heat_limit: 100, mana: 100, mana_limit: 100, repair: 4, threat: 16, fortress: 100, fortress_max: 100 }, towers: [], enemies: [], wave: 0, score: 0 } },
+  { tick: 5000, timestamp: '2024-03-12T14:05:00Z', game_state: { resources: { gold: 850, heat: 41, heat_limit: 100, mana: 180, mana_limit: 120, repair: 5, threat: 34, fortress: 96, fortress_max: 100 }, towers: [], enemies: [], wave: 5, score: 4200 } },
+  { tick: 10000, timestamp: '2024-03-12T14:10:00Z', game_state: { resources: { gold: 1100, heat: 67, heat_limit: 100, mana: 280, mana_limit: 120, repair: 4, threat: 59, fortress: 81, fortress_max: 100 }, towers: [], enemies: [], wave: 12, score: 15800 } },
+  { tick: 15000, timestamp: '2024-03-12T14:20:00Z', game_state: { resources: { gold: 1250, heat: 84, heat_limit: 100, mana: 340, mana_limit: 120, repair: 5, threat: 78, fortress: 62, fortress_max: 100 }, towers: [], enemies: [], wave: 23, score: 38750 } }
 ]
 
 // Mock Season Rankings
 export const mockRankings: SeasonRanking[] = [
-  { rank: 1, agent_id: 'agent_004', agent_name: 'TowerMaster-Pro', owner: 'ai_labs', score: 892500, wins: 187, losses: 23, win_rate: 0.89, avg_duration_ms: 2850000, highest_wave: 50, difficulty_cleared: ['NORMAL', 'HARD', 'HELL', 'NIGHTMARE'], last_match: '2024-03-12T15:00:00Z', trend: 'stable', rank_change: 0 },
-  { rank: 2, agent_id: 'agent_001', agent_name: 'DeepDefender-v3', owner: 'team_alpha', score: 845200, wins: 168, losses: 42, win_rate: 0.80, avg_duration_ms: 2650000, highest_wave: 48, difficulty_cleared: ['NORMAL', 'HARD', 'HELL'], last_match: '2024-03-12T14:22:00Z', trend: 'up', rank_change: 2 },
-  { rank: 3, agent_id: 'agent_002', agent_name: 'NeuralTower-X', owner: 'lab_omega', score: 782100, wins: 145, losses: 68, win_rate: 0.68, avg_duration_ms: 2420000, highest_wave: 45, difficulty_cleared: ['NORMAL', 'HARD', 'HELL'], last_match: '2024-03-12T13:45:00Z', trend: 'down', rank_change: -1 },
-  { rank: 4, agent_id: 'agent_006', agent_name: 'SentinelAI', owner: 'defense_corp', score: 721800, wins: 132, losses: 78, win_rate: 0.63, avg_duration_ms: 2180000, highest_wave: 42, difficulty_cleared: ['NORMAL', 'HARD'], last_match: '2024-03-12T12:30:00Z', trend: 'up', rank_change: 3 },
-  { rank: 5, agent_id: 'agent_007', agent_name: 'GuardianNet', owner: 'ml_studio', score: 698500, wins: 125, losses: 85, win_rate: 0.60, avg_duration_ms: 2050000, highest_wave: 40, difficulty_cleared: ['NORMAL', 'HARD'], last_match: '2024-03-12T11:45:00Z', trend: 'down', rank_change: -2 },
-  { rank: 6, agent_id: 'agent_003', agent_name: 'StrategicMind', owner: 'solo_dev', score: 652300, wins: 112, losses: 98, win_rate: 0.53, avg_duration_ms: 1920000, highest_wave: 38, difficulty_cleared: ['NORMAL', 'HARD'], last_match: '2024-03-11T22:30:00Z', trend: 'stable', rank_change: 0 },
-  { rank: 7, agent_id: 'agent_008', agent_name: 'FortressAI', owner: 'tech_guild', score: 598700, wins: 98, losses: 112, win_rate: 0.47, avg_duration_ms: 1780000, highest_wave: 35, difficulty_cleared: ['NORMAL'], last_match: '2024-03-12T10:20:00Z', trend: 'up', rank_change: 1 },
-  { rank: 8, agent_id: 'agent_009', agent_name: 'WatchTower-v2', owner: 'indie_ai', score: 545200, wins: 85, losses: 125, win_rate: 0.40, avg_duration_ms: 1650000, highest_wave: 32, difficulty_cleared: ['NORMAL'], last_match: '2024-03-12T09:15:00Z', trend: 'down', rank_change: -1 },
-  { rank: 9, agent_id: 'agent_010', agent_name: 'DefenseCore', owner: 'academy', score: 498900, wins: 72, losses: 138, win_rate: 0.34, avg_duration_ms: 1520000, highest_wave: 28, difficulty_cleared: ['NORMAL'], last_match: '2024-03-12T08:30:00Z', trend: 'stable', rank_change: 0 },
+  { rank: 1, agent_id: 'agent_004', agent_name: 'TowerMaster-Pro', owner: 'ai_labs', score: 892500, wins: 187, losses: 23, win_rate: 0.89, avg_duration_ms: 2850000, highest_wave: 50, difficulty_cleared: ['EASY', 'NORMAL', 'HARD', 'HELL'], last_match: '2024-03-12T15:00:00Z', trend: 'stable', rank_change: 0 },
+  { rank: 2, agent_id: 'agent_001', agent_name: 'DeepDefender-v3', owner: 'team_alpha', score: 845200, wins: 168, losses: 42, win_rate: 0.80, avg_duration_ms: 2650000, highest_wave: 48, difficulty_cleared: ['EASY', 'NORMAL', 'HARD'], last_match: '2024-03-12T14:22:00Z', trend: 'up', rank_change: 2 },
+  { rank: 3, agent_id: 'agent_002', agent_name: 'NeuralTower-X', owner: 'lab_omega', score: 782100, wins: 145, losses: 68, win_rate: 0.68, avg_duration_ms: 2420000, highest_wave: 45, difficulty_cleared: ['EASY', 'NORMAL', 'HARD'], last_match: '2024-03-12T13:45:00Z', trend: 'down', rank_change: -1 },
+  { rank: 4, agent_id: 'agent_006', agent_name: 'SentinelAI', owner: 'defense_corp', score: 721800, wins: 132, losses: 78, win_rate: 0.63, avg_duration_ms: 2180000, highest_wave: 42, difficulty_cleared: ['EASY', 'NORMAL'], last_match: '2024-03-12T12:30:00Z', trend: 'up', rank_change: 3 },
+  { rank: 5, agent_id: 'agent_007', agent_name: 'GuardianNet', owner: 'ml_studio', score: 698500, wins: 125, losses: 85, win_rate: 0.60, avg_duration_ms: 2050000, highest_wave: 40, difficulty_cleared: ['EASY', 'NORMAL'], last_match: '2024-03-12T11:45:00Z', trend: 'down', rank_change: -2 },
+  { rank: 6, agent_id: 'agent_003', agent_name: 'StrategicMind', owner: 'solo_dev', score: 652300, wins: 112, losses: 98, win_rate: 0.53, avg_duration_ms: 1920000, highest_wave: 38, difficulty_cleared: ['EASY', 'NORMAL'], last_match: '2024-03-11T22:30:00Z', trend: 'stable', rank_change: 0 },
+  { rank: 7, agent_id: 'agent_008', agent_name: 'FortressAI', owner: 'tech_guild', score: 598700, wins: 98, losses: 112, win_rate: 0.47, avg_duration_ms: 1780000, highest_wave: 35, difficulty_cleared: ['EASY'], last_match: '2024-03-12T10:20:00Z', trend: 'up', rank_change: 1 },
+  { rank: 8, agent_id: 'agent_009', agent_name: 'WatchTower-v2', owner: 'indie_ai', score: 545200, wins: 85, losses: 125, win_rate: 0.40, avg_duration_ms: 1650000, highest_wave: 32, difficulty_cleared: ['EASY'], last_match: '2024-03-12T09:15:00Z', trend: 'down', rank_change: -1 },
+  { rank: 9, agent_id: 'agent_010', agent_name: 'DefenseCore', owner: 'academy', score: 498900, wins: 72, losses: 138, win_rate: 0.34, avg_duration_ms: 1520000, highest_wave: 28, difficulty_cleared: ['EASY'], last_match: '2024-03-12T08:30:00Z', trend: 'stable', rank_change: 0 },
   { rank: 10, agent_id: 'agent_005', agent_name: 'DefenseNet-Alpha', owner: 'startup_xyz', score: 285600, wins: 31, losses: 58, win_rate: 0.35, avg_duration_ms: 1280000, highest_wave: 22, difficulty_cleared: [], last_match: '2024-03-12T11:20:00Z', trend: 'down', rank_change: -3 }
 ]
 
 // Mock Difficulty Progress
 export const mockDifficultyProgress: DifficultyProgress[] = [
-  { difficulty: 'NORMAL', unlocked: true, cleared: true, best_score: 72500, best_wave: 50, attempts: 45, clear_rate: 0.82, requirements: [] },
-  { difficulty: 'HARD', unlocked: true, cleared: true, best_score: 67200, best_wave: 50, attempts: 38, clear_rate: 0.58, requirements: ['Clear NORMAL'] },
-  { difficulty: 'HELL', unlocked: true, cleared: false, best_score: 45800, best_wave: 35, attempts: 24, clear_rate: 0.25, requirements: ['Clear HARD', 'Win rate > 50%'] },
-  { difficulty: 'NIGHTMARE', unlocked: false, cleared: false, best_score: 0, best_wave: 0, attempts: 0, clear_rate: 0, requirements: ['Clear HELL', 'Total score > 500k'] },
-  { difficulty: 'INFERNO', unlocked: false, cleared: false, best_score: 0, best_wave: 0, attempts: 0, clear_rate: 0, requirements: ['Clear NIGHTMARE', 'Season Top 10'] }
+  { difficulty: 'EASY', unlocked: true, cleared: true, best_score: 72500, best_wave: 50, attempts: 45, clear_rate: 0.82, requirements: [] },
+  { difficulty: 'NORMAL', unlocked: true, cleared: true, best_score: 67200, best_wave: 50, attempts: 38, clear_rate: 0.58, requirements: ['Clear EASY'] },
+  { difficulty: 'HARD', unlocked: true, cleared: false, best_score: 45800, best_wave: 35, attempts: 24, clear_rate: 0.25, requirements: ['Clear NORMAL'] },
+  { difficulty: 'HELL', unlocked: false, cleared: false, best_score: 0, best_wave: 0, attempts: 0, clear_rate: 0, requirements: ['Clear HARD'] }
 ]
 
 // Mock Towers (for current game state)
@@ -340,129 +261,8 @@ export const mockDashboardStats = {
   active_agents: 89,
   season_matches: 8542,
   avg_match_duration: '28:45',
-  top_difficulty_cleared: 'NIGHTMARE',
+  top_difficulty_cleared: 'HELL',
   server_load: 67
-}
-
-export interface CoreMapCell {
-  x: number
-  y: number
-  kind: 'path' | 'build' | 'blocked' | 'relay' | 'gate' | 'core' | 'hazard'
-}
-
-export interface CoreTowerBuild {
-  id: string
-  name: string
-  role: string
-  cell: { x: number; y: number }
-  tier: number
-  core: 'BALLISTA' | 'MORTAR' | 'FROST' | 'CURSE' | 'FURNACE' | 'CHAIN'
-  status: 'stable' | 'overdrive' | 'jammed' | 'corrupted'
-  targetMode: '前锋' | '重甲' | '热量最高' | '精英优先'
-  modules: string[]
-  heat: number
-  dps: number
-  note: string
-  quickActions: CoreQuickActionSlot[]
-}
-
-export interface CoreEnemyWave {
-  id: string
-  name: string
-  threat: 'low' | 'medium' | 'high' | 'boss'
-  lane: '北' | '中' | '南'
-  count: number
-  hp: number
-  maxHp: number
-  position: { x: number; y: number }
-  intent: string
-}
-
-export interface CoreDecisionOption {
-  id: string
-  label: string
-  cost: string
-  payoff: string
-  risk: string
-  locked?: boolean
-}
-
-export interface CoreQuickActionSlot {
-  key: 'Q' | 'W' | 'E' | 'R'
-  actionId: string
-  label: string
-  detail: string
-  cost: string
-  availability: 'ready' | 'locked' | 'cooldown'
-  reason?: string
-}
-
-export interface RouteNodeState {
-  id: string
-  zone: number
-  index: number
-  type: 'combat' | 'elite' | 'shop' | 'event' | 'camp' | 'boss'
-  title: string
-  modifier: string
-  cleared: boolean
-  active: boolean
-}
-
-export interface CoreRunScenario {
-  runId: string
-  title: string
-  agentName: string
-  difficulty: Run['difficulty']
-  seed: number
-  zoneName: string
-  currentNode: string
-  waveLabel: string
-  currentTick: number
-  maxTicks: number
-  score: number
-  fortressIntegrity: number
-  maintenanceDebt: number
-  routePressure: string
-  resources: {
-    gold: number
-    heat: number
-    heat_limit: number
-    mana: number
-    mana_limit: number
-    repair: number
-    threat: number
-    fortress: number
-    fortress_max: number
-  }
-  routeNodes: RouteNodeState[]
-  cells: CoreMapCell[]
-  towers: CoreTowerBuild[]
-  enemies: CoreEnemyWave[]
-  relics: string[]
-  buildQueue: Array<{
-    id: string
-    label: string
-    eta: string
-    reason: string
-  }>
-  actionWindow: {
-    type: string
-    deadlineMs: number
-    summary: string
-    options: CoreDecisionOption[]
-    quickActions: CoreQuickActionSlot[]
-  }
-  routeForecast: Array<{
-    path: string
-    reward: string
-    cost: string
-    risk: string
-  }>
-  objectiveStack: Array<{
-    label: string
-    detail: string
-    severity: 'info' | 'warning' | 'critical'
-  }>
 }
 
 const pathCoordinates = new Set([
@@ -519,10 +319,10 @@ export const mockCoreTowers: CoreTowerBuild[] = [
     dps: 481,
     note: '负责处理精英与重甲单位，但对群体压力无能为力。',
     quickActions: [
-      { key: 'Q', actionId: 'upgrade-ballista', label: '升级弩机', detail: '提升单体穿透并解锁四阶模块槽。', cost: '118 金币', availability: 'ready' },
-      { key: 'W', actionId: 'retarget-elite', label: '精英优先', detail: '锁定精英与 Boss 段位目标。', cost: '0', availability: 'ready' },
-      { key: 'E', actionId: 'burst-window', label: '穿刺爆发', detail: '8 秒内提高斩杀线，但增加热量。', cost: '+12 热量', availability: 'cooldown', reason: '冷却 6.0 秒' },
-      { key: 'R', actionId: 'sell-ballista', label: '拆除回收', detail: '回收 60% 造价并释放塔位。', cost: '-1 维修点', availability: 'locked', reason: '当前为主输出，不建议拆除' }
+      { key: 'Q', actionId: 'upgrade-ballista', actionType: 'UPGRADE', targetKind: 'tower', label: '升级弩机', detail: '提升单体穿透并解锁四阶模块槽。', cost: '118 金币', availability: 'ready' },
+      { key: 'W', actionId: 'retarget-elite', actionType: 'RETARGET', targetKind: 'tower', label: '精英优先', detail: '锁定精英与 Boss 段位目标。', cost: '0', availability: 'ready' },
+      { key: 'E', actionId: 'burst-window', actionType: 'CAST', targetKind: 'tower', label: '穿刺爆发', detail: '8 秒内提高斩杀线，但增加热量。', cost: '+12 热量', availability: 'cooldown', reason: '冷却 6.0 秒' },
+      { key: 'R', actionId: 'sell-ballista', actionType: 'SELL', targetKind: 'tower', label: '拆除回收', detail: '回收 60% 造价并释放塔位。', cost: '-1 维修点', availability: 'locked', reason: '当前为主输出，不建议拆除' }
     ]
   },
   {
@@ -539,10 +339,10 @@ export const mockCoreTowers: CoreTowerBuild[] = [
     dps: 392,
     note: '用于压制双入口汇流点，收益高，但热量上涨过快。',
     quickActions: [
-      { key: 'Q', actionId: 'upgrade-mortar', label: '升级迫击', detail: '提高爆炸半径与落点精度。', cost: '96 金币', availability: 'ready' },
-      { key: 'W', actionId: 'switch-frontline', label: '锁前锋', detail: '优先处理即将入汇流点的前锋敌群。', cost: '0', availability: 'ready' },
-      { key: 'E', actionId: 'cool-vent', label: '喷口降温', detail: '降低当前塔热量 18 点。', cost: '22 法能', availability: 'ready' },
-      { key: 'R', actionId: 'artillery-overdrive', label: '强制过载', detail: '短时间提高范围伤害并扩大溅射。', cost: '+16 热量', availability: 'ready' }
+      { key: 'Q', actionId: 'upgrade-mortar', actionType: 'UPGRADE', targetKind: 'tower', label: '升级迫击', detail: '提高爆炸半径与落点精度。', cost: '96 金币', availability: 'ready' },
+      { key: 'W', actionId: 'switch-frontline', actionType: 'RETARGET', targetKind: 'tower', label: '锁前锋', detail: '优先处理即将入汇流点的前锋敌群。', cost: '0', availability: 'ready' },
+      { key: 'E', actionId: 'cool-vent', actionType: 'REPAIR', targetKind: 'tower', label: '喷口降温', detail: '降低当前塔热量 18 点。', cost: '22 法能', availability: 'ready' },
+      { key: 'R', actionId: 'artillery-overdrive', actionType: 'CAST', targetKind: 'tower', label: '强制过载', detail: '短时间提高范围伤害并扩大溅射。', cost: '+16 热量', availability: 'ready' }
     ]
   },
   {
@@ -559,10 +359,10 @@ export const mockCoreTowers: CoreTowerBuild[] = [
     dps: 144,
     note: '被污染地块干扰，当前冻结效率下降，急需维修点解除卡壳。',
     quickActions: [
-      { key: 'Q', actionId: 'upgrade-frost', label: '升级棱镜', detail: '提高冻结覆盖率与减速深度。', cost: '88 金币', availability: 'ready' },
-      { key: 'W', actionId: 'retarget-lane', label: '切北路', detail: '把冻结优先级切到北路污染敌。', cost: '0', availability: 'ready' },
-      { key: 'E', actionId: 'purge-corruption', label: '应急去污', detail: '解除卡壳并恢复冻结链。', cost: '2 维修点', availability: 'ready' },
-      { key: 'R', actionId: 'rebuild-frost', label: '重构塔核', detail: '拆解为新塔核底座，保留 1 个模块。', cost: '3 维修点', availability: 'cooldown', reason: '需进入营地节点后执行' }
+      { key: 'Q', actionId: 'upgrade-frost', actionType: 'UPGRADE', targetKind: 'tower', label: '升级棱镜', detail: '提高冻结覆盖率与减速深度。', cost: '88 金币', availability: 'ready' },
+      { key: 'W', actionId: 'retarget-lane', actionType: 'RETARGET', targetKind: 'tower', label: '切北路', detail: '把冻结优先级切到北路污染敌。', cost: '0', availability: 'ready' },
+      { key: 'E', actionId: 'purge-corruption', actionType: 'REPAIR', targetKind: 'tower', label: '应急去污', detail: '解除卡壳并恢复冻结链。', cost: '2 维修点', availability: 'ready' },
+      { key: 'R', actionId: 'rebuild-frost', actionType: 'REROUTE', targetKind: 'tower', label: '重构塔核', detail: '拆解为新塔核底座，保留 1 个模块。', cost: '3 维修点', availability: 'cooldown', reason: '需进入营地节点后执行' }
     ]
   },
   {
@@ -579,50 +379,10 @@ export const mockCoreTowers: CoreTowerBuild[] = [
     dps: 201,
     note: '本身输出不高，但会把高热目标转化为全队乘法收益。',
     quickActions: [
-      { key: 'Q', actionId: 'upgrade-curse', label: '升级祭台', detail: '提高易伤倍率与持续时间。', cost: '104 金币', availability: 'ready' },
-      { key: 'W', actionId: 'mark-hottest', label: '标记高热', detail: '强制锁定热量最高敌群。', cost: '0', availability: 'ready' },
-      { key: 'E', actionId: 'debt-harvest', label: '债务收割', detail: '把敌方热量转成全队乘区。', cost: '28 法能', availability: 'ready' },
-      { key: 'R', actionId: 'sell-curse', label: '拆除回收', detail: '回收祭台并返还部分模块。', cost: '-1 维修点', availability: 'locked', reason: '当前乘区核心，不建议移除' }
-    ]
-  },
-  {
-    id: 'core_tw_05',
-    name: '熔锻炉心',
-    role: '高热爆发',
-    cell: { x: 11, y: 9 },
-    tier: 4,
-    core: 'FURNACE',
-    status: 'overdrive',
-    targetMode: '重甲',
-    modules: ['回火回路', '熔蚀喷口'],
-    heat: 49,
-    dps: 622,
-    note: '当前主输出来源，也是热量失控的主要根源。',
-    quickActions: [
-      { key: 'Q', actionId: 'upgrade-furnace', label: '升级炉心', detail: '提高高热伤害与护甲熔解。', cost: '146 金币', availability: 'ready' },
-      { key: 'W', actionId: 'switch-heavy', label: '锁重甲', detail: '优先攻击高护甲重型单位。', cost: '0', availability: 'ready' },
-      { key: 'E', actionId: 'heat-dump', label: '紧急降温', detail: '快速排热，降低爆表风险。', cost: '35 法能', availability: 'ready' },
-      { key: 'R', actionId: 'furnace-overdrive', label: '炉心超载', detail: '提高 10 秒爆发，结束后热量飙升。', cost: '+18 热量', availability: 'ready' }
-    ]
-  },
-  {
-    id: 'core_tw_06',
-    name: '链弧节点',
-    role: '汇流清线',
-    cell: { x: 7, y: 11 },
-    tier: 2,
-    core: 'CHAIN',
-    status: 'stable',
-    targetMode: '前锋',
-    modules: ['分叉电弧', '导体扩链'],
-    heat: 16,
-    dps: 338,
-    note: '依赖路口布局吃满收益，若下一节点封路，其价值会骤降。',
-    quickActions: [
-      { key: 'Q', actionId: 'upgrade-chain', label: '升级链弧', detail: '提高连锁跳数与导电范围。', cost: '92 金币', availability: 'ready' },
-      { key: 'W', actionId: 'switch-frontline-chain', label: '切前锋', detail: '优先清理已入汇流点的前锋目标。', cost: '0', availability: 'ready' },
-      { key: 'E', actionId: 'relay-boost', label: '继电强化', detail: '扩大本回路路口覆盖，强化汇流清线。', cost: '18 法能', availability: 'ready' },
-      { key: 'R', actionId: 'reroute-support', label: '重构支路', detail: '为下一节点预埋导电支路。', cost: '2 维修点', availability: 'cooldown', reason: '需等待当前战斗结算' }
+      { key: 'Q', actionId: 'upgrade-curse', actionType: 'UPGRADE', targetKind: 'tower', label: '升级祭台', detail: '提高易伤倍率与持续时间。', cost: '104 金币', availability: 'ready' },
+      { key: 'W', actionId: 'mark-hottest', actionType: 'RETARGET', targetKind: 'enemy', label: '标记高热', detail: '强制锁定热量最高敌群。', cost: '0', availability: 'ready' },
+      { key: 'E', actionId: 'debt-harvest', actionType: 'CAST', targetKind: 'enemy', label: '债务收割', detail: '把敌方热量转成全队乘区。', cost: '28 法能', availability: 'ready' },
+      { key: 'R', actionId: 'sell-curse', actionType: 'SELL', targetKind: 'tower', label: '拆除回收', detail: '回收祭台并返还部分模块。', cost: '-1 维修点', availability: 'locked', reason: '当前乘区核心，不建议移除' }
     ]
   }
 ]
@@ -674,6 +434,7 @@ export const mockCoreRouteNodes: RouteNodeState[] = [
 
 export const mockCoreScenario: CoreRunScenario = {
   runId: 'run_core_s4_044',
+  rulesVersion: 'mvp-v1',
   title: '裂谷赛季主战场',
   agentName: 'DeepDefender-v4',
   difficulty: 'HELL',
@@ -698,6 +459,7 @@ export const mockCoreScenario: CoreRunScenario = {
     fortress: 62,
     fortress_max: 100
   },
+  supportedTowerCores: MVP_CORE_TOWER_TYPES,
   routeNodes: mockCoreRouteNodes,
   cells: mockCoreMapCells,
   towers: mockCoreTowers,
@@ -709,7 +471,8 @@ export const mockCoreScenario: CoreRunScenario = {
     { id: 'queue-3', label: '降温熔锻炉心', eta: '40 法能', reason: '把全局热量从 84 压回安全区。' }
   ],
   actionWindow: {
-    type: '危机窗口 / 4.5 秒',
+    type: 'combat',
+    label: '波中干预 / 4.5 秒',
     deadlineMs: 4500,
     summary: '当前问题不是输出不够，而是热量和污染会让你在 Boss 前失去转型能力。',
     options: [
@@ -719,10 +482,10 @@ export const mockCoreScenario: CoreRunScenario = {
       { id: 'opt-4', label: '跳过操作保留资源', cost: '0', payoff: '保留转型余量', risk: '主堡本波额外承压', locked: false }
     ],
     quickActions: [
-      { key: 'Q', actionId: 'opt-1', label: '去污染棱镜', detail: '恢复北路冻结链。', cost: '2 维修点', availability: 'ready' },
-      { key: 'W', actionId: 'opt-2', label: '炉心超载', detail: '短期击穿重甲波。', cost: '+18 热量', availability: 'ready' },
-      { key: 'E', actionId: 'opt-3', label: '封死南路', detail: '降低 Boss 二阶段冲线速度。', cost: '3 维修点', availability: 'ready' },
-      { key: 'R', actionId: 'opt-4', label: '保留资源', detail: '跳过操作，保留转型余量。', cost: '0', availability: 'ready' }
+      { key: 'Q', actionId: 'opt-1', actionType: 'CHOOSE_OPTION', targetKind: 'option', label: '去污染棱镜', detail: '恢复北路冻结链。', cost: '2 维修点', availability: 'ready' },
+      { key: 'W', actionId: 'opt-2', actionType: 'CHOOSE_OPTION', targetKind: 'option', label: '炉心超载', detail: '短期击穿重甲波。', cost: '+18 热量', availability: 'ready' },
+      { key: 'E', actionId: 'opt-3', actionType: 'CHOOSE_OPTION', targetKind: 'option', label: '封死南路', detail: '降低 Boss 二阶段冲线速度。', cost: '3 维修点', availability: 'ready' },
+      { key: 'R', actionId: 'opt-4', actionType: 'CHOOSE_OPTION', targetKind: 'option', label: '保留资源', detail: '跳过操作，保留转型余量。', cost: '0', availability: 'ready' }
     ]
   },
   routeForecast: [
@@ -742,7 +505,7 @@ export const mockCoreSnapshots: ReplaySnapshot[] = [
     tick: 0,
     timestamp: '2026-03-13T11:00:00Z',
     game_state: {
-      resources: { gold: 650, mana: 90, lives: 100, max_lives: 100, energy: 100, max_energy: 100 },
+      resources: { gold: 650, heat: 18, heat_limit: 100, mana: 90, mana_limit: 120, repair: 6, threat: 22, fortress: 100, fortress_max: 100 },
       towers: [],
       enemies: [],
       wave: 1,
@@ -753,7 +516,7 @@ export const mockCoreSnapshots: ReplaySnapshot[] = [
     tick: 7200,
     timestamp: '2026-03-13T11:08:00Z',
     game_state: {
-      resources: { gold: 510, mana: 70, lives: 91, max_lives: 100, energy: 78, max_energy: 100 },
+      resources: { gold: 510, heat: 41, heat_limit: 100, mana: 70, mana_limit: 120, repair: 5, threat: 44, fortress: 91, fortress_max: 100 },
       towers: [],
       enemies: [],
       wave: 7,
@@ -764,7 +527,7 @@ export const mockCoreSnapshots: ReplaySnapshot[] = [
     tick: 14400,
     timestamp: '2026-03-13T11:16:00Z',
     game_state: {
-      resources: { gold: 438, mana: 64, lives: 74, max_lives: 100, energy: 69, max_energy: 100 },
+      resources: { gold: 438, heat: 69, heat_limit: 100, mana: 64, mana_limit: 120, repair: 4, threat: 63, fortress: 74, fortress_max: 100 },
       towers: [],
       enemies: [],
       wave: 14,
@@ -775,7 +538,7 @@ export const mockCoreSnapshots: ReplaySnapshot[] = [
     tick: 18240,
     timestamp: '2026-03-13T11:22:00Z',
     game_state: {
-      resources: { gold: 412, mana: 62, lives: 62, max_lives: 100, energy: 54, max_energy: 100 },
+      resources: { gold: 412, heat: 84, heat_limit: 100, mana: 62, mana_limit: 120, repair: 5, threat: 78, fortress: 62, fortress_max: 100 },
       towers: [],
       enemies: [],
       wave: 19,

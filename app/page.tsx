@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { MainLayout } from '@/components/layout/main-layout'
 import { CoreMap } from '@/components/game/core-map'
 import { HardcoreResourcesPanel } from '@/components/game/resource-bar'
@@ -10,7 +10,10 @@ import { useLiveRun } from '@/hooks/use-live-run'
 import { TacticalPanel } from '@/components/ui/tactical-panel'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { mockCoreScenario, mockCoreSnapshots, mockDifficultyProgress, type DifficultyProgress } from '@/lib/mock-data'
+import { GameSimulator, createSimulator } from '@/lib/game/simulator'
+import { buildReplaySnapshot, buildRunResultSummary } from '@/lib/game/replay'
+import { mockCoreScenario, mockCoreSnapshots, mockDifficultyProgress } from '@/lib/mock-data'
+import type { CoreReplaySnapshot, CoreRunScenario, Difficulty, DifficultyProgress, GameAction, RunResultSummary } from '@/lib/domain'
 import {
   Activity,
   AlertTriangle,
@@ -24,20 +27,17 @@ import {
   RotateCcw,
   Shield,
   ShieldCheck,
-  Sparkles,
   Target,
   TimerReset,
   Trophy,
   Wrench,
 } from 'lucide-react'
 
-type Difficulty = 'NORMAL' | 'HARD' | 'HELL' | 'NIGHTMARE' | 'INFERNO'
-
 type PlayerDifficultyProgress = Omit<DifficultyProgress, 'difficulty'> & {
   difficulty: Difficulty
 }
 
-const difficultyOrder: Difficulty[] = ['NORMAL', 'HARD', 'HELL', 'NIGHTMARE', 'INFERNO']
+const difficultyOrder: Difficulty[] = ['EASY', 'NORMAL', 'HARD', 'HELL']
 const progressStorageKey = 'clawgame-main-battle-progress'
 
 const difficultyMeta: Record<
@@ -59,7 +59,7 @@ const difficultyMeta: Record<
     maintenanceDebt: number
   }
 > = {
-  NORMAL: {
+  EASY: {
     title: '新兵试炼',
     description: '适合建立基本塔核循环，敌潮密度与资源压力都较低。',
     unlockText: '默认开放',
@@ -75,10 +75,10 @@ const difficultyMeta: Record<
     threatDelta: -22,
     maintenanceDebt: 1,
   },
-  HARD: {
+  NORMAL: {
     title: '战术磨合',
     description: '开始考验建造顺序和资源耦合，容错明显收紧。',
-    unlockText: '通关 NORMAL 后解锁',
+    unlockText: '通关 EASY 后解锁',
     panelClass: 'border-cold-blue/30 bg-gradient-to-br from-cold-blue/16 via-card to-card',
     icon: Target,
     scenarioName: '裂隙前哨',
@@ -91,10 +91,10 @@ const difficultyMeta: Record<
     threatDelta: -8,
     maintenanceDebt: 2,
   },
-  HELL: {
+  HARD: {
     title: '主战场危机',
     description: '中局开始出现热量、污染与改路压力，是当前赛季的主线门槛。',
-    unlockText: '通关 HARD 后解锁',
+    unlockText: '通关 NORMAL 后解锁',
     panelClass: 'border-warning-orange/30 bg-gradient-to-br from-warning-orange/14 via-card to-card',
     icon: Flame,
     scenarioName: '裂谷赛季主战场',
@@ -107,33 +107,17 @@ const difficultyMeta: Record<
     threatDelta: 0,
     maintenanceDebt: mockCoreScenario.maintenanceDebt,
   },
-  NIGHTMARE: {
-    title: '噩梦回路',
-    description: 'Boss 会强制重绘路线，若资源链断裂，主堡会被连续压穿。',
-    unlockText: '通关 HELL 后解锁',
+  HELL: {
+    title: '地狱终局',
+    description: 'Boss 会强制重绘路线并叠加高热压制，要求完整体系和稳定转型。',
+    unlockText: '通关 HARD 后解锁',
     panelClass: 'border-alert-red/30 bg-gradient-to-br from-alert-red/16 via-card to-card',
     icon: Gauge,
-    scenarioName: '崩解回路',
-    zoneName: '区域 4 / 失温裂层',
-    waveLabel: 'Wave 24 / 路径重构',
-    scoreScale: 1.22,
-    tickScale: 1.14,
-    fortressDelta: -14,
-    heatDelta: 8,
-    threatDelta: 10,
-    maintenanceDebt: 6,
-  },
-  INFERNO: {
-    title: '焚界终局',
-    description: '高热、高压、高词缀叠加的极限作战，只允许完整体系通关。',
-    unlockText: '通关 NIGHTMARE 后解锁',
-    panelClass: 'border-warning-orange/40 bg-gradient-to-br from-alert-red/20 via-warning-orange/10 to-card',
-    icon: Sparkles,
-    scenarioName: '焚界终局',
-    zoneName: '区域 5 / 熔穿核心',
+    scenarioName: '熔穿核心',
+    zoneName: '区域 4 / 熔穿核心',
     waveLabel: 'Wave 30 / 最终崩解',
-    scoreScale: 1.42,
-    tickScale: 1.28,
+    scoreScale: 1.32,
+    tickScale: 1.2,
     fortressDelta: -28,
     heatDelta: 14,
     threatDelta: 18,
@@ -244,20 +228,53 @@ function buildSnapshots(difficulty: Difficulty) {
       wave: Math.max(1, Math.round(snapshot.game_state.wave * meta.tickScale)),
       resources: {
         ...snapshot.game_state.resources,
-        lives: Math.max(1, Math.min(snapshot.game_state.resources.max_lives, snapshot.game_state.resources.lives + Math.floor(meta.fortressDelta / 2))),
+        fortress: Math.max(1, Math.min(snapshot.game_state.resources.fortress_max, snapshot.game_state.resources.fortress + Math.floor(meta.fortressDelta / 2))),
       },
     },
   }))
+}
+
+function createSuggestedAction(scenario: CoreRunScenario, observationVersion: number): GameAction {
+  const readySlot = scenario.actionWindow.quickActions.find((item) => item.availability === 'ready')
+
+  if (!readySlot) {
+    return {
+      action_type: 'NO_OP',
+      target_kind: 'global',
+      observation_version: observationVersion,
+      issued_at_tick: scenario.currentTick,
+    }
+  }
+
+  return {
+    action_type: readySlot.actionType,
+    target_kind: readySlot.targetKind,
+    target_id: readySlot.actionId,
+    observation_version: observationVersion,
+    issued_at_tick: scenario.currentTick,
+    payload: {
+      slot: readySlot.key,
+      label: readySlot.label,
+    },
+  }
+}
+
+interface LocalBattleState {
+  summary: RunResultSummary
+  snapshots: CoreReplaySnapshot[]
+  lastActionLabel: string | null
 }
 
 export default function HomePage() {
   const [progress, setProgress] = useState<PlayerDifficultyProgress[]>(initialProgress)
   const [selectedDifficulty, setSelectedDifficulty] = useState<Difficulty>(getHighestUnlockedDifficulty(initialProgress))
   const [hasStarted, setHasStarted] = useState(false)
+  const [localBattle, setLocalBattle] = useState<LocalBattleState | null>(null)
   const [timelineState, setTimelineState] = useState<{ difficulty: Difficulty | null; tick: number | null }>({
     difficulty: null,
     tick: null,
   })
+  const simulatorRef = useRef<GameSimulator | null>(null)
 
   const difficultyProgress = useMemo(() => deriveUnlocks(progress), [progress])
   const resolvedDifficulty = useMemo(() => {
@@ -288,8 +305,12 @@ export default function HomePage() {
     fallbackScenario: battleScenario,
     fallbackSnapshots: battleSnapshots,
   })
-  const activeBattleScenario = hasStarted ? liveBattleScenario : battleScenario
-  const activeBattleSnapshots = hasStarted ? liveBattleSnapshots : battleSnapshots
+  const localObservation = localBattle?.summary.observation
+  const activeBattleScenario = localObservation?.scenario ?? (hasStarted ? liveBattleScenario : battleScenario)
+  const activeBattleSnapshots = localBattle?.snapshots ?? (hasStarted ? liveBattleSnapshots : battleSnapshots)
+  const localLastAction = localBattle?.summary.lastAction
+  const localPhase = localObservation?.phase ?? null
+  const localPhaseState = localObservation?.phase_state ?? null
   const currentTick =
     timelineState.difficulty === resolvedDifficulty && timelineState.tick !== null
       ? timelineState.tick
@@ -312,7 +333,52 @@ export default function HomePage() {
       return
     }
 
+    const simulator = createSimulator({
+      scenario: buildScenario(resolvedDifficulty),
+    })
+    const observation = simulator.getObservation()
+
+    simulatorRef.current = simulator
+    const summary = buildRunResultSummary(observation)
+    setLocalBattle({
+      summary,
+      snapshots: [buildReplaySnapshot(observation.scenario, observation.phase, observation.observation_version)],
+      lastActionLabel: null,
+    })
+    setTimelineState({ difficulty: resolvedDifficulty, tick: observation.tick })
     setHasStarted(true)
+  }
+
+  const handleAdvanceSimulation = () => {
+    const simulator = simulatorRef.current
+    const currentBattle = localBattle
+
+    if (!simulator || !currentBattle) {
+      return
+    }
+
+    const observation = currentBattle.summary.observation
+
+    if (!observation) {
+      return
+    }
+
+    const action = createSuggestedAction(observation.scenario, observation.observation_version)
+    const result = simulator.step(action)
+    const actionLabel = observation.scenario.actionWindow.quickActions.find((item) => item.actionId === action.target_id)?.label ?? action.action_type
+
+    setLocalBattle((previous) => {
+      if (!previous) {
+        return previous
+      }
+
+      return {
+        summary: result.summary,
+        snapshots: [...previous.snapshots, result.snapshot].slice(-24),
+        lastActionLabel: actionLabel,
+      }
+    })
+    setTimelineState({ difficulty: resolvedDifficulty, tick: result.observation.tick })
   }
 
   const handleCompleteRun = () => {
@@ -332,6 +398,8 @@ export default function HomePage() {
         ),
       ),
     )
+    simulatorRef.current = null
+    setLocalBattle(null)
     setHasStarted(false)
     setTimelineState({ difficulty: resolvedDifficulty, tick: activeBattleScenario.currentTick })
   }
@@ -356,8 +424,8 @@ export default function HomePage() {
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-                    <span className="rounded-full border border-border bg-muted/30 px-3 py-1">已解锁 {unlockedCount}/5</span>
-                    <span className="rounded-full border border-border bg-muted/30 px-3 py-1">已通关 {clearedCount}/5</span>
+                    <span className="rounded-full border border-border bg-muted/30 px-3 py-1">已解锁 {unlockedCount}/{difficultyOrder.length}</span>
+                    <span className="rounded-full border border-border bg-muted/30 px-3 py-1">已通关 {clearedCount}/{difficultyOrder.length}</span>
                     <span className="rounded-full border border-border bg-muted/30 px-3 py-1">解锁规则: 仅当前一难度已通关时开放下一难度</span>
                   </div>
                 </div>
@@ -543,7 +611,23 @@ export default function HomePage() {
   return (
     <MainLayout title="主战场" subtitle={`${difficultyMeta[activeBattleScenario.difficulty].title} / ${activeBattleScenario.title}`}>
       <div className="space-y-4">
-        {(isLiveBattleFallback || liveBattleError) && (
+        {localBattle ? (
+          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-primary/8 p-4">
+            <StatusBadge variant="live">本地模拟已接管</StatusBadge>
+            <span className="text-sm text-muted-foreground">
+              当前阶段 {localPhase}，最近动作 {localBattle.lastActionLabel ?? '尚未执行'}
+              {localLastAction ? localLastAction.accepted ? '，已应用' : '，被拒绝' : ''}。
+            </span>
+            {localLastAction?.validation_code ? (
+              <span className="rounded-full border border-border bg-background/60 px-3 py-1 text-xs text-muted-foreground">
+                校验码 {localLastAction.validation_code}
+              </span>
+            ) : null}
+            {localLastAction?.reason ? (
+              <span className="text-xs text-muted-foreground">{localLastAction.reason}</span>
+            ) : null}
+          </div>
+        ) : (isLiveBattleFallback || liveBattleError) && (
           <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card p-4">
             <StatusBadge variant={liveBattleError ? 'warning' : 'info'}>
               {liveBattleError ? '实时战场查询失败，当前展示本地 mock 战场' : '当前没有匹配的在线战局，主战场展示本地 mock 数据'}
@@ -570,9 +654,17 @@ export default function HomePage() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" className="gap-2" onClick={() => setHasStarted(false)}>
+            <Button variant="outline" className="gap-2" onClick={() => {
+              simulatorRef.current = null
+              setLocalBattle(null)
+              setHasStarted(false)
+            }}>
               <RotateCcw className="h-4 w-4" />
               返回准备区
+            </Button>
+            <Button variant="outline" className="gap-2" onClick={handleAdvanceSimulation} disabled={!localBattle}>
+              <TimerReset className="h-4 w-4" />
+              推进一阶段
             </Button>
             <Button className="gap-2" onClick={handleCompleteRun}>
               <Trophy className="h-4 w-4" />
@@ -587,7 +679,7 @@ export default function HomePage() {
             <p className="mt-2 text-sm text-muted-foreground">{activeBattleScenario.routePressure}</p>
           </div>
           <div className="rounded-2xl border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
-            当前难度会影响开局压力、波次节奏与主堡完整度。完成本局后会写入通关记录，并在准备界面逐级开放下一档。
+            当前规则版本 {activeBattleScenario.rulesVersion}。支持塔核 {activeBattleScenario.supportedTowerCores.join(' / ')}，完成本局后会写入通关记录，并在准备界面逐级开放下一档。
           </div>
         </div>
 
@@ -633,6 +725,27 @@ export default function HomePage() {
             <p className="mt-2 text-2xl font-semibold text-warning-orange">{activeBattleScenario.maintenanceDebt}</p>
           </div>
         </div>
+
+        {localBattle ? (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-lg border border-border bg-card px-4 py-3">
+              <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">阶段序号</p>
+              <p className="mt-2 text-2xl font-semibold text-foreground">#{localPhaseState?.sequence ?? '-'}</p>
+            </div>
+            <div className="rounded-lg border border-border bg-card px-4 py-3">
+              <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">动作窗口</p>
+              <p className="mt-2 text-lg font-semibold text-cold-blue">{activeBattleScenario.actionWindow.label}</p>
+            </div>
+            <div className="rounded-lg border border-border bg-card px-4 py-3">
+              <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">阶段起始 Tick</p>
+              <p className="mt-2 text-2xl font-semibold text-foreground">{localPhaseState?.started_at_tick.toLocaleString() ?? '-'}</p>
+            </div>
+            <div className="rounded-lg border border-border bg-card px-4 py-3">
+              <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">截止 Tick</p>
+              <p className="mt-2 text-2xl font-semibold text-warning-orange">{localPhaseState?.deadline_tick.toLocaleString() ?? '-'}</p>
+            </div>
+          </div>
+        ) : null}
 
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
           <div className="space-y-6">

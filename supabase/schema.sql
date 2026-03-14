@@ -10,7 +10,27 @@ begin
 end;
 $$;
 
+create or replace function public.normalize_core_resources(p_resources jsonb)
+returns jsonb
+language sql
+immutable
+as $$
+  select jsonb_build_object(
+    'gold', coalesce((p_resources->>'gold')::integer, 0),
+    'heat', coalesce((p_resources->>'heat')::integer, (p_resources->>'energy')::integer, 20),
+    'heat_limit', coalesce((p_resources->>'heat_limit')::integer, (p_resources->>'max_energy')::integer, 100),
+    'mana', coalesce((p_resources->>'mana')::integer, 0),
+    'mana_limit', coalesce((p_resources->>'mana_limit')::integer, 100),
+    'repair', coalesce((p_resources->>'repair')::integer, 0),
+    'threat', coalesce((p_resources->>'threat')::integer, 0),
+    'fortress', coalesce((p_resources->>'fortress')::integer, (p_resources->>'lives')::integer, 100),
+    'fortress_max', coalesce((p_resources->>'fortress_max')::integer, (p_resources->>'max_lives')::integer, 100)
+  );
+$$;
+
 do $$
+declare
+  difficulty_labels text[];
 begin
   if not exists (select 1 from pg_type where typname = 'agent_status') then
     create type public.agent_status as enum ('active', 'inactive', 'training', 'error');
@@ -21,7 +41,44 @@ begin
   end if;
 
   if not exists (select 1 from pg_type where typname = 'difficulty_level') then
-    create type public.difficulty_level as enum ('NORMAL', 'HARD', 'HELL', 'NIGHTMARE', 'INFERNO');
+    create type public.difficulty_level as enum ('EASY', 'NORMAL', 'HARD', 'HELL');
+  else
+    select array_agg(e.enumlabel order by e.enumsortorder)
+      into difficulty_labels
+    from pg_enum e
+    join pg_type t on t.oid = e.enumtypid
+    where t.typname = 'difficulty_level';
+
+    if difficulty_labels is distinct from array['EASY', 'NORMAL', 'HARD', 'HELL'] then
+      drop view if exists public.season_rankings;
+      drop view if exists public.agent_difficulty_progress;
+      drop view if exists public.replay_library;
+      drop function if exists public.enqueue_run(uuid, public.difficulty_level, bigint, integer, text, uuid);
+
+      alter type public.difficulty_level rename to difficulty_level_legacy;
+      create type public.difficulty_level as enum ('EASY', 'NORMAL', 'HARD', 'HELL');
+
+      if exists (
+        select 1
+        from information_schema.columns
+        where table_schema = 'public'
+          and table_name = 'competition_runs'
+          and column_name = 'difficulty'
+      ) then
+        alter table public.competition_runs alter column difficulty drop default;
+        alter table public.competition_runs
+          alter column difficulty type public.difficulty_level
+          using (
+            case difficulty::text
+              when 'NIGHTMARE' then 'HELL'
+              when 'INFERNO' then 'HELL'
+              else difficulty::text
+            end
+          )::public.difficulty_level;
+      end if;
+
+      drop type public.difficulty_level_legacy;
+    end if;
   end if;
 
   if not exists (select 1 from pg_type where typname = 'season_status') then
@@ -87,7 +144,7 @@ create table if not exists public.competition_runs (
   score integer not null default 0,
   wave integer not null default 0,
   max_wave integer not null default 50,
-  resources jsonb not null default '{"gold":500,"mana":100,"lives":10,"max_lives":10,"energy":100,"max_energy":100}'::jsonb,
+  resources jsonb not null default public.normalize_core_resources('{"gold":500,"heat":20,"heat_limit":100,"mana":100,"mana_limit":100,"repair":4,"threat":15,"fortress":100,"fortress_max":100}'::jsonb),
   towers_built integer not null default 0,
   enemies_killed integer not null default 0,
   damage_dealt bigint not null default 0,
@@ -127,6 +184,55 @@ create table if not exists public.run_snapshots (
 );
 
 create index if not exists run_snapshots_run_id_tick_idx on public.run_snapshots(run_id, tick desc);
+
+update public.competition_runs
+set resources = public.normalize_core_resources(resources)
+where jsonb_typeof(resources) = 'object'
+  and resources is distinct from public.normalize_core_resources(resources);
+
+update public.competition_runs
+set result_summary = jsonb_set(result_summary, '{resources}', public.normalize_core_resources(result_summary->'resources'))
+where jsonb_typeof(result_summary) = 'object'
+  and jsonb_typeof(result_summary->'resources') = 'object'
+  and (result_summary->'resources') is distinct from public.normalize_core_resources(result_summary->'resources');
+
+update public.run_snapshots
+set snapshot = jsonb_set(snapshot, '{game_state,resources}', public.normalize_core_resources(snapshot #> '{game_state,resources}'))
+where jsonb_typeof(snapshot) = 'object'
+  and jsonb_typeof(snapshot->'game_state') = 'object'
+  and jsonb_typeof(snapshot #> '{game_state,resources}') = 'object'
+  and (snapshot #> '{game_state,resources}') is distinct from public.normalize_core_resources(snapshot #> '{game_state,resources}');
+
+alter table public.competition_runs drop constraint if exists competition_runs_resources_shape_check;
+alter table public.competition_runs
+  add constraint competition_runs_resources_shape_check
+  check (
+    jsonb_typeof(resources) = 'object'
+    and resources ? 'gold'
+    and resources ? 'heat'
+    and resources ? 'heat_limit'
+    and resources ? 'mana'
+    and resources ? 'mana_limit'
+    and resources ? 'repair'
+    and resources ? 'threat'
+    and resources ? 'fortress'
+    and resources ? 'fortress_max'
+  );
+
+alter table public.competition_runs drop constraint if exists competition_runs_result_summary_object_check;
+alter table public.competition_runs
+  add constraint competition_runs_result_summary_object_check
+  check (jsonb_typeof(result_summary) = 'object');
+
+alter table public.run_events drop constraint if exists run_events_payload_object_check;
+alter table public.run_events
+  add constraint run_events_payload_object_check
+  check (jsonb_typeof(payload) = 'object');
+
+alter table public.run_snapshots drop constraint if exists run_snapshots_snapshot_object_check;
+alter table public.run_snapshots
+  add constraint run_snapshots_snapshot_object_check
+  check (jsonb_typeof(snapshot) = 'object');
 
 drop trigger if exists agents_set_updated_at on public.agents;
 create trigger agents_set_updated_at
@@ -291,7 +397,7 @@ begin
     p_seed,
     p_max_ticks,
     'queued',
-    '{"gold":500,"mana":100,"lives":10,"max_lives":10,"energy":100,"max_energy":100}'::jsonb
+    public.normalize_core_resources('{"gold":500,"heat":20,"heat_limit":100,"mana":100,"mana_limit":100,"repair":4,"threat":15,"fortress":100,"fortress_max":100}'::jsonb)
   )
   returning * into v_run;
 
@@ -366,7 +472,52 @@ grant select on public.agent_difficulty_progress to anon, authenticated;
 grant select on public.season_rankings to anon, authenticated;
 grant execute on function public.enqueue_run(uuid, public.difficulty_level, bigint, integer, text, uuid) to authenticated, service_role;
 
-alter publication supabase_realtime add table public.agents;
-alter publication supabase_realtime add table public.competition_runs;
-alter publication supabase_realtime add table public.run_events;
-alter publication supabase_realtime add table public.run_snapshots;
+do $$
+begin
+  if exists (
+    select 1
+    from pg_publication
+    where pubname = 'supabase_realtime'
+  ) then
+    if not exists (
+      select 1
+      from pg_publication_tables
+      where pubname = 'supabase_realtime'
+        and schemaname = 'public'
+        and tablename = 'agents'
+    ) then
+      alter publication supabase_realtime add table public.agents;
+    end if;
+
+    if not exists (
+      select 1
+      from pg_publication_tables
+      where pubname = 'supabase_realtime'
+        and schemaname = 'public'
+        and tablename = 'competition_runs'
+    ) then
+      alter publication supabase_realtime add table public.competition_runs;
+    end if;
+
+    if not exists (
+      select 1
+      from pg_publication_tables
+      where pubname = 'supabase_realtime'
+        and schemaname = 'public'
+        and tablename = 'run_events'
+    ) then
+      alter publication supabase_realtime add table public.run_events;
+    end if;
+
+    if not exists (
+      select 1
+      from pg_publication_tables
+      where pubname = 'supabase_realtime'
+        and schemaname = 'public'
+        and tablename = 'run_snapshots'
+    ) then
+      alter publication supabase_realtime add table public.run_snapshots;
+    end if;
+  end if;
+end
+$$;

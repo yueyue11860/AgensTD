@@ -6,6 +6,7 @@ import { Leaderboard } from '@/components/game/leaderboard'
 import { DifficultyBadge, StatusBadge } from '@/components/game/status-badge'
 import { Button } from '@/components/ui/button'
 import { useRankingsData } from '@/hooks/use-rankings-data'
+import type { Difficulty } from '@/lib/domain'
 import {
   Medal,
   Calendar,
@@ -27,7 +28,7 @@ type Season = 'S4' | 'S3' | 'S2' | 'ALL'
 
 export default function RankingsPage() {
   const [selectedSeason, setSelectedSeason] = useState<Season>('S4')
-  const [selectedDifficulty, setSelectedDifficulty] = useState<string>('ALL')
+  const [selectedDifficulty, setSelectedDifficulty] = useState<'ALL' | Difficulty>('ALL')
   const { rankings, isUsingFallback, error } = useRankingsData(selectedSeason, selectedDifficulty)
 
   const topThree = rankings.slice(0, 3)
@@ -95,14 +96,17 @@ export default function RankingsPage() {
                     全部难度
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => setSelectedDifficulty('NIGHTMARE')}>
-                    NIGHTMARE
-                  </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => setSelectedDifficulty('HELL')}>
                     HELL
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => setSelectedDifficulty('HARD')}>
                     HARD
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setSelectedDifficulty('NORMAL')}>
+                    NORMAL
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setSelectedDifficulty('EASY')}>
+                    EASY
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -121,7 +125,7 @@ export default function RankingsPage() {
             </div>
             <div className="rounded-lg bg-background/50 p-3 text-center">
               <p className="text-2xl font-bold text-acid-green">23</p>
-              <p className="text-xs text-muted-foreground">NIGHTMARE 通关</p>
+              <p className="text-xs text-muted-foreground">HELL 通关</p>
             </div>
             <div className="rounded-lg bg-background/50 p-3 text-center">
               <p className="text-2xl font-bold text-warning-orange">18 天</p>
@@ -144,7 +148,7 @@ export default function RankingsPage() {
             <p className="text-sm text-muted-foreground">{topThree[1]?.owner ?? '-'}</p>
             <div className="mt-4 flex flex-wrap justify-center gap-1">
               {topThree[1]?.difficulty_cleared.slice(-2).map((diff) => (
-                <DifficultyBadge key={diff} difficulty={diff as 'NORMAL' | 'HARD' | 'HELL' | 'NIGHTMARE' | 'INFERNO'} />
+                <DifficultyBadge key={diff} difficulty={diff} />
               ))}
             </div>
             <div className="mt-4 text-center">
@@ -170,7 +174,7 @@ export default function RankingsPage() {
             <p className="text-sm text-muted-foreground">{topThree[0]?.owner ?? '-'}</p>
             <div className="mt-4 flex flex-wrap justify-center gap-1">
               {topThree[0]?.difficulty_cleared.map((diff) => (
-                <DifficultyBadge key={diff} difficulty={diff as 'NORMAL' | 'HARD' | 'HELL' | 'NIGHTMARE' | 'INFERNO'} />
+                <DifficultyBadge key={diff} difficulty={diff} />
               ))}
             </div>
             <div className="mt-4 text-center">
@@ -205,7 +209,7 @@ export default function RankingsPage() {
             <p className="text-sm text-muted-foreground">{topThree[2]?.owner ?? '-'}</p>
             <div className="mt-4 flex flex-wrap justify-center gap-1">
               {topThree[2]?.difficulty_cleared.slice(-2).map((diff) => (
-                <DifficultyBadge key={diff} difficulty={diff as 'NORMAL' | 'HARD' | 'HELL' | 'NIGHTMARE' | 'INFERNO'} />
+                <DifficultyBadge key={diff} difficulty={diff} />
               ))}
             </div>
             <div className="mt-4 text-center">

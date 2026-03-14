@@ -5,7 +5,8 @@ import {
   type CoreRunScenario,
   type ReplaySnapshot,
 } from '@/lib/mock-data'
-import type { Database, Json } from '@/lib/supabase/database.types'
+import type { ActionWindowType } from '@/lib/domain'
+import type { Database } from '@/lib/supabase/database.types'
 
 interface FetchLiveRunScenarioOptions {
   difficulty?: CoreRunScenario['difficulty']
@@ -22,11 +23,11 @@ export interface LiveRunScenarioResult {
   error: string | null
 }
 
-function asObject(value: Json | null | undefined) {
-  return typeof value === 'object' && value && !Array.isArray(value) ? value : {}
+function asObject(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 }
 
-function asArray<T>(value: Json | null | undefined, fallback: T[]): T[] {
+function asArray<T>(value: unknown, fallback: T[]): T[] {
   return Array.isArray(value) ? (value as T[]) : fallback
 }
 
@@ -38,6 +39,12 @@ function asString(value: unknown, fallback: string) {
   return typeof value === 'string' && value.length > 0 ? value : fallback
 }
 
+function asActionWindowType(value: unknown, fallback: ActionWindowType): ActionWindowType {
+  return value === 'prep' || value === 'combat' || value === 'resolution' || value === 'decision'
+    ? value
+    : fallback
+}
+
 function createFallbackScenario(difficulty?: CoreRunScenario['difficulty']) {
   return difficulty ? { ...mockCoreScenario, difficulty } : mockCoreScenario
 }
@@ -47,12 +54,13 @@ function mapScenarioFromRun(
   agentName: string,
 ): CoreRunScenario {
   const summary = asObject(run.result_summary)
-  const summaryResources = asObject(summary.resources as Json)
-  const actionWindow = asObject(summary.actionWindow as Json)
+  const summaryResources = asObject(summary.resources)
+  const actionWindow = asObject(summary.actionWindow)
 
   return {
     ...mockCoreScenario,
     runId: run.id,
+    rulesVersion: asString(summary.rulesVersion, mockCoreScenario.rulesVersion),
     title: asString(summary.title, mockCoreScenario.title),
     agentName,
     difficulty: run.difficulty,
@@ -77,21 +85,23 @@ function mapScenarioFromRun(
       fortress: asNumber(summaryResources.fortress, mockCoreScenario.resources.fortress),
       fortress_max: asNumber(summaryResources.fortress_max, mockCoreScenario.resources.fortress_max),
     },
-    routeNodes: asArray(summary.routeNodes as Json, mockCoreScenario.routeNodes),
-    cells: asArray(summary.cells as Json, mockCoreScenario.cells),
-    towers: asArray(summary.towers as Json, mockCoreScenario.towers),
-    enemies: asArray(summary.enemies as Json, mockCoreScenario.enemies),
-    relics: asArray(summary.relics as Json, mockCoreScenario.relics),
-    buildQueue: asArray(summary.buildQueue as Json, mockCoreScenario.buildQueue),
+    supportedTowerCores: asArray(summary.supportedTowerCores, mockCoreScenario.supportedTowerCores),
+    routeNodes: asArray(summary.routeNodes, mockCoreScenario.routeNodes),
+    cells: asArray(summary.cells, mockCoreScenario.cells),
+    towers: asArray(summary.towers, mockCoreScenario.towers),
+    enemies: asArray(summary.enemies, mockCoreScenario.enemies),
+    relics: asArray(summary.relics, mockCoreScenario.relics),
+    buildQueue: asArray(summary.buildQueue, mockCoreScenario.buildQueue),
     actionWindow: {
-      type: asString(actionWindow.type, mockCoreScenario.actionWindow.type),
+      type: asActionWindowType(actionWindow.type, mockCoreScenario.actionWindow.type),
+      label: asString(actionWindow.label, mockCoreScenario.actionWindow.label),
       deadlineMs: asNumber(actionWindow.deadlineMs, mockCoreScenario.actionWindow.deadlineMs),
       summary: asString(actionWindow.summary, mockCoreScenario.actionWindow.summary),
-      options: asArray(actionWindow.options as Json, mockCoreScenario.actionWindow.options),
-      quickActions: asArray(actionWindow.quickActions as Json, mockCoreScenario.actionWindow.quickActions),
+      options: asArray(actionWindow.options, mockCoreScenario.actionWindow.options),
+      quickActions: asArray(actionWindow.quickActions, mockCoreScenario.actionWindow.quickActions),
     },
-    routeForecast: asArray(summary.routeForecast as Json, mockCoreScenario.routeForecast),
-    objectiveStack: asArray(summary.objectiveStack as Json, mockCoreScenario.objectiveStack),
+    routeForecast: asArray(summary.routeForecast, mockCoreScenario.routeForecast),
+    objectiveStack: asArray(summary.objectiveStack, mockCoreScenario.objectiveStack),
   }
 }
 
@@ -102,7 +112,7 @@ function mapSnapshotsFromRows(rows: Database['public']['Tables']['run_snapshots'
 
   return rows.map((row) => {
     const snapshot = asObject(row.snapshot)
-    const gameState = asObject(snapshot.game_state as Json)
+    const gameState = asObject(snapshot.game_state)
 
     return {
       tick: row.tick,
@@ -110,10 +120,10 @@ function mapSnapshotsFromRows(rows: Database['public']['Tables']['run_snapshots'
       game_state: {
         resources: {
           ...mockCoreSnapshots[0].game_state.resources,
-          ...asObject(gameState.resources as Json),
+          ...asObject(gameState.resources),
         },
-        towers: asArray(gameState.towers as Json, []),
-        enemies: asArray(gameState.enemies as Json, []),
+        towers: asArray(gameState.towers, []),
+        enemies: asArray(gameState.enemies, []),
         wave: asNumber(gameState.wave, 0),
         score: asNumber(gameState.score, 0),
       },
@@ -151,7 +161,7 @@ export async function fetchLiveRunScenario(
     }
   }
 
-  const run = runs?.[0] ?? null
+  const run = (runs?.[0] ?? null) as Database['public']['Tables']['competition_runs']['Row'] | null
 
   if (!run) {
     return {
@@ -174,11 +184,14 @@ export async function fetchLiveRunScenario(
       .limit(24),
   ])
 
+  const typedAgent = agent as { name?: string } | null
+  const typedSnapshots = (snapshots ?? []) as Database['public']['Tables']['run_snapshots']['Row'][]
+
   return {
     data: {
       runId: run.id,
-      scenario: mapScenarioFromRun(run, agent?.name ?? mockCoreScenario.agentName),
-      snapshots: snapshotError ? mockCoreSnapshots : mapSnapshotsFromRows(snapshots ?? []),
+      scenario: mapScenarioFromRun(run, typedAgent?.name ?? mockCoreScenario.agentName),
+      snapshots: snapshotError ? mockCoreSnapshots : mapSnapshotsFromRows(typedSnapshots),
     },
     error: snapshotError?.message ?? null,
   }

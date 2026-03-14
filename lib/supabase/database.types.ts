@@ -1,4 +1,14 @@
-import type { AgentStatus, Difficulty, RankingTrend, RunStatus } from '@/lib/domain'
+import type {
+  AgentStatus,
+  CoreReplaySnapshot,
+  Difficulty,
+  RankingTrend,
+  Resources,
+  RunEventPayload,
+  RunEventType,
+  RunResultSummary,
+  RunStatus,
+} from '@/lib/domain'
 
 export type Json =
   | string
@@ -89,7 +99,7 @@ export interface Database {
           score: number
           wave: number
           max_wave: number
-          resources: Json
+          resources: Resources
           towers_built: number
           enemies_killed: number
           damage_dealt: number
@@ -99,7 +109,7 @@ export interface Database {
           view_count: number
           thumbnail_url: string | null
           error_message: string | null
-          result_summary: Json
+          result_summary: RunResultSummary
           created_at: string
           updated_at: string
         }
@@ -120,7 +130,7 @@ export interface Database {
           score?: number
           wave?: number
           max_wave?: number
-          resources?: Json
+          resources?: Resources
           towers_built?: number
           enemies_killed?: number
           damage_dealt?: number
@@ -130,7 +140,7 @@ export interface Database {
           view_count?: number
           thumbnail_url?: string | null
           error_message?: string | null
-          result_summary?: Json
+          result_summary?: RunResultSummary
           created_at?: string
           updated_at?: string
         }
@@ -141,17 +151,17 @@ export interface Database {
         Row: {
           id: number
           run_id: string
-          event_type: 'queued' | 'started' | 'tick' | 'milestone' | 'completed' | 'failed' | 'timeout'
+          event_type: RunEventType
           tick: number | null
-          payload: Json
+          payload: RunEventPayload
           created_at: string
         }
         Insert: {
           id?: number
           run_id: string
-          event_type: 'queued' | 'started' | 'tick' | 'milestone' | 'completed' | 'failed' | 'timeout'
+          event_type: RunEventType
           tick?: number | null
-          payload?: Json
+          payload?: RunEventPayload
           created_at?: string
         }
         Update: Partial<Database['public']['Tables']['run_events']['Insert']>
@@ -162,14 +172,14 @@ export interface Database {
           id: number
           run_id: string
           tick: number
-          snapshot: Json
+          snapshot: CoreReplaySnapshot
           created_at: string
         }
         Insert: {
           id?: number
           run_id: string
           tick: number
-          snapshot: Json
+          snapshot: CoreReplaySnapshot
           created_at?: string
         }
         Update: Partial<Database['public']['Tables']['run_snapshots']['Insert']>
@@ -208,7 +218,7 @@ export interface Database {
           score: number
           wave: number
           max_wave: number
-          resources: Json
+          resources: Resources
           towers_built: number
           enemies_killed: number
           damage_dealt: number

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { cn } from '@/lib/utils'
-import type { CoreEnemyWave, CoreMapCell, CoreTowerBuild } from '@/lib/mock-data'
+import type { CoreEnemyWave, CoreMapCell, CoreTowerBuild } from '@/lib/domain'
 import { AlertTriangle, Crosshair, GitFork, RadioTower, Shield, Skull } from 'lucide-react'
 
 interface CoreMapProps {

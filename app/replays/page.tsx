@@ -67,10 +67,10 @@ export default function ReplaysPage() {
               <DropdownMenuContent align="start">
                 <DropdownMenuItem>全部难度</DropdownMenuItem>
                 <DropdownMenuSeparator />
+                  <DropdownMenuItem>EASY</DropdownMenuItem>
                 <DropdownMenuItem>NORMAL</DropdownMenuItem>
                 <DropdownMenuItem>HARD</DropdownMenuItem>
                 <DropdownMenuItem>HELL</DropdownMenuItem>
-                <DropdownMenuItem>NIGHTMARE</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
