@@ -1,0 +1,1 @@
+{"root":["./vite-env.d.ts","./vite.config.ts","./hooks/use-game-engine.ts","./lib/cx.ts","./types/game-state.ts","./main.tsx","./components/frontend-shell.tsx","./components/game-map.tsx","./components/game-resources.tsx","./components/game-sidebar.tsx","./pages/tower-defense-frontend-page.tsx"],"version":"5.9.3"}
