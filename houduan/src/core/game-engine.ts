@@ -2,20 +2,9 @@ import { ActionQueue } from './action-queue'
 import type { BuildTowerAction, ClientAction, PlayerIdentity, QueuedAction } from '../domain/actions'
 import type { EnemyState, GameLogEntry, GameState, PlayerState, TowerState } from '../domain/game-state'
 import type { ServerConfig } from '../config/server-config'
+import { towerCatalog } from '../domain/tower-catalog'
 
 type TickListener = (state: GameState) => void
-
-interface TowerStats {
-  cost: number
-  damage: number
-  range: number
-  fireRateTicks: number
-}
-
-const towerCatalog: Record<string, TowerStats> = {
-  laser: { cost: 50, damage: 20, range: 3.5, fireRateTicks: 4 },
-  cannon: { cost: 80, damage: 35, range: 2.5, fireRateTicks: 6 },
-}
 
 export class GameEngine {
   private readonly actionQueue = new ActionQueue()
@@ -227,7 +216,7 @@ export class GameEngine {
       id: `enemy-${this.state.tick}`,
       kind: 'runner',
       x: 0,
-      y: this.state.enemies.length % this.config.mapHeight,
+      y: Math.floor(this.config.mapHeight / 2),
       hp: 100,
       maxHp: 100,
       speed: 1,
@@ -329,6 +318,7 @@ export class GameEngine {
       && y >= 0
       && x < this.state.map.width
       && y < this.state.map.height
+      && y !== Math.floor(this.state.map.height / 2)
   }
 
   private appendLog(level: GameLogEntry['level'], message: string, meta?: Record<string, unknown>) {

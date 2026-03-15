@@ -4,6 +4,8 @@ import express from 'express'
 import { createServerConfig } from './config/server-config'
 import { GameEngine } from './core/game-engine'
 import { GameLoop } from './core/game-loop'
+import { ActionRateLimiter } from './network/action-rate-limiter'
+import { createRestApiRouter } from './network/rest-api'
 import { SocketGateway } from './network/socket-gateway'
 
 const config = createServerConfig()
@@ -24,7 +26,10 @@ app.get('/health', (_request, response) => {
 const httpServer = http.createServer(app)
 const engine = new GameEngine(config)
 const loop = new GameLoop(engine, config.tickRateMs)
-const gateway = new SocketGateway(httpServer, engine, config)
+const actionLimiter = new ActionRateLimiter(config.actionRateLimitWindowMs, config.actionRateLimitMax)
+const gateway = new SocketGateway(httpServer, engine, config, actionLimiter)
+
+app.use('/api', createRestApiRouter(engine, config, actionLimiter))
 
 httpServer.listen(config.port, () => {
   loop.start()

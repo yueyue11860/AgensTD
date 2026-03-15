@@ -1,8 +1,12 @@
 import type { Server as HttpServer } from 'http'
 import { Server, type Socket } from 'socket.io'
-import { parseClientAction, type PlayerIdentity } from '../domain/actions'
+import { projectFrontendGameState } from '../core/state-projection'
+import type { PlayerIdentity } from '../domain/actions'
 import { GameEngine } from '../core/game-engine'
 import type { ServerConfig } from '../config/server-config'
+import { submitAction } from './action-submission'
+import { ActionRateLimiter } from './action-rate-limiter'
+import { authenticateGatewayToken, extractSocketToken, type GatewayPrincipal } from './gateway-auth'
 
 function readHandshakeValue(socket: Socket, key: string) {
   const queryValue = socket.handshake.query[key]
@@ -16,11 +20,15 @@ function readHandshakeValue(socket: Socket, key: string) {
 export class SocketGateway {
   readonly io: Server
 
+  private readonly config: ServerConfig
+
   constructor(
     httpServer: HttpServer,
     private readonly engine: GameEngine,
     config: ServerConfig,
+    private readonly actionLimiter: ActionRateLimiter,
   ) {
+    this.config = config
     this.io = new Server(httpServer, {
       cors: {
         origin: config.corsOrigin === '*' ? true : config.corsOrigin,
@@ -28,12 +36,23 @@ export class SocketGateway {
       },
     })
 
+    this.io.use((socket, next) => {
+      const principal = authenticateGatewayToken(this.config, extractSocketToken(socket))
+      if (!principal) {
+        next(new Error('Missing or invalid gateway token'))
+        return
+      }
+
+      socket.data.principal = principal
+      next()
+    })
+
     this.io.on('connection', (socket) => {
       this.handleConnection(socket)
     })
 
     this.engine.onTick((state) => {
-      this.io.emit('tick_update', state)
+      this.io.emit('tick_update', projectFrontendGameState(state, this.config))
     })
   }
 
@@ -41,16 +60,30 @@ export class SocketGateway {
     const identity = this.resolvePlayerIdentity(socket)
     this.engine.registerPlayer(identity)
 
-    socket.emit('tick_update', this.engine.getStateSnapshot())
+    socket.emit('tick_update', projectFrontendGameState(this.engine.getStateSnapshot(), this.config))
 
     socket.on('send_action', (payload: unknown) => {
-      const action = parseClientAction(payload)
-      if (!action) {
-        socket.emit('engine_error', { message: 'Invalid action payload' })
+      const submission = submitAction({
+        engine: this.engine,
+        limiter: this.actionLimiter,
+        player: identity,
+        payload,
+      })
+
+      if (!submission.ok) {
+        socket.emit('engine_error', {
+          code: submission.code,
+          message: submission.message,
+          retryAfterMs: submission.retryAfterMs,
+        })
         return
       }
 
-      this.engine.enqueueAction(identity, action)
+      socket.emit('action_accepted', {
+        ok: true,
+        action: submission.action,
+        rateLimitRemaining: submission.rateLimitRemaining,
+      })
     })
 
     socket.on('disconnect', () => {
@@ -59,9 +92,10 @@ export class SocketGateway {
   }
 
   private resolvePlayerIdentity(socket: Socket): PlayerIdentity {
-    const playerId = readHandshakeValue(socket, 'playerId') ?? socket.id
-    const playerName = readHandshakeValue(socket, 'playerName') ?? `player-${playerId.slice(0, 6)}`
-    const playerKind = readHandshakeValue(socket, 'playerKind') === 'agent' ? 'agent' : 'human'
+    const principal = socket.data.principal as GatewayPrincipal | undefined
+    const playerId = principal?.playerId ?? readHandshakeValue(socket, 'playerId') ?? socket.id
+    const playerName = principal?.playerName ?? readHandshakeValue(socket, 'playerName') ?? `player-${playerId.slice(0, 6)}`
+    const playerKind = principal?.playerKind ?? (readHandshakeValue(socket, 'playerKind') === 'agent' ? 'agent' : 'human')
 
     return {
       playerId,
