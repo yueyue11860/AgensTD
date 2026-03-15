@@ -147,7 +147,7 @@ export function HardcoreResourcesPanel({ resources, className }: HardcoreResourc
       <div className="mb-4 flex items-center justify-between">
         <div>
           <h3 className="text-xs font-medium uppercase tracking-[0.24em] text-muted-foreground">资源耦合</h3>
-          <p className="mt-1 text-[11px] text-muted-foreground">热量与维修债务决定你能否在中局安全转型</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">战线热度与维修预算决定你能否在中局安全转型</p>
         </div>
         <div className="rounded border border-border bg-muted/30 px-2 py-1 text-right">
           <p className="text-[10px] uppercase tracking-wide text-muted-foreground">威胁压强</p>
@@ -162,7 +162,7 @@ export function HardcoreResourcesPanel({ resources, className }: HardcoreResourc
             <ResourceBar type="heat" current={resources.heat} max={resources.heat_limit} size="sm" />
             <ThresholdBadge current={resources.heat} max={resources.heat_limit} />
           </div>
-          <p className="text-[10px] text-muted-foreground">超过 85% 将触发过载判定并锁死超载塔核。</p>
+          <p className="text-[10px] text-muted-foreground">超过 85% 会显著压缩你的战场容错和后续布局空间。</p>
         </div>
         <ResourceBar type="mana" current={resources.mana} max={resources.mana_limit} size="sm" />
         <div className="space-y-1.5">

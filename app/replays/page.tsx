@@ -204,7 +204,7 @@ export default function ReplaysPage() {
                   </div>
                   <div className="text-center rounded bg-muted/50 p-2">
                     <p className="font-bold text-cold-blue">{run.towers_built}</p>
-                    <p className="text-muted-foreground">塔</p>
+                    <p className="text-muted-foreground">建筑</p>
                   </div>
                 </div>
 

@@ -4,7 +4,6 @@ import type { LucideIcon } from 'lucide-react'
 import {
   History,
   LayoutDashboard,
-  Lock,
   Trophy,
 } from 'lucide-react'
 
@@ -18,7 +17,7 @@ export interface NavigationItem {
 export const primaryNavigationItems: NavigationItem[] = [
   {
     href: '/',
-    label: '主战场',
+    label: '开始游戏',
     description: '开始挑战和单局推进',
     icon: LayoutDashboard,
   },
@@ -33,11 +32,5 @@ export const primaryNavigationItems: NavigationItem[] = [
     label: '赛季排行',
     description: '查看赛季名次变化',
     icon: Trophy,
-  },
-  {
-    href: '/progress',
-    label: '难度进度',
-    description: '追踪解锁与通关情况',
-    icon: Lock,
   },
 ]

@@ -46,11 +46,11 @@ export type ActionValidationCode =
 
 export type CoreMapCellKind = 'path' | 'build' | 'blocked' | 'relay' | 'gate' | 'core' | 'hazard'
 
-export type CoreTowerType = 'BALLISTA' | 'MORTAR' | 'FROST' | 'CURSE'
+export type CoreTowerType = 'ARROW' | 'ICE' | 'CANNON' | 'LASER' | 'TESLA' | 'MAGIC' | 'SUPPLY' | 'MINE'
 
-export type CoreTowerStatus = 'stable' | 'overdrive' | 'jammed' | 'corrupted'
+export type CoreTowerStatus = 'ready' | 'boosted' | 'charging' | 'disabled'
 
-export type CoreTargetMode = '前锋' | '重甲' | '热量最高' | '精英优先'
+export type CoreTargetMode = '前锋' | '末尾' | '高生命' | '低生命'
 
 export type ThreatLevel = 'low' | 'medium' | 'high' | 'boss'
 
@@ -128,41 +128,6 @@ export interface Run {
   is_live: boolean
 }
 
-export interface Tower {
-  id: string
-  type: 'CANNON' | 'LASER' | 'FROST' | 'TESLA' | 'MISSILE' | 'FLAME'
-  level: number
-  position: GridPoint
-  kills: number
-  damage_dealt: number
-  upgrades: number
-  status: 'active' | 'charging' | 'overheated' | 'disabled'
-}
-
-export interface Enemy {
-  id: string
-  type: 'GRUNT' | 'TANK' | 'SWIFT' | 'HEALER' | 'BOSS' | 'ELITE'
-  health: number
-  max_health: number
-  position: GridPoint
-  speed: number
-  armor: number
-  status: 'moving' | 'attacking' | 'stunned' | 'dead'
-}
-
-export interface ReplaySnapshot {
-  tick: number
-  timestamp: string
-  game_state: {
-    resources: Resources
-    towers: Tower[]
-    enemies: Enemy[]
-    wave: number
-    score: number
-  }
-  thumbnail?: string
-}
-
 export interface CoreMapCell {
   x: number
   y: number
@@ -170,7 +135,7 @@ export interface CoreMapCell {
 }
 
 export interface CoreQuickActionSlot {
-  key: 'Q' | 'W' | 'E' | 'R'
+  key: string
   actionId: string
   targetId?: string
   actionType: ActionType
@@ -191,11 +156,21 @@ export interface CoreTowerBuild {
   core: CoreTowerType
   status: CoreTowerStatus
   targetMode: CoreTargetMode
-  modules: string[]
-  heat: number
+  footprint: {
+    width: number
+    height: number
+  }
+  range: number
+  attackRate: number
+  damage: number
   dps: number
+  effects: string[]
   note: string
   quickActions: CoreQuickActionSlot[]
+  focusTargetId?: string | null
+  focusSeconds?: number
+  attackSpeedMultiplier?: number
+  storedGold?: number
 }
 
 export interface CoreEnemyWave {
@@ -207,6 +182,13 @@ export interface CoreEnemyWave {
   hp: number
   maxHp: number
   position: GridPoint
+  speed: number
+  baseSpeed: number
+  armor: number
+  maxArmor: number
+  slowFactor: number
+  burnRatio: number
+  statusText: string
   intent: string
 }
 

@@ -4,15 +4,13 @@ import type {
   Agent,
   CoreEnemyWave,
   CoreMapCell,
+  CoreReplaySnapshot,
   CoreRunScenario,
   CoreTowerBuild,
   DifficultyProgress,
-  Enemy,
-  ReplaySnapshot,
   RouteNodeState,
   Run,
   SeasonRanking,
-  Tower,
 } from './domain.ts'
 import { MVP_CORE_TOWER_TYPES } from './game/rules.ts'
 
@@ -20,15 +18,13 @@ export type {
   Agent,
   CoreEnemyWave,
   CoreMapCell,
+  CoreReplaySnapshot,
   CoreRunScenario,
   CoreTowerBuild,
   DifficultyProgress,
-  Enemy,
-  ReplaySnapshot,
   RouteNodeState,
   Run,
   SeasonRanking,
-  Tower,
 } from '@/lib/domain'
 
 // Mock Agents
@@ -203,14 +199,6 @@ export const mockRuns: Run[] = [
   }
 ]
 
-// Mock Replay Snapshots
-export const mockSnapshots: ReplaySnapshot[] = [
-  { tick: 0, timestamp: '2024-03-12T14:00:00Z', game_state: { resources: { gold: 500, heat: 18, heat_limit: 100, mana: 100, mana_limit: 100, repair: 4, threat: 16, fortress: 100, fortress_max: 100 }, towers: [], enemies: [], wave: 0, score: 0 } },
-  { tick: 5000, timestamp: '2024-03-12T14:05:00Z', game_state: { resources: { gold: 850, heat: 41, heat_limit: 100, mana: 180, mana_limit: 120, repair: 5, threat: 34, fortress: 96, fortress_max: 100 }, towers: [], enemies: [], wave: 5, score: 4200 } },
-  { tick: 10000, timestamp: '2024-03-12T14:10:00Z', game_state: { resources: { gold: 1100, heat: 67, heat_limit: 100, mana: 280, mana_limit: 120, repair: 4, threat: 59, fortress: 81, fortress_max: 100 }, towers: [], enemies: [], wave: 12, score: 15800 } },
-  { tick: 15000, timestamp: '2024-03-12T14:20:00Z', game_state: { resources: { gold: 1250, heat: 84, heat_limit: 100, mana: 340, mana_limit: 120, repair: 5, threat: 78, fortress: 62, fortress_max: 100 }, towers: [], enemies: [], wave: 23, score: 38750 } }
-]
-
 // Mock Season Rankings
 export const mockRankings: SeasonRanking[] = [
   { rank: 1, agent_id: 'agent_004', agent_name: 'TowerMaster-Pro', owner: 'ai_labs', score: 892500, wins: 187, losses: 23, win_rate: 0.89, avg_duration_ms: 2850000, highest_wave: 50, difficulty_cleared: ['EASY', 'NORMAL', 'HARD', 'HELL'], last_match: '2024-03-12T15:00:00Z', trend: 'stable', rank_change: 0 },
@@ -233,26 +221,6 @@ export const mockDifficultyProgress: DifficultyProgress[] = [
   { difficulty: 'HELL', unlocked: false, cleared: false, best_score: 0, best_wave: 0, attempts: 0, clear_rate: 0, requirements: ['Clear HARD'] }
 ]
 
-// Mock Towers (for current game state)
-export const mockTowers: Tower[] = [
-  { id: 'tw_001', type: 'CANNON', level: 3, position: { x: 5, y: 8 }, kills: 124, damage_dealt: 185000, upgrades: 2, status: 'active' },
-  { id: 'tw_002', type: 'LASER', level: 4, position: { x: 8, y: 10 }, kills: 287, damage_dealt: 420000, upgrades: 3, status: 'active' },
-  { id: 'tw_003', type: 'TESLA', level: 2, position: { x: 10, y: 6 }, kills: 156, damage_dealt: 198000, upgrades: 1, status: 'charging' },
-  { id: 'tw_004', type: 'FROST', level: 3, position: { x: 12, y: 12 }, kills: 45, damage_dealt: 52000, upgrades: 2, status: 'active' },
-  { id: 'tw_005', type: 'MISSILE', level: 5, position: { x: 15, y: 8 }, kills: 312, damage_dealt: 580000, upgrades: 4, status: 'active' },
-  { id: 'tw_006', type: 'FLAME', level: 2, position: { x: 7, y: 14 }, kills: 198, damage_dealt: 245000, upgrades: 1, status: 'overheated' }
-]
-
-// Mock Enemies (for current game state)
-export const mockEnemies: Enemy[] = [
-  { id: 'en_001', type: 'GRUNT', health: 450, max_health: 500, position: { x: 22, y: 8 }, speed: 1.2, armor: 5, status: 'moving' },
-  { id: 'en_002', type: 'TANK', health: 2800, max_health: 3500, position: { x: 20, y: 10 }, speed: 0.6, armor: 25, status: 'moving' },
-  { id: 'en_003', type: 'SWIFT', health: 180, max_health: 200, position: { x: 18, y: 6 }, speed: 2.5, armor: 0, status: 'moving' },
-  { id: 'en_004', type: 'ELITE', health: 1500, max_health: 2000, position: { x: 16, y: 12 }, speed: 1.0, armor: 15, status: 'attacking' },
-  { id: 'en_005', type: 'BOSS', health: 8500, max_health: 15000, position: { x: 14, y: 8 }, speed: 0.4, armor: 40, status: 'moving' },
-  { id: 'en_006', type: 'HEALER', health: 600, max_health: 800, position: { x: 24, y: 10 }, speed: 0.8, armor: 10, status: 'moving' }
-]
-
 // Stats for Dashboard
 export const mockDashboardStats = {
   total_runs_today: 1247,
@@ -265,22 +233,44 @@ export const mockDashboardStats = {
   server_load: 67
 }
 
-const pathCoordinates = new Set([
-  '0,8', '1,8', '2,8', '3,8', '4,8', '5,8', '6,8', '7,8', '8,8', '9,8', '10,8', '11,8', '12,8', '13,8', '14,8', '15,8', '16,8', '17,8',
-  '4,0', '4,1', '4,2', '4,3', '4,4', '4,5', '4,6', '4,7', '4,9', '4,10', '4,11', '4,12', '4,13', '4,14', '4,15', '4,16', '4,17',
-  '12,0', '12,1', '12,2', '12,3', '12,4', '12,5', '12,6', '12,7', '12,9', '12,10', '12,11', '12,12', '12,13', '12,14', '12,15', '12,16', '12,17',
-  '8,4', '9,4', '10,4', '11,4', '8,12', '9,12', '10,12', '11,12'
-])
+const MAP_COLUMNS = 25
+const MAP_ROWS = 20
 
-const relayCoordinates = new Set(['8,4', '9,4', '8,12', '9,12'])
-const gateCoordinates = new Set(['4,0', '12,0', '17,8'])
-const hazardCoordinates = new Set(['10,7', '10,9', '13,12'])
-const coreCoordinates = new Set(['0,8'])
-const blockedCoordinates = new Set(['6,3', '6,4', '6,5', '14,3', '14,4', '14,5', '7,14', '8,14', '9,14'])
+const pathCoordinates = (() => {
+  const entries = new Set<string>()
 
-export const mockCoreMapCells: CoreMapCell[] = Array.from({ length: 18 * 18 }, (_, index) => {
-  const x = index % 18
-  const y = Math.floor(index / 18)
+  for (let x = 0; x < MAP_COLUMNS; x += 1) {
+    entries.add(`${x},9`)
+  }
+
+  for (let y = 0; y < MAP_ROWS; y += 1) {
+    if (y !== 9) {
+      entries.add(`4,${y}`)
+      entries.add(`18,${y}`)
+    }
+  }
+
+  for (let x = 9; x <= 11; x += 1) {
+    entries.add(`${x},3`)
+    entries.add(`${x},15`)
+  }
+
+  for (let x = 13; x <= 15; x += 1) {
+    entries.add(`${x},3`)
+  }
+
+  return entries
+})()
+
+const relayCoordinates = new Set(['9,3', '10,3', '9,15', '10,15'])
+const gateCoordinates = new Set(['4,0', '18,0', '24,9'])
+const hazardCoordinates = new Set(['14,8', '14,10', '18,14'])
+const coreCoordinates = new Set(['0,9'])
+const blockedCoordinates = new Set(['8,3', '8,4', '8,5', '20,3', '20,4', '20,5', '9,16', '10,16', '11,16'])
+
+export const mockCoreMapCells: CoreMapCell[] = Array.from({ length: MAP_COLUMNS * MAP_ROWS }, (_, index) => {
+  const x = index % MAP_COLUMNS
+  const y = Math.floor(index / MAP_COLUMNS)
   const key = `${x},${y}`
 
   if (coreCoordinates.has(key)) {
@@ -306,83 +296,96 @@ export const mockCoreMapCells: CoreMapCell[] = Array.from({ length: 18 * 18 }, (
 
 export const mockCoreTowers: CoreTowerBuild[] = [
   {
-    id: 'core_tw_01',
-    name: '断颈弩机',
-    role: '单核斩杀',
-    cell: { x: 6, y: 7 },
+    id: 'arrow_01',
+    name: '箭塔',
+    role: '单体压制',
+    cell: { x: 7, y: 8 },
     tier: 3,
-    core: 'BALLISTA',
-    status: 'stable',
-    targetMode: '精英优先',
-    modules: ['穿刺膛线', '暴露印记'],
-    heat: 18,
-    dps: 481,
-    note: '负责处理精英与重甲单位，但对群体压力无能为力。',
-    quickActions: [
-      { key: 'Q', actionId: 'upgrade-ballista', actionType: 'UPGRADE', targetKind: 'tower', label: '升级弩机', detail: '提升单体穿透并解锁四阶模块槽。', cost: '118 金币', availability: 'ready' },
-      { key: 'W', actionId: 'retarget-elite', actionType: 'RETARGET', targetKind: 'tower', label: '精英优先', detail: '锁定精英与 Boss 段位目标。', cost: '0', availability: 'ready' },
-      { key: 'E', actionId: 'burst-window', actionType: 'CAST', targetKind: 'tower', label: '穿刺爆发', detail: '8 秒内提高斩杀线，但增加热量。', cost: '+12 热量', availability: 'cooldown', reason: '冷却 6.0 秒' },
-      { key: 'R', actionId: 'sell-ballista', actionType: 'SELL', targetKind: 'tower', label: '拆除回收', detail: '回收 60% 造价并释放塔位。', cost: '-1 维修点', availability: 'locked', reason: '当前为主输出，不建议拆除' }
-    ]
-  },
-  {
-    id: 'core_tw_02',
-    name: '坍缩迫击',
-    role: '区域爆发',
-    cell: { x: 8, y: 6 },
-    tier: 2,
-    core: 'MORTAR',
-    status: 'overdrive',
+    core: 'ARROW',
+    status: 'ready',
     targetMode: '前锋',
-    modules: ['抛物增程', '余震破片'],
-    heat: 34,
-    dps: 392,
-    note: '用于压制双入口汇流点，收益高，但热量上涨过快。',
+    footprint: { width: 1, height: 1 },
+    range: 1,
+    attackRate: 1.5,
+    damage: 20,
+    dps: 30,
+    effects: ['稳定单体输出。'],
+    note: '负责补主路斩杀线，优先处理快要漏过去的前锋单位。',
     quickActions: [
-      { key: 'Q', actionId: 'upgrade-mortar', actionType: 'UPGRADE', targetKind: 'tower', label: '升级迫击', detail: '提高爆炸半径与落点精度。', cost: '96 金币', availability: 'ready' },
-      { key: 'W', actionId: 'switch-frontline', actionType: 'RETARGET', targetKind: 'tower', label: '锁前锋', detail: '优先处理即将入汇流点的前锋敌群。', cost: '0', availability: 'ready' },
-      { key: 'E', actionId: 'cool-vent', actionType: 'REPAIR', targetKind: 'tower', label: '喷口降温', detail: '降低当前塔热量 18 点。', cost: '22 法能', availability: 'ready' },
-      { key: 'R', actionId: 'artillery-overdrive', actionType: 'CAST', targetKind: 'tower', label: '强制过载', detail: '短时间提高范围伤害并扩大溅射。', cost: '+16 热量', availability: 'ready' }
+      { key: 'Q', actionId: 'arrow_01-upgrade', actionType: 'UPGRADE', targetKind: 'tower', targetId: 'arrow_01', label: '升级箭塔', detail: '提升攻速与单点斩杀能力。', cost: '已满级', availability: 'locked', reason: '该建筑最多 3 级。' },
+      { key: 'W', actionId: 'arrow_01-retarget', actionType: 'RETARGET', targetKind: 'tower', targetId: 'arrow_01', label: '切换到末尾', detail: '切换锁定优先级。', cost: '0', availability: 'ready' },
+      { key: 'E', actionId: 'arrow_01-cast', actionType: 'CAST', targetKind: 'tower', targetId: 'arrow_01', label: '连射压制', detail: '对当前主目标执行一次主动追击。', cost: '2 法力', availability: 'ready' },
+      { key: 'R', actionId: 'arrow_01-sell', actionType: 'SELL', targetKind: 'tower', targetId: 'arrow_01', label: '拆除回收', detail: '拆除建筑并回收部分金币。', cost: '+60% 造价', availability: 'ready' }
     ]
   },
   {
-    id: 'core_tw_03',
-    name: '寒蚀棱镜',
-    role: '控场延滞',
-    cell: { x: 10, y: 5 },
+    id: 'cannon_01',
+    name: '炮塔',
+    role: '范围爆发',
+    cell: { x: 11, y: 7 },
     tier: 2,
-    core: 'FROST',
-    status: 'jammed',
-    targetMode: '前锋',
-    modules: ['霜层扩散', '冻结阈值'],
-    heat: 11,
-    dps: 144,
-    note: '被污染地块干扰，当前冻结效率下降，急需维修点解除卡壳。',
+    core: 'CANNON',
+    status: 'boosted',
+    targetMode: '高生命',
+    footprint: { width: 1, height: 2 },
+    range: 3,
+    attackRate: 0.7,
+    damage: 10,
+    dps: 8.4,
+    effects: ['3x3 范围攻击。'],
+    note: '补在路口附近，用来清理扎堆的敌军簇。',
     quickActions: [
-      { key: 'Q', actionId: 'upgrade-frost', actionType: 'UPGRADE', targetKind: 'tower', label: '升级棱镜', detail: '提高冻结覆盖率与减速深度。', cost: '88 金币', availability: 'ready' },
-      { key: 'W', actionId: 'retarget-lane', actionType: 'RETARGET', targetKind: 'tower', label: '切北路', detail: '把冻结优先级切到北路污染敌。', cost: '0', availability: 'ready' },
-      { key: 'E', actionId: 'purge-corruption', actionType: 'REPAIR', targetKind: 'tower', label: '应急去污', detail: '解除卡壳并恢复冻结链。', cost: '2 维修点', availability: 'ready' },
-      { key: 'R', actionId: 'rebuild-frost', actionType: 'REROUTE', targetKind: 'tower', label: '重构塔核', detail: '拆解为新塔核底座，保留 1 个模块。', cost: '3 维修点', availability: 'cooldown', reason: '需进入营地节点后执行' }
+      { key: 'Q', actionId: 'cannon_01-upgrade', actionType: 'UPGRADE', targetKind: 'tower', targetId: 'cannon_01', label: '升级炮塔', detail: '提高范围输出。', cost: '8 金币', availability: 'ready' },
+      { key: 'W', actionId: 'cannon_01-retarget', actionType: 'RETARGET', targetKind: 'tower', targetId: 'cannon_01', label: '切换到低生命', detail: '切换锁定优先级。', cost: '0', availability: 'ready' },
+      { key: 'E', actionId: 'cannon_01-cast', actionType: 'CAST', targetKind: 'tower', targetId: 'cannon_01', label: '震荡齐射', detail: '立即补一轮 3x3 溅射伤害。', cost: '2 法力', availability: 'ready' },
+      { key: 'R', actionId: 'cannon_01-sell', actionType: 'SELL', targetKind: 'tower', targetId: 'cannon_01', label: '拆除回收', detail: '拆除建筑并回收部分金币。', cost: '+60% 造价', availability: 'ready' }
     ]
   },
   {
-    id: 'core_tw_04',
-    name: '熵咒祭台',
-    role: '乘法增伤',
-    cell: { x: 9, y: 10 },
+    id: 'supply_01',
+    name: '补给站',
+    role: '攻速光环',
+    cell: { x: 13, y: 6 },
+    tier: 2,
+    core: 'SUPPLY',
+    status: 'ready',
+    targetMode: '前锋',
+    footprint: { width: 1, height: 1 },
+    range: 6,
+    attackRate: 0,
+    damage: 0,
+    dps: 0,
+    effects: ['6x6 范围友军攻速 +20%。'],
+    note: '覆盖主路交汇区，给箭塔和炮塔提速。',
+    quickActions: [
+      { key: 'Q', actionId: 'supply_01-upgrade', actionType: 'UPGRADE', targetKind: 'tower', targetId: 'supply_01', label: '升级补给站', detail: '扩大光环收益。', cost: '9 金币', availability: 'ready' },
+      { key: 'W', actionId: 'supply_01-retarget', actionType: 'RETARGET', targetKind: 'tower', targetId: 'supply_01', label: '切换到末尾', detail: '功能建筑不依赖目标优先级。', cost: '0', availability: 'locked', reason: '功能建筑不需要重设目标。' },
+      { key: 'E', actionId: 'supply_01-cast', actionType: 'CAST', targetKind: 'tower', targetId: 'supply_01', label: '战地提速', detail: '短时间再拉高附近友军攻速。', cost: '1 法力', availability: 'ready' },
+      { key: 'R', actionId: 'supply_01-sell', actionType: 'SELL', targetKind: 'tower', targetId: 'supply_01', label: '拆除回收', detail: '拆除建筑并回收部分金币。', cost: '+60% 造价', availability: 'ready' }
+    ]
+  },
+  {
+    id: 'mine_01',
+    name: '矿场',
+    role: '经济产出',
+    cell: { x: 14, y: 12 },
     tier: 3,
-    core: 'CURSE',
-    status: 'stable',
-    targetMode: '热量最高',
-    modules: ['裂隙回响', '债务收割'],
-    heat: 23,
-    dps: 201,
-    note: '本身输出不高，但会把高热目标转化为全队乘法收益。',
+    core: 'MINE',
+    status: 'ready',
+    targetMode: '前锋',
+    footprint: { width: 2, height: 2 },
+    range: 0,
+    attackRate: 0,
+    damage: 0,
+    dps: 0,
+    effects: ['每 6 秒产出 1 金币。'],
+    note: '已经进入稳定采矿周期，适合在局势平稳时滚经济。',
+    storedGold: 3,
     quickActions: [
-      { key: 'Q', actionId: 'upgrade-curse', actionType: 'UPGRADE', targetKind: 'tower', label: '升级祭台', detail: '提高易伤倍率与持续时间。', cost: '104 金币', availability: 'ready' },
-      { key: 'W', actionId: 'mark-hottest', actionType: 'RETARGET', targetKind: 'enemy', label: '标记高热', detail: '强制锁定热量最高敌群。', cost: '0', availability: 'ready' },
-      { key: 'E', actionId: 'debt-harvest', actionType: 'CAST', targetKind: 'enemy', label: '债务收割', detail: '把敌方热量转成全队乘区。', cost: '28 法能', availability: 'ready' },
-      { key: 'R', actionId: 'sell-curse', actionType: 'SELL', targetKind: 'tower', label: '拆除回收', detail: '回收祭台并返还部分模块。', cost: '-1 维修点', availability: 'locked', reason: '当前乘区核心，不建议移除' }
+      { key: 'Q', actionId: 'mine_01-upgrade', actionType: 'UPGRADE', targetKind: 'tower', targetId: 'mine_01', label: '升级矿场', detail: '缩短采矿周期。', cost: '已满级', availability: 'locked', reason: '该建筑最多 3 级。' },
+      { key: 'W', actionId: 'mine_01-retarget', actionType: 'RETARGET', targetKind: 'tower', targetId: 'mine_01', label: '切换到末尾', detail: '功能建筑不依赖目标优先级。', cost: '0', availability: 'locked', reason: '功能建筑不需要重设目标。' },
+      { key: 'E', actionId: 'mine_01-cast', actionType: 'CAST', targetKind: 'tower', targetId: 'mine_01', label: '提早收矿', detail: '立即结算当前累计产出。', cost: '0', availability: 'ready' },
+      { key: 'R', actionId: 'mine_01-sell', actionType: 'SELL', targetKind: 'tower', targetId: 'mine_01', label: '拆除回收', detail: '拆除建筑并回收部分金币。', cost: '+60% 造价', availability: 'ready' }
     ]
   }
 ]
@@ -390,36 +393,57 @@ export const mockCoreTowers: CoreTowerBuild[] = [
 export const mockCoreEnemies: CoreEnemyWave[] = [
   {
     id: 'core_enemy_01',
-    name: '碎盾重步群',
+    name: '携盾群',
     threat: 'high',
     lane: '中',
-    count: 7,
-    hp: 5320,
-    maxHp: 7600,
-    position: { x: 13, y: 8 },
-    intent: '进入中路汇流后触发护甲循环，压制单体高伤塔。'
+    count: 6,
+    hp: 188,
+    maxHp: 240,
+    position: { x: 19, y: 9 },
+    speed: 1.6,
+    baseSpeed: 1.6,
+    armor: 0.16,
+    maxArmor: 0.16,
+    slowFactor: 0,
+    burnRatio: 0,
+    statusText: '无异常状态',
+    intent: '高护甲成团推进，适合用炮塔和电塔处理。'
   },
   {
     id: 'core_enemy_02',
-    name: '裂隙织法者',
+    name: '散兵群',
     threat: 'medium',
     lane: '北',
-    count: 4,
-    hp: 1840,
-    maxHp: 2800,
-    position: { x: 11, y: 4 },
-    intent: '会污染北侧两个塔位，逼迫你用维修点去污染。'
+    count: 5,
+    hp: 122,
+    maxHp: 160,
+    position: { x: 17, y: 4 },
+    speed: 1.9,
+    baseSpeed: 1.9,
+    armor: 0.08,
+    maxArmor: 0.08,
+    slowFactor: 0,
+    burnRatio: 0,
+    statusText: '无异常状态',
+    intent: '速度较快，冰塔和箭塔更容易稳住这一路。'
   },
   {
     id: 'core_enemy_03',
-    name: '余烬巨像',
+    name: '攻城巨像',
     threat: 'boss',
     lane: '南',
     count: 1,
-    hp: 12800,
-    maxHp: 18000,
-    position: { x: 12, y: 12 },
-    intent: '在 60% 生命时重绘入口，南路将并入主路。'
+    hp: 420,
+    maxHp: 420,
+    position: { x: 18, y: 14 },
+    speed: 1.1,
+    baseSpeed: 1.1,
+    armor: 0.28,
+    maxArmor: 0.28,
+    slowFactor: 0,
+    burnRatio: 0,
+    statusText: '无异常状态',
+    intent: '会测试你是否具备多格火力、减防和持续灼烧的完整链路。'
   }
 ]
 
@@ -433,30 +457,30 @@ export const mockCoreRouteNodes: RouteNodeState[] = [
 ]
 
 export const mockCoreScenario: CoreRunScenario = {
-  runId: 'run_core_s4_044',
-  rulesVersion: 'mvp-v1',
-  title: '裂谷赛季主战场',
+  runId: 'run_buildings_s1_001',
+  rulesVersion: 'buildings-v2',
+  title: '建筑体系主战场',
   agentName: 'DeepDefender-v4',
-  difficulty: 'HELL',
+  difficulty: 'NORMAL',
   seed: 93124577,
-  zoneName: '区域 3 / 裂谷废墟',
-  currentNode: '黑箱商店后的危机战斗',
-  waveLabel: 'Wave 19 / 余烬巨像入场',
-  currentTick: 18240,
-  maxTicks: 36000,
-  score: 58240,
-  fortressIntegrity: 62,
-  maintenanceDebt: 4,
-  routePressure: '如果此战不处理热量与污染，Boss 节点会强制双入口并锁 2 个模块槽。',
+  zoneName: '区域 2 / 试验防线',
+  currentNode: '多路线建筑测试',
+  waveLabel: 'Wave 6 / 复合兵种推进',
+  currentTick: 5760,
+  maxTicks: 24000,
+  score: 920,
+  fortressIntegrity: 78,
+  maintenanceDebt: 1,
+  routePressure: '本局重点是验证新建筑体系的占地、范围、光环和经济是否协同工作。',
   resources: {
-    gold: 412,
-    heat: 84,
+    gold: 9,
+    heat: 28,
     heat_limit: 100,
-    mana: 62,
-    mana_limit: 120,
-    repair: 5,
-    threat: 78,
-    fortress: 62,
+    mana: 8,
+    mana_limit: 20,
+    repair: 4,
+    threat: 34,
+    fortress: 78,
     fortress_max: 100
   },
   supportedTowerCores: MVP_CORE_TOWER_TYPES,
@@ -464,85 +488,97 @@ export const mockCoreScenario: CoreRunScenario = {
   cells: mockCoreMapCells,
   towers: mockCoreTowers,
   enemies: mockCoreEnemies,
-  relics: ['熔毁账本', '延迟冷凝片', '断层罗盘', '裂隙税印'],
+  relics: ['工程手册', '折返路标'],
   buildQueue: [
-    { id: 'queue-1', label: '去污染寒蚀棱镜', eta: '2 维修点', reason: '解除卡壳，恢复冻结链。' },
-    { id: 'queue-2', label: '重构南路为延滞链', eta: '3 维修点', reason: 'Boss 二阶段会把南路并入主路。' },
-    { id: 'queue-3', label: '降温熔锻炉心', eta: '40 法能', reason: '把全局热量从 84 压回安全区。' }
+    { id: 'queue-1', label: '补电塔减防', eta: '下一准备阶段', reason: '当前对高护甲敌群的处理仍然偏慢。' },
+    { id: 'queue-2', label: '维持补给站覆盖', eta: '持续', reason: '箭塔和炮塔都吃补给站的攻速光环。' },
+    { id: 'queue-3', label: '继续滚矿场', eta: '本轮结算', reason: '局势尚稳，可以继续扩大金币优势。' }
   ],
   actionWindow: {
-    type: 'combat',
-    label: '波中干预 / 4.5 秒',
-    deadlineMs: 4500,
-    summary: '当前问题不是输出不够，而是热量和污染会让你在 Boss 前失去转型能力。',
+    type: 'prep',
+    label: '波前准备 / 6 秒',
+    deadlineMs: 6000,
+    summary: '点击地块后，可直接在这里选择要建造的建筑。',
     options: [
-      { id: 'opt-1', label: '用维修点去污染寒蚀棱镜', cost: '2 维修点', payoff: '恢复北路冻结链', risk: '延后主堡修复' },
-      { id: 'opt-2', label: '强开熔锻炉心超载', cost: '+18 热量', payoff: '立刻击穿重甲波', risk: '下一窗口可能热崩' },
-      { id: 'opt-3', label: '改路封死南路支线', cost: '3 维修点', payoff: '降低 Boss 二阶段冲线速度', risk: '营地节点转型预算不足' },
-      { id: 'opt-4', label: '跳过操作保留资源', cost: '0', payoff: '保留转型余量', risk: '主堡本波额外承压', locked: false }
+      { id: 'option-build-arrow', label: '建造箭塔', cost: '1 金币', payoff: '快速补单体输出', risk: '群体压力仍需别的建筑处理' },
+      { id: 'option-build-cannon', label: '建造炮塔', cost: '2 金币', payoff: '补 3x3 范围伤害', risk: '会占用纵向 1x2 塔位' },
+      { id: 'option-build-supply', label: '建造补给站', cost: '1 金币', payoff: '抬高附近友军攻速', risk: '本身不提供直接伤害' },
+      { id: 'option-build-mine', label: '建造矿场', cost: '1 金币', payoff: '开始滚动经济', risk: '本身不提供直接伤害' }
     ],
     quickActions: [
-      { key: 'Q', actionId: 'opt-1', actionType: 'CHOOSE_OPTION', targetKind: 'option', label: '去污染棱镜', detail: '恢复北路冻结链。', cost: '2 维修点', availability: 'ready' },
-      { key: 'W', actionId: 'opt-2', actionType: 'CHOOSE_OPTION', targetKind: 'option', label: '炉心超载', detail: '短期击穿重甲波。', cost: '+18 热量', availability: 'ready' },
-      { key: 'E', actionId: 'opt-3', actionType: 'CHOOSE_OPTION', targetKind: 'option', label: '封死南路', detail: '降低 Boss 二阶段冲线速度。', cost: '3 维修点', availability: 'ready' },
-      { key: 'R', actionId: 'opt-4', actionType: 'CHOOSE_OPTION', targetKind: 'option', label: '保留资源', detail: '跳过操作，保留转型余量。', cost: '0', availability: 'ready' }
+      { key: '1', actionId: 'build-ARROW', actionType: 'BUILD', targetKind: 'cell', targetId: 'ARROW', label: '建造箭塔', detail: '稳定单体输出。', cost: '1 金币', availability: 'ready' },
+      { key: '2', actionId: 'build-ICE', actionType: 'BUILD', targetKind: 'cell', targetId: 'ICE', label: '建造冰塔', detail: '单体减速控场。', cost: '2 金币', availability: 'ready' },
+      { key: '3', actionId: 'build-CANNON', actionType: 'BUILD', targetKind: 'cell', targetId: 'CANNON', label: '建造炮塔', detail: '3x3 范围爆发。', cost: '2 金币', availability: 'ready' },
+      { key: '4', actionId: 'build-LASER', actionType: 'BUILD', targetKind: 'cell', targetId: 'LASER', label: '建造激光塔', detail: '持续聚焦增伤。', cost: '3 金币', availability: 'ready' },
+      { key: '5', actionId: 'build-TESLA', actionType: 'BUILD', targetKind: 'cell', targetId: 'TESLA', label: '建造电塔', detail: '范围减防压血。', cost: '3 金币', availability: 'ready' },
+      { key: '6', actionId: 'build-MAGIC', actionType: 'BUILD', targetKind: 'cell', targetId: 'MAGIC', label: '建造魔法塔', detail: '全屏永久灼烧。', cost: '3 金币', availability: 'ready' },
+      { key: '7', actionId: 'build-SUPPLY', actionType: 'BUILD', targetKind: 'cell', targetId: 'SUPPLY', label: '建造补给站', detail: '6x6 攻速光环。', cost: '1 金币', availability: 'ready' },
+      { key: '8', actionId: 'build-MINE', actionType: 'BUILD', targetKind: 'cell', targetId: 'MINE', label: '建造矿场', detail: '持续产出金币。', cost: '1 金币', availability: 'ready' }
     ]
   },
   routeForecast: [
-    { path: '黑箱商店 -> 废墟营地 -> 余烬主教', reward: '稳定转型窗口', cost: '放弃高稀有遗物', risk: 'Boss 血量更厚' },
-    { path: '黑箱商店 -> 裂谷事件 -> 余烬主教', reward: '高乘法遗物', cost: '热量上限 -10', risk: '更容易过载暴毙' },
-    { path: '黑箱商店 -> 精英捷径 -> 余烬主教', reward: '额外维修点', cost: '精英词缀 +1', risk: '若未清污染会直接崩盘' }
+    { path: '商店 -> 营地 -> Boss', reward: '稳定资源窗口', cost: '爆发收益偏低', risk: 'Boss 血量更厚' },
+    { path: '事件 -> 精英 -> Boss', reward: '更多金币与遗物', cost: '主堡压力更大', risk: '若火力结构不完整会直接漏怪' },
+    { path: '营地 -> 事件 -> Boss', reward: '补线更稳', cost: '推进更慢', risk: '经济滚动速度下降' }
   ],
   objectiveStack: [
-    { label: '压热', detail: '在 Boss 前把热量降到 65 以下。', severity: 'critical' },
-    { label: '保维修', detail: '至少保留 2 点维修用于二阶段改路。', severity: 'warning' },
-    { label: '维持冻结链', detail: '让北路冻结覆盖率回到 70% 以上。', severity: 'info' }
+    { label: '补齐功能位', detail: '当前建议补电塔或魔法塔，让伤害链完整。', severity: 'critical' },
+    { label: '维持经济', detail: '矿场已经运转，尽量不要轻易拆除。', severity: 'warning' },
+    { label: '让光环吃满', detail: '把主要输出建筑留在补给站 6x6 覆盖范围内。', severity: 'info' }
   ]
 }
 
-export const mockCoreSnapshots: ReplaySnapshot[] = [
+export const mockCoreSnapshots: CoreReplaySnapshot[] = [
   {
     tick: 0,
     timestamp: '2026-03-13T11:00:00Z',
     game_state: {
-      resources: { gold: 650, heat: 18, heat_limit: 100, mana: 90, mana_limit: 120, repair: 6, threat: 22, fortress: 100, fortress_max: 100 },
+      resources: { gold: 6, heat: 10, heat_limit: 100, mana: 6, mana_limit: 20, repair: 5, threat: 10, fortress: 100, fortress_max: 100 },
       towers: [],
       enemies: [],
       wave: 1,
-      score: 0
+      score: 0,
+      phase: 'PREP',
+      observation_version: 1
     }
   },
   {
-    tick: 7200,
+    tick: 1920,
     timestamp: '2026-03-13T11:08:00Z',
     game_state: {
-      resources: { gold: 510, heat: 41, heat_limit: 100, mana: 70, mana_limit: 120, repair: 5, threat: 44, fortress: 91, fortress_max: 100 },
-      towers: [],
+      resources: { gold: 5, heat: 18, heat_limit: 100, mana: 7, mana_limit: 20, repair: 4, threat: 18, fortress: 94, fortress_max: 100 },
+      towers: mockCoreTowers.slice(0, 2),
       enemies: [],
-      wave: 7,
-      score: 14800
+      wave: 3,
+      score: 280,
+      phase: 'COMBAT',
+      observation_version: 2
     }
   },
   {
-    tick: 14400,
+    tick: 3840,
     timestamp: '2026-03-13T11:16:00Z',
     game_state: {
-      resources: { gold: 438, heat: 69, heat_limit: 100, mana: 64, mana_limit: 120, repair: 4, threat: 63, fortress: 74, fortress_max: 100 },
-      towers: [],
-      enemies: [],
-      wave: 14,
-      score: 39100
+      resources: { gold: 8, heat: 24, heat_limit: 100, mana: 8, mana_limit: 20, repair: 4, threat: 28, fortress: 85, fortress_max: 100 },
+      towers: mockCoreTowers,
+      enemies: mockCoreEnemies.slice(0, 2),
+      wave: 5,
+      score: 620,
+      phase: 'RESOLUTION',
+      observation_version: 3
     }
   },
   {
-    tick: 18240,
+    tick: 5760,
     timestamp: '2026-03-13T11:22:00Z',
     game_state: {
-      resources: { gold: 412, heat: 84, heat_limit: 100, mana: 62, mana_limit: 120, repair: 5, threat: 78, fortress: 62, fortress_max: 100 },
-      towers: [],
-      enemies: [],
-      wave: 19,
-      score: 58240
+      resources: { gold: 9, heat: 28, heat_limit: 100, mana: 8, mana_limit: 20, repair: 4, threat: 34, fortress: 78, fortress_max: 100 },
+      towers: mockCoreTowers,
+      enemies: mockCoreEnemies,
+      wave: 6,
+      score: 920,
+      phase: 'DECISION',
+      observation_version: 4
     }
   }
 ]

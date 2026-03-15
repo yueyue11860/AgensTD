@@ -11,7 +11,7 @@ import type {
 
 export const MVP_DIFFICULTY_ORDER: Difficulty[] = ['EASY', 'NORMAL', 'HARD', 'HELL']
 
-export const MVP_CORE_TOWER_TYPES: CoreTowerType[] = ['BALLISTA', 'MORTAR', 'FROST', 'CURSE']
+export const MVP_CORE_TOWER_TYPES: CoreTowerType[] = ['ARROW', 'ICE', 'CANNON', 'LASER', 'TESLA', 'MAGIC', 'SUPPLY', 'MINE']
 
 export const MVP_BOUNDARY: MvpBoundary = {
   maps: 1,

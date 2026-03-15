@@ -3,9 +3,8 @@ import {
   mockCoreScenario,
   mockCoreSnapshots,
   type CoreRunScenario,
-  type ReplaySnapshot,
 } from '@/lib/mock-data'
-import type { ActionWindowType, RunActionLogEntry } from '@/lib/domain'
+import type { ActionValidationCode, ActionWindowType, CoreReplaySnapshot, RunActionLogEntry } from '@/lib/domain'
 import { createSimulator } from '@/lib/game/simulator'
 import type { Database } from '@/lib/supabase/database.types'
 
@@ -17,7 +16,7 @@ interface FetchLiveRunScenarioOptions {
 interface LiveRunScenarioData {
   runId: string | null
   scenario: CoreRunScenario
-  snapshots: ReplaySnapshot[]
+  snapshots: CoreReplaySnapshot[]
   recentActions: RunActionLogEntry[]
 }
 
@@ -113,7 +112,7 @@ function mapScenarioFromRun(
   }
 }
 
-function mapSnapshotsFromRows(rows: Database['public']['Tables']['run_snapshots']['Row'][]): ReplaySnapshot[] {
+function mapSnapshotsFromRows(rows: Database['public']['Tables']['run_snapshots']['Row'][]): CoreReplaySnapshot[] {
   if (rows.length === 0) {
     return mockCoreSnapshots
   }
@@ -134,8 +133,11 @@ function mapSnapshotsFromRows(rows: Database['public']['Tables']['run_snapshots'
         enemies: asArray(gameState.enemies, []),
         wave: asNumber(gameState.wave, 0),
         score: asNumber(gameState.score, 0),
+        phase: gameState.phase === 'PREP' || gameState.phase === 'COMBAT' || gameState.phase === 'RESOLUTION' || gameState.phase === 'DECISION'
+          ? gameState.phase
+          : 'PREP',
+        observation_version: asNumber(gameState.observation_version, 1),
       },
-      thumbnail: typeof snapshot.thumbnail === 'string' ? snapshot.thumbnail : undefined,
     }
   })
 }
@@ -150,7 +152,7 @@ function mapRunActions(rows: Database['public']['Tables']['run_actions']['Row'][
       target_cell: row.action.target_cell ? { ...row.action.target_cell } : undefined,
     },
     accepted: row.accepted,
-    validation_code: row.validation_code,
+    validation_code: row.validation_code as ActionValidationCode | null | undefined,
     reason: row.reason,
     created_at: row.created_at,
   }))
@@ -188,18 +190,18 @@ function createFreshScenarioFromRun(run: Database['public']['Tables']['competiti
     fortressIntegrity: resources.fortress,
     maintenanceDebt: 0,
     currentNode: routeNodes[0]?.title ?? '开局部署',
-    routePressure: 'Run 已创建。先落下第一座塔核，再决定首轮路线。',
+    routePressure: 'Run 已创建。先落下第一座建筑，再决定首轮路线。',
     resources,
     routeNodes,
     towers: [],
     enemies: [],
     relics: [],
     buildQueue: [
-      { id: 'fresh-open-1', label: '落第一座塔核', eta: '当前窗口', reason: '先定主轴，再决定是补单体、范围还是控场。' },
+      { id: 'fresh-open-1', label: '落第一座建筑', eta: '当前窗口', reason: '先定主轴，再决定是补单体、范围还是功能位。' },
       { id: 'fresh-open-2', label: '保留法能与维修点', eta: '首波前', reason: '在线 run 的第一波更需要容错而不是贪收益。' },
     ],
     objectiveStack: [
-      { label: '站稳开局', detail: '至少部署 1 座塔核，避免第一轮直接漏怪。', severity: 'critical' },
+      { label: '站稳开局', detail: '至少部署 1 座建筑，避免第一轮直接漏怪。', severity: 'critical' },
       { label: '保资源', detail: '维修点与法能都不要在开局一次性花空。', severity: 'warning' },
       { label: '看路线', detail: '首个节点决定后续转型窗口。', severity: 'info' },
     ],
@@ -249,18 +251,20 @@ export async function fetchLiveRunScenario(
       }
     }
 
+    const typedRun = run as Database['public']['Tables']['competition_runs']['Row']
+
     const [{ data: agent }, { data: snapshots, error: snapshotError }, { data: actions, error: actionError }] = await Promise.all([
-      client.from('agents').select('name').eq('id', run.agent_id).maybeSingle(),
+      client.from('agents').select('name').eq('id', typedRun.agent_id).maybeSingle(),
       client
         .from('run_snapshots')
         .select('*')
-        .eq('run_id', run.id)
+        .eq('run_id', typedRun.id)
         .order('tick', { ascending: true })
         .limit(24),
       client
         .from('run_actions')
         .select('*')
-        .eq('run_id', run.id)
+        .eq('run_id', typedRun.id)
         .order('created_at', { ascending: false })
         .limit(8),
     ])
@@ -269,13 +273,13 @@ export async function fetchLiveRunScenario(
     const typedSnapshots = (snapshots ?? []) as Database['public']['Tables']['run_snapshots']['Row'][]
     const typedActions = (actions ?? []) as Database['public']['Tables']['run_actions']['Row'][]
 
-    const mappedScenario = isFreshRunSummary(run.result_summary)
-      ? createFreshScenarioFromRun(run, typedAgent?.name ?? mockCoreScenario.agentName)
-      : mapScenarioFromRun(run, typedAgent?.name ?? mockCoreScenario.agentName)
+    const mappedScenario = isFreshRunSummary(typedRun.result_summary)
+      ? createFreshScenarioFromRun(typedRun, typedAgent?.name ?? mockCoreScenario.agentName)
+      : mapScenarioFromRun(typedRun, typedAgent?.name ?? mockCoreScenario.agentName)
 
     return {
       data: {
-        runId: run.id,
+        runId: typedRun.id,
         scenario: mappedScenario,
         snapshots: snapshotError ? mockCoreSnapshots : mapSnapshotsFromRows(typedSnapshots),
         recentActions: actionError ? [] : mapRunActions(typedActions),

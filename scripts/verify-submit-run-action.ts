@@ -73,14 +73,14 @@ function buildFreshRunFallbackScenario() {
       score: 0,
       waveLabel: 'Wave 1',
       currentNode: routeNodes[0]?.title ?? '开局部署',
-      routePressure: 'Run 已创建。先落下第一座塔核，再决定首轮路线。',
+      routePressure: 'Run 已创建。先落下第一座建筑，再决定首轮路线。',
       maintenanceDebt: 0,
       routeNodes,
       towers: [],
       enemies: [],
       relics: [],
       buildQueue: [
-        { id: 'fresh-open-1', label: '落第一座塔核', eta: '当前窗口', reason: '先定主轴，再决定是补单体、范围还是控场。' },
+        { id: 'fresh-open-1', label: '落第一座建筑', eta: '当前窗口', reason: '先定主轴，再决定是补单体、范围还是功能位。' },
       ],
       actionWindow: {
         ...mockCoreScenario.actionWindow,
@@ -93,7 +93,7 @@ function buildFreshRunFallbackScenario() {
   }).getObservation().scenario
 }
 
-async function findRun(client: NonNullable<ReturnType<typeof getSupabaseAdminClient>>, runId?: string) {
+async function findRun(client: NonNullable<ReturnType<typeof getSupabaseAdminClient>>, runId?: string): Promise<Record<string, unknown> | null> {
   if (runId) {
     const { data, error } = await client
       .from('competition_runs')
@@ -105,7 +105,7 @@ async function findRun(client: NonNullable<ReturnType<typeof getSupabaseAdminCli
       throw error
     }
 
-    return data
+    return (data as Record<string, unknown> | null) ?? null
   }
 
   const { data, error } = await client
@@ -119,7 +119,7 @@ async function findRun(client: NonNullable<ReturnType<typeof getSupabaseAdminCli
     throw error
   }
 
-  return data?.[0] ?? null
+  return (data?.[0] as Record<string, unknown> | null) ?? null
 }
 
 async function findAgentId(client: NonNullable<ReturnType<typeof getSupabaseAdminClient>>) {
@@ -134,7 +134,7 @@ async function findAgentId(client: NonNullable<ReturnType<typeof getSupabaseAdmi
     throw error
   }
 
-  return data?.[0]?.id ?? null
+  return (data?.[0] as { id?: string } | undefined)?.id ?? null
 }
 
 async function createRun(
@@ -216,7 +216,7 @@ async function main() {
     : undefined
 
   const payload = {
-    runId: run.id as string,
+    runId: asString(run.id),
     action: {
       actionType: selectedSlot.actionType,
       targetKind: selectedSlot.targetKind,
@@ -240,7 +240,7 @@ async function main() {
   const { data: actionLog, error: actionLogError } = await client
     .from('run_actions')
     .select('*')
-    .eq('run_id', run.id as string)
+    .eq('run_id', asString(run.id))
     .order('created_at', { ascending: false })
     .limit(1)
 
@@ -250,7 +250,7 @@ async function main() {
 
   console.log(JSON.stringify({
     createdRunCode,
-    runId: run.id,
+    runId: asString(run.id),
     selectedAction: {
       actionId: selectedSlot.actionId,
       actionType: selectedSlot.actionType,

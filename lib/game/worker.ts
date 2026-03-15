@@ -1,6 +1,7 @@
 import type {
   ActionTargetKind,
   ActionType,
+  CoreMapCell,
   CoreRunScenario,
   GameAction,
   GameObservation,
@@ -46,6 +47,10 @@ function asNumber(value: unknown, fallback: number) {
 
 function asArray<T>(value: unknown, fallback: T[]): T[] {
   return Array.isArray(value) ? (value as T[]) : fallback
+}
+
+function findAutoplayBuildCell(cells: CoreMapCell[]) {
+  return cells.find((cell) => cell.kind === 'build') ?? null
 }
 
 function toCoreScenario(run: CompetitionRunRow): CoreRunScenario {
@@ -104,17 +109,23 @@ function createAutoplayAction(observation: GameObservation): GameAction {
     }
   }
 
+  const autoplayBuildCell = readySlot.targetKind === 'cell'
+    ? findAutoplayBuildCell(observation.scenario.cells)
+    : null
+
   return {
     action_type: readySlot.actionType,
     target_kind: readySlot.targetKind,
     target_id: readySlot.targetKind === 'tower'
       ? (readySlot.targetId ?? observation.scenario.towers[0]?.id)
       : (readySlot.targetId ?? readySlot.actionId),
+    ...(autoplayBuildCell ? { target_cell: { x: autoplayBuildCell.x, y: autoplayBuildCell.y } } : {}),
     observation_version: observation.observation_version,
     issued_at_tick: observation.tick,
     payload: {
       slot: readySlot.key,
       label: readySlot.label,
+      ...(readySlot.actionType === 'BUILD' && readySlot.targetId ? { core: readySlot.targetId } : {}),
     },
   }
 }

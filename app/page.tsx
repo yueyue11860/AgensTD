@@ -11,6 +11,7 @@ import { useLiveRun } from '@/hooks/use-live-run'
 import { TacticalPanel } from '@/components/ui/tactical-panel'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { getBuildingLabel } from '@/lib/game/buildings'
 import { GameSimulator, createSimulator } from '@/lib/game/simulator'
 import { buildReplaySnapshot, buildRunResultSummary } from '@/lib/game/replay'
 import { enqueueRun, submitRunAction } from '@/lib/supabase/functions'
@@ -29,7 +30,6 @@ import {
   Play,
   RotateCcw,
   Shield,
-  ShieldCheck,
   Target,
   TimerReset,
   Trophy,
@@ -41,9 +41,155 @@ type PlayerDifficultyProgress = Omit<DifficultyProgress, 'difficulty'> & {
 }
 
 type BattleMode = 'local' | 'remote'
+type StageId = 'tutorial' | 'level-1' | 'level-2' | 'level-3' | 'level-4' | 'level-5' | 'level-6' | 'endless'
+type StageCompletionState = Record<StageId, boolean>
+
+interface StageDefinition {
+  id: StageId
+  label: string
+  title: string
+  description: string
+  detail: string
+  unlockHint: string
+  difficulty: Difficulty
+  icon: typeof Shield
+  panelClass: string
+  guaranteedWin?: boolean
+  tutorial?: boolean
+}
+
+interface StageState {
+  unlocked: boolean
+  completed: boolean
+}
+
+interface TutorialStep {
+  title: string
+  detail: string
+}
 
 const difficultyOrder: Difficulty[] = ['EASY', 'NORMAL', 'HARD', 'HELL']
 const progressStorageKey = 'clawgame-main-battle-progress'
+const stageProgressStorageKey = 'clawgame-stage-progress'
+
+const stageDefinitions: StageDefinition[] = [
+  {
+    id: 'tutorial',
+    label: '教学关卡',
+    title: '零压演练',
+    description: '从地图点选到就近操作卡执行，按步骤把新版核心操作亲手做一遍。',
+    detail: '完成全部教学步骤后，会自动把你带到关卡 1。',
+    unlockHint: '默认开放',
+    difficulty: 'EASY',
+    icon: Shield,
+    panelClass: 'border-primary/30 bg-gradient-to-br from-primary/14 via-card to-card',
+    tutorial: true,
+  },
+  {
+    id: 'level-1',
+    label: '关卡 1',
+    title: '新兵巡检线',
+    description: '极简敌潮与超宽资源窗口，用来建立第一局的节奏感。',
+    detail: '本关保证 100% 通过率，目标是让玩家稳定体验第一场胜利。',
+    unlockHint: '完成教学关卡后开放',
+    difficulty: 'EASY',
+    icon: Shield,
+    panelClass: 'border-slate/30 bg-gradient-to-br from-slate/16 via-card to-card',
+    guaranteedWin: true,
+  },
+  {
+    id: 'level-2',
+    label: '关卡 2',
+    title: '补给线巡航',
+    description: '继续留在低压环境，但开始要求你稳定处理两轮资源分配。',
+    detail: '通过关卡 1 后开放，仍属于 EASY 强度，用来巩固开局与波中节奏。',
+    unlockHint: '通关关卡 1 后开放',
+    difficulty: 'EASY',
+    icon: Shield,
+    panelClass: 'border-slate/30 bg-gradient-to-br from-slate/16 via-card to-card',
+  },
+  {
+    id: 'level-3',
+    label: '关卡 3',
+    title: '双路磨合',
+    description: '开始引入更真实的资源交换，要求玩家熟悉棋盘就近操作卡的取舍。',
+    detail: '通过关卡 2 后开放，对应 NORMAL 难度的正式起点。',
+    unlockHint: '通关关卡 2 后开放',
+    difficulty: 'NORMAL',
+    icon: Target,
+    panelClass: 'border-cold-blue/30 bg-gradient-to-br from-cold-blue/16 via-card to-card',
+  },
+  {
+    id: 'level-4',
+    label: '关卡 4',
+    title: '裂隙前哨',
+    description: '双路与波中决策一起施压，开始要求更清晰的目标优先级。',
+    detail: '通过关卡 3 后开放，仍属于 NORMAL 强度的后段。',
+    unlockHint: '通关关卡 3 后开放',
+    difficulty: 'NORMAL',
+    icon: Target,
+    panelClass: 'border-cold-blue/30 bg-gradient-to-br from-cold-blue/16 via-card to-card',
+  },
+  {
+    id: 'level-5',
+    label: '关卡 5',
+    title: '主战场前夜',
+    description: '污染、维修与改路开始叠压，是进入主线强度前的过渡关。',
+    detail: '通过关卡 4 后开放，对应 HARD 难度。',
+    unlockHint: '通关关卡 4 后开放',
+    difficulty: 'HARD',
+    icon: Flame,
+    panelClass: 'border-warning-orange/30 bg-gradient-to-br from-warning-orange/14 via-card to-card',
+  },
+  {
+    id: 'level-6',
+    label: '关卡 6',
+    title: '灰烬断层',
+    description: '主线高压关卡，要求稳定处理中后期热度、占地和建筑升级节奏。',
+    detail: '通过关卡 5 后开放，属于 HARD 后段压力测试。',
+    unlockHint: '通关关卡 5 后开放',
+    difficulty: 'HARD',
+    icon: Flame,
+    panelClass: 'border-warning-orange/30 bg-gradient-to-br from-warning-orange/14 via-card to-card',
+  },
+  {
+    id: 'endless',
+    label: '无尽终局',
+    title: '零域裁决',
+    description: '最终关卡，敌潮无尽拉长，要求完整构筑、稳定节奏与更严格的资源控制。',
+    detail: '通过关卡 6 后开放，这是最后一张关卡卡，也是当前版本的终局入口。',
+    unlockHint: '通关关卡 6 后开放',
+    difficulty: 'HELL',
+    icon: Gauge,
+    panelClass: 'border-alert-red/30 bg-gradient-to-br from-alert-red/16 via-card to-card',
+  },
+]
+
+const initialStageCompletion: StageCompletionState = {
+  tutorial: false,
+  'level-1': false,
+  'level-2': false,
+  'level-3': false,
+  'level-4': false,
+  'level-5': false,
+  'level-6': false,
+  endless: false,
+}
+
+const tutorialSteps: TutorialStep[] = [
+  {
+    title: '步骤 1: 先点选地图格子',
+    detail: '点击地图上的任意可建造格，熟悉战场选中与视角焦点。',
+  },
+  {
+    title: '步骤 2: 使用就近操作卡',
+    detail: '点开格子旁的小型操作卡，直接执行一个可用动作。',
+  },
+  {
+    title: '步骤 3: 再完成一次场上交互',
+    detail: '重新点选地块或建筑，再通过就近操作卡完成一次动作，结束教学。',
+  },
+]
 
 const routeNodeStyle = {
   combat: 'border-border bg-card text-foreground',
@@ -74,7 +220,7 @@ const routeBlueprints: Record<Difficulty, Array<Omit<RouteNodeState, 'cleared' |
     { id: 'zone3-2', zone: 3, index: 2, type: 'event', title: '无主熔炉', modifier: '可换高热遗物' },
     { id: 'zone3-3', zone: 3, index: 3, type: 'elite', title: '裂隙先遣', modifier: '精英词缀 +1' },
     { id: 'zone3-4', zone: 3, index: 4, type: 'shop', title: '黑箱商店', modifier: '维修成本 -1' },
-    { id: 'zone3-5', zone: 3, index: 5, type: 'camp', title: '废墟营地', modifier: '可重构 1 次塔核' },
+    { id: 'zone3-5', zone: 3, index: 5, type: 'camp', title: '废墟营地', modifier: '可重整 1 处建筑布局' },
     { id: 'zone3-boss', zone: 3, index: 6, type: 'boss', title: '余烬主教', modifier: '阶段切换会封路' },
   ],
   HELL: [
@@ -93,7 +239,7 @@ const routeForecastBlueprints: Record<Difficulty, CoreRunScenario['routeForecast
     { path: '警戒线 -> 事件 -> 商队', reward: '更早拿到关键遗物', cost: '维修点压力更高', risk: '前两波容易漏怪' },
   ],
   NORMAL: [
-    { path: '回廊 -> 精英 -> 商店', reward: '更快成型主轴塔核', cost: '中局压力提高', risk: '双路同时爆线' },
+    { path: '回廊 -> 精英 -> 商店', reward: '更快成型主轴建筑', cost: '中局压力提高', risk: '双路同时爆线' },
     { path: '回廊 -> 事件 -> Boss', reward: '高额金币与法能', cost: '热量抬升', risk: 'Boss 前容错明显变窄' },
   ],
   HARD: [
@@ -104,7 +250,7 @@ const routeForecastBlueprints: Record<Difficulty, CoreRunScenario['routeForecast
   HELL: [
     { path: '熔穿外圈 -> 末路黑箱 -> 断层营地', reward: '高压下仍有重构窗口', cost: '维护债务抬升', risk: '中盘经济极紧' },
     { path: '熔穿外圈 -> 熔火仪式场 -> 熔穿主脑', reward: '终局级遗物收益', cost: '热上限 -10', risk: '任何一次漏怪都可能直接崩盘' },
-    { path: '熔穿外圈 -> 高热朝圣团 -> 熔穿主脑', reward: '更多维修点和金币', cost: '精英污染更重', risk: '高热塔核会被持续封锁' },
+    { path: '熔穿外圈 -> 高热朝圣团 -> 熔穿主脑', reward: '更多维修点和金币', cost: '精英压力更重', risk: '核心建筑会持续承压' },
   ],
 }
 
@@ -129,7 +275,7 @@ const difficultyMeta: Record<
 > = {
   EASY: {
     title: '新兵试炼',
-    description: '适合建立基本塔核循环，敌潮密度与资源压力都较低。',
+    description: '适合建立基础建筑循环，敌潮密度与资源压力都较低。',
     unlockText: '默认开放',
     panelClass: 'border-slate/30 bg-gradient-to-br from-slate/16 via-card to-card',
     icon: Shield,
@@ -255,8 +401,41 @@ function parseStoredProgress(raw: string | null) {
   }
 }
 
-function getHighestUnlockedDifficulty(progress: PlayerDifficultyProgress[]) {
-  return [...progress].reverse().find((item) => item.unlocked)?.difficulty ?? 'NORMAL'
+function parseStoredStageCompletion(raw: string | null): StageCompletionState {
+  if (!raw) {
+    return initialStageCompletion
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<Record<StageId, boolean>>
+    return {
+      tutorial: Boolean(parsed.tutorial),
+      'level-1': Boolean(parsed['level-1']),
+      'level-2': Boolean(parsed['level-2']),
+      'level-3': Boolean(parsed['level-3']),
+      'level-4': Boolean(parsed['level-4']),
+      'level-5': Boolean(parsed['level-5']),
+      'level-6': Boolean(parsed['level-6']),
+      endless: Boolean(parsed.endless),
+    }
+  } catch {
+    return initialStageCompletion
+  }
+}
+
+function buildStageStates(stageCompletion: StageCompletionState): Record<StageId, StageState> {
+  return stageDefinitions.reduce((states, stage, index) => {
+    const previousStage = stageDefinitions[index - 1]
+    states[stage.id] = {
+      unlocked: index === 0 ? true : stageCompletion[previousStage.id],
+      completed: stageCompletion[stage.id],
+    }
+    return states
+  }, {} as Record<StageId, StageState>)
+}
+
+function getStageDefinition(stageId: StageId) {
+  return stageDefinitions.find((item) => item.id === stageId) ?? stageDefinitions[0]
 }
 
 function parseWaveFromLabel(label: string) {
@@ -264,7 +443,7 @@ function parseWaveFromLabel(label: string) {
   return match ? Number(match[1]) : 1
 }
 
-function buildRouteNodesForRun(difficulty: Difficulty) {
+function buildRouteNodesForRun(difficulty: Difficulty): RouteNodeState[] {
   return routeBlueprints[difficulty].map((node, index) => ({
     ...node,
     cleared: false,
@@ -286,7 +465,7 @@ function describeSimulationEvent(event: SimulationEvent) {
     case 'phase_changed':
       return {
         title: `阶段切换：${String(event.payload.to_phase ?? '未知阶段')}`,
-        detail: `Tick ${event.tick}，动作窗口已刷新。`,
+        detail: `Tick ${event.tick}，棋盘交互已刷新。`,
         tone: 'info' as const,
       }
     case 'wave_started':
@@ -351,25 +530,25 @@ function describeRunAction(action: RunActionLogEntry) {
 function buildBaseResources(difficulty: Difficulty) {
   switch (difficulty) {
     case 'EASY':
-      return { gold: 540, heat: 8, mana: 72, repair: 5, threat: 10, fortress: 100 }
+      return { gold: 12, heat: 8, mana: 10, repair: 5, threat: 10, fortress: 100 }
     case 'NORMAL':
-      return { gold: 500, heat: 12, mana: 68, repair: 4, threat: 14, fortress: 96 }
+      return { gold: 10, heat: 12, mana: 9, repair: 4, threat: 14, fortress: 96 }
     case 'HARD':
-      return { gold: 460, heat: 16, mana: 64, repair: 4, threat: 18, fortress: 92 }
+      return { gold: 9, heat: 16, mana: 8, repair: 4, threat: 18, fortress: 92 }
     case 'HELL':
-      return { gold: 430, heat: 20, mana: 60, repair: 3, threat: 24, fortress: 88 }
+      return { gold: 8, heat: 20, mana: 7, repair: 3, threat: 24, fortress: 88 }
     default:
-      return { gold: 500, heat: 12, mana: 68, repair: 4, threat: 14, fortress: 96 }
+      return { gold: 10, heat: 12, mana: 9, repair: 4, threat: 14, fortress: 96 }
   }
 }
 
-function buildScenario(difficulty: Difficulty) {
+function buildScenario(difficulty: Difficulty, stageId?: StageId): CoreRunScenario {
   const meta = difficultyMeta[difficulty]
   const resources = buildBaseResources(difficulty)
   const routeNodes = buildRouteNodesForRun(difficulty)
   const currentNode = routeNodes.find((node) => node.active)?.title ?? routeNodes[0]?.title ?? '区域开局'
 
-  return {
+  const scenario: CoreRunScenario = {
     ...mockCoreScenario,
     title: meta.scenarioName,
     difficulty,
@@ -385,12 +564,12 @@ function buildScenario(difficulty: Difficulty) {
     towers: [],
     enemies: [],
     buildQueue: [
-      { id: 'queue-start-1', label: '先补第一座塔核', eta: '本窗口', reason: '优先决定这一局的主轴构筑。' },
+      { id: 'queue-start-1', label: '先补第一座建筑', eta: '本窗口', reason: '优先决定这一局的主轴构筑。' },
       { id: 'queue-start-2', label: '保住维修点', eta: '首个战斗节点前', reason: '后续会需要维修去污和波后补堡。' },
     ],
     objectiveStack: [
-      { label: '站稳开局', detail: '先建立至少 2 座塔核，避免第一轮漏怪。', severity: 'critical' },
-      { label: '留法能', detail: '尽量保留至少 24 法能给首个波中技能。', severity: 'warning' },
+      { label: '站稳开局', detail: '先建立至少 2 座建筑，避免第一轮漏怪。', severity: 'critical' },
+      { label: '留法能', detail: '尽量保留至少 2 点法能给首个波中主动动作。', severity: 'warning' },
       { label: '看路线', detail: '商店和营地是首轮转型窗口，别过早把金币花光。', severity: 'info' },
     ],
     relics: difficulty === 'EASY' ? ['新兵战地手册'] : difficulty === 'NORMAL' ? ['冷焰刻印'] : [],
@@ -405,10 +584,77 @@ function buildScenario(difficulty: Difficulty) {
       fortress: resources.fortress,
     },
   }
+
+  if (stageId === 'tutorial') {
+    return {
+      ...scenario,
+      title: '教学关卡 / 零压演练',
+      zoneName: '教学扇区 / 零压训练场',
+      waveLabel: 'Wave 0 / 基础训练',
+      currentNode: '基础操作训练',
+      maxTicks: 1200,
+      fortressIntegrity: 100,
+      maintenanceDebt: 0,
+      routePressure: '本关会按顺序教学地图点选与就近操作卡交互。每一步都需要你亲手完成一次。',
+      routeNodes: [
+        { id: 'tutorial-1', zone: 0, index: 1, type: 'camp', title: '基础操作训练', modifier: '无失败压力，专注完成操作。', cleared: false, active: true },
+      ],
+      buildQueue: [
+        { id: 'tutorial-queue-1', label: '先选中一个格子', eta: '立即', reason: '熟悉地图交互和目标锁定。' },
+        { id: 'tutorial-queue-2', label: '再执行一次动作', eta: '立即', reason: '确认你会使用棋盘上的就近操作卡。' },
+      ],
+      objectiveStack: [
+        { label: '完成教学步骤', detail: '依次完成地图点选和两次就近操作卡交互。', severity: 'critical' },
+        { label: '观察反馈', detail: '留意右侧战报和顶部提示对你的即时反馈。', severity: 'info' },
+      ],
+      resources: {
+        ...scenario.resources,
+        gold: 14,
+        heat: 0,
+        mana: 12,
+        repair: 8,
+        threat: 0,
+        fortress: 100,
+      },
+    }
+  }
+
+  if (stageId === 'level-1') {
+    return {
+      ...scenario,
+      title: '关卡 1 / 新兵巡检线',
+      zoneName: '区域 1 / 新手防线',
+      waveLabel: 'Wave 1 / 演示入侵',
+      currentNode: '新兵巡检线',
+      maxTicks: 1600,
+      fortressIntegrity: 100,
+      maintenanceDebt: 0,
+      routePressure: '这是首个正式关卡。资源和容错被大幅放宽，目标是确保玩家稳定完成第一次通关。',
+      buildQueue: [
+        { id: 'level-1-queue-1', label: '先补两座基础建筑', eta: '开局', reason: '本关敌潮很轻，优先熟悉建造节奏。' },
+        { id: 'level-1-queue-2', label: '保留法能和维修点', eta: '波中', reason: '为第一次动作提交预留充分容错。' },
+      ],
+      objectiveStack: [
+        { label: '稳稳通关', detail: '本关通过率设定为 100%，专注体验完整流程即可。', severity: 'critical' },
+        { label: '熟悉节奏', detail: '观察波次、资源和战报如何互相影响。', severity: 'info' },
+      ],
+      resources: {
+        ...scenario.resources,
+        gold: 760,
+        heat: 0,
+        mana: 110,
+        repair: 10,
+        threat: 4,
+        fortress: 100,
+      },
+    }
+  }
+
+  return scenario
 }
 
-function buildSnapshots(difficulty: Difficulty) {
-  const scenario = buildScenario(difficulty)
+function buildSnapshots(difficulty: Difficulty, stageId?: StageId) {
+  const scenario = buildScenario(difficulty, stageId)
   return [
     {
       ...mockCoreSnapshots[0],
@@ -457,6 +703,7 @@ function createActionFromSlot(
     payload: {
       slot: readySlot.key,
       label: readySlot.label,
+      ...(readySlot.actionType === 'BUILD' && readySlot.targetId ? { core: readySlot.targetId } : {}),
     },
   }
 }
@@ -469,9 +716,12 @@ interface LocalBattleState {
 }
 
 export default function HomePage() {
-  const { agents, isUsingFallback: isAgentsFallback, error: agentsError } = useAgentsData()
+  const { agents, isUsingFallback: isAgentsFallback } = useAgentsData()
   const [progress, setProgress] = useState<PlayerDifficultyProgress[]>(initialProgress)
-  const [selectedDifficulty, setSelectedDifficulty] = useState<Difficulty>(getHighestUnlockedDifficulty(initialProgress))
+  const [stageCompletion, setStageCompletion] = useState<StageCompletionState>(initialStageCompletion)
+  const [selectedDifficulty, setSelectedDifficulty] = useState<Difficulty>('EASY')
+  const [selectedStageId, setSelectedStageId] = useState<StageId>('tutorial')
+  const [tutorialStepIndex, setTutorialStepIndex] = useState(0)
   const [hasStarted, setHasStarted] = useState(false)
   const [battleMode, setBattleMode] = useState<BattleMode>('local')
   const [localBattle, setLocalBattle] = useState<LocalBattleState | null>(null)
@@ -489,27 +739,20 @@ export default function HomePage() {
   const [isSubmittingRemote, setIsSubmittingRemote] = useState(false)
   const simulatorRef = useRef<GameSimulator | null>(null)
 
-  const difficultyProgress = useMemo(() => deriveUnlocks(progress), [progress])
-  const resolvedDifficulty = useMemo(() => {
-    const active = difficultyProgress.find((item) => item.difficulty === selectedDifficulty)
-    if (active?.unlocked) {
-      return selectedDifficulty
-    }
-
-    return getHighestUnlockedDifficulty(difficultyProgress)
-  }, [difficultyProgress, selectedDifficulty])
-  const selectedProgress = difficultyProgress.find((item) => item.difficulty === resolvedDifficulty) ?? null
+  const stageStates = useMemo(() => buildStageStates(stageCompletion), [stageCompletion])
+  const selectedStage = useMemo(() => getStageDefinition(selectedStageId), [selectedStageId])
+  const resolvedDifficulty = selectedDifficulty
   const activeAgent = useMemo(
     () => agents.find((agent) => agent.status === 'active') ?? agents[0] ?? null,
     [agents],
   )
   const battleScenario = useMemo(
-    () => buildScenario(resolvedDifficulty),
-    [resolvedDifficulty],
+    () => buildScenario(resolvedDifficulty, selectedStageId),
+    [resolvedDifficulty, selectedStageId],
   )
   const battleSnapshots = useMemo(
-    () => buildSnapshots(resolvedDifficulty),
-    [resolvedDifficulty],
+    () => buildSnapshots(resolvedDifficulty, selectedStageId),
+    [resolvedDifficulty, selectedStageId],
   )
   const {
     scenario: liveBattleScenario,
@@ -528,18 +771,24 @@ export default function HomePage() {
   const isRemoteBattle = hasStarted && battleMode === 'remote'
   const activeBattleScenario = localObservation?.scenario ?? (isRemoteBattle ? liveBattleScenario : battleScenario)
   const activeBattleSnapshots = localBattle?.snapshots ?? (isRemoteBattle ? liveBattleSnapshots : battleSnapshots)
-  const activeQuickActions = activeBattleScenario.actionWindow.quickActions
+  const selectedTowerQuickActions = selectedTowerId
+    ? activeBattleScenario.towers.find((tower) => tower.id === selectedTowerId)?.quickActions ?? []
+    : []
+  const activeQuickActions = selectedTowerQuickActions.length > 0
+    ? selectedTowerQuickActions
+    : activeBattleScenario.actionWindow.quickActions
   const effectiveSelectedActionId = activeQuickActions.some((item) => item.actionId === selectedActionId && item.availability === 'ready')
     ? selectedActionId
     : findFirstReadyActionId(activeBattleScenario)
-  const selectedQuickAction = activeQuickActions.find((item) => item.actionId === effectiveSelectedActionId) ?? null
-  const selectedDecisionOption = activeBattleScenario.actionWindow.options.find((option) => option.id === effectiveSelectedActionId) ?? null
   const localLastAction = localBattle?.summary.lastAction
   const localPhase = localObservation?.phase ?? null
   const localPhaseState = localObservation?.phase_state ?? null
-  const selectedCellKind = selectedCell ? activeBattleScenario.cells.find((cell) => cell.x === selectedCell.x && cell.y === selectedCell.y)?.kind ?? null : null
   const isRunFinished = activeBattleScenario.currentTick >= activeBattleScenario.maxTicks || activeBattleScenario.resources.fortress <= 0
-  const isRunVictory = activeBattleScenario.resources.fortress > 0 && activeBattleScenario.currentTick >= activeBattleScenario.maxTicks
+  const isTutorialRun = hasStarted && selectedStageId === 'tutorial' && battleMode === 'local'
+  const activeTutorialStep = isTutorialRun ? tutorialSteps[tutorialStepIndex] ?? null : null
+  const isRunVictory = selectedStage.guaranteedWin
+    ? isRunFinished
+    : activeBattleScenario.resources.fortress > 0 && activeBattleScenario.currentTick >= activeBattleScenario.maxTicks
   const currentTick =
     timelineState.difficulty === resolvedDifficulty && timelineState.tick !== null
       ? timelineState.tick
@@ -547,9 +796,10 @@ export default function HomePage() {
 
   useEffect(() => {
     const storedProgress = parseStoredProgress(window.localStorage.getItem(progressStorageKey))
+    const storedStageCompletion = parseStoredStageCompletion(window.localStorage.getItem(stageProgressStorageKey))
     queueMicrotask(() => {
       setProgress(storedProgress)
-      setSelectedDifficulty(getHighestUnlockedDifficulty(storedProgress))
+      setStageCompletion(storedStageCompletion)
     })
   }, [])
 
@@ -557,13 +807,47 @@ export default function HomePage() {
     window.localStorage.setItem(progressStorageKey, JSON.stringify(progress))
   }, [progress])
 
-  const handleStartGame = () => {
-    if (!selectedProgress?.unlocked) {
+  useEffect(() => {
+    window.localStorage.setItem(stageProgressStorageKey, JSON.stringify(stageCompletion))
+  }, [stageCompletion])
+
+  const completeTutorial = useCallback(() => {
+    setStageCompletion((current) => ({
+      ...current,
+      tutorial: true,
+    }))
+    setTutorialStepIndex(0)
+    simulatorRef.current = null
+    setLocalBattle(null)
+    setBattleMode('local')
+    setRemoteRunId(null)
+    setRemoteSubmitError(null)
+    setRemoteLastActionLabel(null)
+    setSelectedActionId(null)
+    setSelectedCell(null)
+    setSelectedTowerId(null)
+    setHasStarted(false)
+    setSelectedStageId('level-1')
+    setSelectedDifficulty('EASY')
+    setTimelineState({ difficulty: 'EASY', tick: null })
+    toast.success('教学完成，已解锁关卡 1', {
+      description: '现在可以直接选择 Agent play 或 Human play 进入第一关。',
+    })
+  }, [])
+
+  const handleStartGame = (stageId: StageId) => {
+    const stage = getStageDefinition(stageId)
+    const stageState = stageStates[stageId]
+
+    if (!stageState?.unlocked) {
       return
     }
 
+    setSelectedStageId(stageId)
+    setSelectedDifficulty(stage.difficulty)
+
     const simulator = createSimulator({
-      scenario: buildScenario(resolvedDifficulty),
+      scenario: buildScenario(stage.difficulty, stageId),
     })
     const observation = simulator.getObservation()
 
@@ -579,22 +863,29 @@ export default function HomePage() {
       lastActionLabel: null,
       recentEvents: [],
     })
-    setSelectedActionId(findFirstReadyActionId(observation.scenario))
-    setSelectedCell(findDefaultBuildCell(observation.scenario.cells))
+    setSelectedActionId(stageId === 'tutorial' ? null : findFirstReadyActionId(observation.scenario))
+    setSelectedCell(stageId === 'tutorial' ? null : findDefaultBuildCell(observation.scenario.cells))
     setSelectedTowerId(null)
-    setTimelineState({ difficulty: resolvedDifficulty, tick: observation.tick })
+    setTutorialStepIndex(0)
+    setTimelineState({ difficulty: stage.difficulty, tick: observation.tick })
     setHasStarted(true)
   }
 
-  const handleStartOnlineGame = useCallback(async () => {
-    if (!selectedProgress?.unlocked || !activeAgent || isAgentsFallback) {
+  const handleStartOnlineGame = useCallback(async (stageId: StageId) => {
+    const stage = getStageDefinition(stageId)
+    const stageState = stageStates[stageId]
+
+    if (!stageState?.unlocked || !activeAgent || isAgentsFallback) {
       return
     }
+
+    setSelectedStageId(stageId)
+    setSelectedDifficulty(stage.difficulty)
 
     setIsStartingOnline(true)
     const result = await enqueueRun({
       agentId: activeAgent.id,
-      difficulty: resolvedDifficulty,
+      difficulty: stage.difficulty,
     })
     setIsStartingOnline(false)
 
@@ -612,19 +903,29 @@ export default function HomePage() {
     setRemoteSubmitError(null)
     setRemoteLastActionLabel(null)
     setSelectedActionId(null)
-    setSelectedCell(findDefaultBuildCell(battleScenario.cells))
+    setSelectedCell(findDefaultBuildCell(buildScenario(stage.difficulty, stageId).cells))
     setSelectedTowerId(null)
-    setTimelineState({ difficulty: resolvedDifficulty, tick: null })
+    setTutorialStepIndex(0)
+    setTimelineState({ difficulty: stage.difficulty, tick: null })
     setHasStarted(true)
 
     toast.success('在线 Run 已创建', {
       description: `${activeAgent.name} / ${result.data.runCode}`,
     })
-  }, [activeAgent, battleScenario.cells, isAgentsFallback, resolvedDifficulty, selectedProgress?.unlocked])
+  }, [activeAgent, isAgentsFallback, stageStates])
 
   const handleAdvanceSimulation = useCallback(async (actionId = effectiveSelectedActionId) => {
+    if (isTutorialRun) {
+      if (tutorialStepIndex === 0) {
+        toast.info('先完成地图点选', {
+          description: '请先点击地图上的任意可建造格。',
+        })
+        return
+      }
+    }
+
     if (battleMode === 'remote') {
-      const selectedSlot = activeBattleScenario.actionWindow.quickActions.find((item) => item.actionId === actionId)
+      const selectedSlot = activeQuickActions.find((item) => item.actionId === actionId)
       if (!selectedSlot || !remoteRunId || selectedSlot.availability !== 'ready') {
         return
       }
@@ -649,6 +950,7 @@ export default function HomePage() {
           payload: {
             slot: selectedSlot.key,
             label: selectedSlot.label,
+            ...(selectedSlot.actionType === 'BUILD' && selectedSlot.targetId ? { core: selectedSlot.targetId } : {}),
           },
         },
       })
@@ -684,7 +986,7 @@ export default function HomePage() {
       return
     }
 
-    const selectedSlot = observation.scenario.actionWindow.quickActions.find((item) => item.actionId === actionId)
+    const selectedSlot = activeQuickActions.find((item) => item.actionId === actionId)
     const action = createActionFromSlot(selectedSlot, observation.scenario, observation.observation_version, selectedCell, selectedTowerId)
     const result = simulator.step(action)
   const actionLabel = selectedSlot?.label ?? action.action_type
@@ -709,35 +1011,31 @@ export default function HomePage() {
       setSelectedTowerId(action.target_id)
     }
     setTimelineState({ difficulty: resolvedDifficulty, tick: result.observation.tick })
-  }, [activeBattleScenario, battleMode, effectiveSelectedActionId, localBattle, remoteRunId, resolvedDifficulty, selectedCell, selectedTowerId])
 
-  useEffect(() => {
-    if (!localBattle) {
-      return
+    if (isTutorialRun && tutorialStepIndex === 1) {
+      setTutorialStepIndex(2)
+      toast.success('首次交互完成', {
+        description: '再选一次地块或建筑，并用就近操作卡完成最后一步。',
+      })
+    } else if (isTutorialRun && tutorialStepIndex === 2) {
+      queueMicrotask(() => completeTutorial())
     }
+  }, [activeBattleScenario, activeQuickActions, battleMode, completeTutorial, effectiveSelectedActionId, isTutorialRun, localBattle, remoteRunId, resolvedDifficulty, selectedCell, selectedTowerId, tutorialStepIndex])
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      const key = event.key.toUpperCase()
-      if (!['Q', 'W', 'E', 'R'].includes(key)) {
-        return
-      }
-
-      const slot = activeQuickActions.find((item) => item.key === key)
-      if (!slot || slot.availability !== 'ready') {
-        return
-      }
-
-      event.preventDefault()
-      setSelectedActionId(slot.actionId)
-      void handleAdvanceSimulation(slot.actionId)
-    }
-
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [activeQuickActions, battleMode, handleAdvanceSimulation, localBattle])
+  const handleTriggerAction = useCallback((actionId: string) => {
+    setSelectedActionId(actionId)
+    void handleAdvanceSimulation(actionId)
+  }, [handleAdvanceSimulation])
 
   const handleCompleteRun = () => {
     const currentWave = parseWaveFromLabel(activeBattleScenario.waveLabel)
+    if (isRunVictory) {
+      setStageCompletion((current) => ({
+        ...current,
+        [selectedStageId]: true,
+      }))
+    }
+
     setProgress((current) =>
       deriveUnlocks(
         current.map((item) =>
@@ -748,7 +1046,7 @@ export default function HomePage() {
                 best_score: Math.max(item.best_score, activeBattleScenario.score),
                 best_wave: Math.max(item.best_wave, currentWave),
                 attempts: item.attempts + 1,
-                clear_rate: Math.max(item.clear_rate, isRunVictory ? 0.6 : 0.2),
+                clear_rate: Math.max(item.clear_rate, selectedStage.guaranteedWin ? 1 : isRunVictory ? 0.6 : 0.2),
               }
             : item,
         ),
@@ -763,107 +1061,51 @@ export default function HomePage() {
     setSelectedActionId(null)
     setSelectedCell(null)
     setSelectedTowerId(null)
+    setTutorialStepIndex(0)
     setHasStarted(false)
     setTimelineState({ difficulty: resolvedDifficulty, tick: activeBattleScenario.currentTick })
   }
 
-  const unlockedCount = difficultyProgress.filter((item) => item.unlocked).length
-  const clearedCount = difficultyProgress.filter((item) => item.cleared).length
-  const nextUnlock = difficultyProgress.find((item) => !item.unlocked)
-
   if (!hasStarted) {
     return (
-      <MainLayout title="主战场" subtitle="先选择难度，再进入主战场开始游戏">
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-          <div className="space-y-6">
-            <section className="rounded-2xl border border-border bg-card/95 p-6 shadow-sm">
-              <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-                <div className="max-w-2xl space-y-3">
-                  <StatusBadge variant="info">战前准备</StatusBadge>
-                  <div>
-                    <h1 className="text-3xl font-semibold tracking-tight">选择作战难度后进入主战场</h1>
-                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                      主战场现在以开始游戏界面作为入口。每个难度都依赖前一难度的通关记录逐级解锁，未完成选择前不能开始本局。
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-                    <span className="rounded-full border border-border bg-muted/30 px-3 py-1">已解锁 {unlockedCount}/{difficultyOrder.length}</span>
-                    <span className="rounded-full border border-border bg-muted/30 px-3 py-1">已通关 {clearedCount}/{difficultyOrder.length}</span>
-                    <span className="rounded-full border border-border bg-muted/30 px-3 py-1">解锁规则: 仅当前一难度已通关时开放下一难度</span>
-                  </div>
-                </div>
-
-                <div className="w-full max-w-sm rounded-2xl border border-primary/20 bg-primary/8 p-4 lg:w-[320px]">
-                  <p className="text-[11px] uppercase tracking-[0.28em] text-primary">当前选择</p>
-                  {selectedProgress ? (
-                    <>
-                      <div className="mt-3 flex items-center justify-between gap-3">
-                        <DifficultyBadge difficulty={selectedProgress.difficulty} showLevel />
-                        {selectedProgress.cleared ? (
-                          <StatusBadge variant="success">已通关</StatusBadge>
-                        ) : selectedProgress.unlocked ? (
-                          <StatusBadge variant="warning">待挑战</StatusBadge>
-                        ) : (
-                          <StatusBadge variant="default">未解锁</StatusBadge>
-                        )}
-                      </div>
-                      <p className="mt-3 text-sm text-muted-foreground">{difficultyMeta[selectedProgress.difficulty].description}</p>
-                    </>
-                  ) : (
-                    <p className="mt-3 text-sm text-muted-foreground">请先选择一个难度。</p>
-                  )}
-                  <Button
-                    className="mt-4 w-full gap-2"
-                    size="lg"
-                    disabled={!selectedProgress?.unlocked}
-                    onClick={handleStartGame}
-                  >
-                    <Play className="h-4 w-4" />
-                    本地开始游戏
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="mt-3 w-full gap-2"
-                    size="lg"
-                    disabled={!selectedProgress?.unlocked || !activeAgent || isAgentsFallback || isStartingOnline}
-                    onClick={() => void handleStartOnlineGame()}
-                  >
-                    <Bot className="h-4 w-4" />
-                    {isStartingOnline ? '创建在线 Run...' : activeAgent ? `在线接管 ${activeAgent.name}` : '没有可用 Agent'}
-                  </Button>
-                  <p className="mt-3 text-xs text-muted-foreground">
-                    {isAgentsFallback
-                      ? (agentsError ?? 'Supabase Agent 列表不可用，当前只能进行本地模式。')
-                      : activeAgent
-                        ? `在线模式会为 ${activeAgent.name} 创建一个真实 Run，并在本页持续接管它。`
-                        : '当前没有可用 Agent，可先在 Agent 页面创建或激活一个。'}
-                  </p>
-                </div>
-              </div>
-            </section>
-
-            <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {difficultyProgress.map((item) => {
-                const meta = difficultyMeta[item.difficulty]
-                const Icon = meta.icon
-                const isSelected = item.difficulty === selectedDifficulty
+      <MainLayout title="开始游戏" subtitle="从教学关卡开始，选择 Agent play 或 Human play 直接进入战斗">
+        <div>
+          <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:auto-rows-fr xl:grid-cols-4">
+              {stageDefinitions.map((stage) => {
+                const status = stageStates[stage.id]
+                const Icon = stage.icon
+                const isSelected = stage.id === selectedStageId
 
                 return (
-                  <button
-                    key={item.difficulty}
-                    type="button"
+                  <div
+                    key={stage.id}
                     onClick={() => {
-                      if (!item.unlocked) {
+                      if (!status.unlocked) {
                         return
                       }
 
-                      setSelectedDifficulty(item.difficulty)
-                      setTimelineState({ difficulty: item.difficulty, tick: null })
+                      setSelectedStageId(stage.id)
+                      setSelectedDifficulty(stage.difficulty)
+                      setTimelineState({ difficulty: stage.difficulty, tick: null })
+                    }}
+                    role="button"
+                    tabIndex={status.unlocked ? 0 : -1}
+                    onKeyDown={(event) => {
+                      if (!status.unlocked) {
+                        return
+                      }
+
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        setSelectedStageId(stage.id)
+                        setSelectedDifficulty(stage.difficulty)
+                        setTimelineState({ difficulty: stage.difficulty, tick: null })
+                      }
                     }}
                     className={cn(
-                      'rounded-2xl border p-5 text-left transition-all',
-                      meta.panelClass,
-                      item.unlocked ? 'hover:-translate-y-0.5 hover:border-primary/40' : 'cursor-not-allowed opacity-60',
+                      'flex min-h-[214px] flex-col rounded-2xl border p-5 text-left transition-all xl:min-h-[calc((100vh-14rem)/2)]',
+                      stage.panelClass,
+                      status.unlocked ? 'hover:-translate-y-0.5 hover:border-primary/40' : 'cursor-not-allowed opacity-60',
                       isSelected && 'border-primary shadow-[0_0_0_1px_rgba(90,160,255,0.4)]',
                     )}
                   >
@@ -873,124 +1115,79 @@ export default function HomePage() {
                           <Icon className="h-5 w-5 text-foreground" />
                         </div>
                         <div>
-                          <DifficultyBadge difficulty={item.difficulty} showLevel />
-                          <p className="mt-2 text-sm font-medium">{meta.title}</p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <StatusBadge variant={stage.tutorial ? 'info' : 'default'}>{stage.label}</StatusBadge>
+                            {!stage.tutorial ? <DifficultyBadge difficulty={stage.difficulty} showLevel /> : null}
+                          </div>
+                          <p className="mt-2 text-sm font-medium">{stage.title}</p>
                         </div>
                       </div>
-                      {!item.unlocked ? (
+                      {!status.unlocked ? (
                         <Lock className="mt-1 h-4 w-4 text-muted-foreground" />
-                      ) : item.cleared ? (
+                      ) : status.completed ? (
                         <CheckCircle2 className="mt-1 h-4 w-4 text-acid-green" />
                       ) : (
                         <Play className="mt-1 h-4 w-4 text-primary" />
                       )}
                     </div>
 
-                    <p className="mt-4 text-sm leading-6 text-muted-foreground">{meta.description}</p>
-
-                    <div className="mt-5 grid grid-cols-2 gap-3 text-xs">
-                      <div className="rounded-xl border border-border bg-background/35 p-3">
-                        <p className="text-muted-foreground">最高波次</p>
-                        <p className="mt-1 text-lg font-semibold">{item.best_wave}</p>
-                      </div>
-                      <div className="rounded-xl border border-border bg-background/35 p-3">
-                        <p className="text-muted-foreground">最高分</p>
-                        <p className="mt-1 text-lg font-semibold">{item.best_score.toLocaleString()}</p>
-                      </div>
-                    </div>
-
-                    <div className="mt-5 flex items-center justify-between text-xs text-muted-foreground">
-                      <span>尝试 {item.attempts} 次</span>
-                      <span>通关率 {(item.clear_rate * 100).toFixed(0)}%</span>
-                    </div>
-
-                    <div className="mt-4 rounded-xl border border-dashed border-border bg-background/25 p-3 text-xs text-muted-foreground">
-                      {item.unlocked ? meta.unlockText : `未解锁: ${item.requirements.join(' / ') || meta.unlockText}`}
-                    </div>
-                  </button>
-                )
-              })}
-            </section>
-          </div>
-
-          <aside className="space-y-6">
-            <section className="rounded-2xl border border-border bg-card p-5">
-              <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10">
-                  <ShieldCheck className="h-5 w-5 text-primary" />
-                </div>
-                <div>
-                  <h2 className="font-medium">解锁进度</h2>
-                  <p className="text-sm text-muted-foreground">通关当前难度后，下一档会立即开放。</p>
-                </div>
-              </div>
-
-              <div className="mt-5 space-y-3">
-                {difficultyProgress.map((item, index) => (
-                  <div key={item.difficulty} className="flex items-center gap-3 rounded-xl border border-border bg-muted/20 px-3 py-3">
-                    <div className={cn(
-                      'flex h-9 w-9 items-center justify-center rounded-full border text-xs font-semibold',
-                      item.cleared
-                        ? 'border-acid-green/40 bg-acid-green/10 text-acid-green'
-                        : item.unlocked
-                          ? 'border-primary/40 bg-primary/10 text-primary'
-                          : 'border-border bg-background text-muted-foreground'
-                    )}>
-                      {index + 1}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <DifficultyBadge difficulty={item.difficulty} />
-                        {item.cleared ? (
-                          <StatusBadge variant="success">已完成</StatusBadge>
-                        ) : item.unlocked ? (
-                          <StatusBadge variant="info">可进入</StatusBadge>
-                        ) : (
-                          <StatusBadge variant="default">锁定</StatusBadge>
-                        )}
-                      </div>
-                      <p className="mt-1 truncate text-xs text-muted-foreground">{difficultyMeta[item.difficulty].unlockText}</p>
+                    <div className="mt-auto space-y-3 pt-4">
+                      <Button
+                        className="w-full gap-2"
+                        size="lg"
+                        disabled={!status.unlocked}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          handleStartGame(stage.id)
+                        }}
+                      >
+                        <Play className="h-4 w-4" />
+                        Human play
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="w-full gap-2"
+                        size="lg"
+                        disabled={!status.unlocked || !activeAgent || isAgentsFallback || isStartingOnline}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          void handleStartOnlineGame(stage.id)
+                        }}
+                      >
+                        <Bot className="h-4 w-4" />
+                        {isStartingOnline && selectedStageId === stage.id ? '创建在线 Run...' : 'Agent play'}
+                      </Button>
                     </div>
                   </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="rounded-2xl border border-border bg-card p-5">
-              <h2 className="font-medium">开始条件</h2>
-              <div className="mt-4 space-y-3 text-sm text-muted-foreground">
-                <div className="rounded-xl border border-border bg-muted/20 p-4">
-                  <p className="font-medium text-foreground">1. 先选难度</p>
-                  <p className="mt-1">未选择难度时，开始游戏按钮不会放行。</p>
-                </div>
-                <div className="rounded-xl border border-border bg-muted/20 p-4">
-                  <p className="font-medium text-foreground">2. 再看解锁</p>
-                  <p className="mt-1">只有已解锁难度可进入，锁定难度仅显示条件与历史目标。</p>
-                </div>
-                <div className="rounded-xl border border-border bg-muted/20 p-4">
-                  <p className="font-medium text-foreground">3. 通关后逐级开放</p>
-                  <p className="mt-1">本页会记录你的通关结果，并在下次进入时保持已解锁状态。</p>
-                </div>
-              </div>
-            </section>
-
-            <section className="rounded-2xl border border-border bg-card p-5">
-              <h2 className="font-medium">下一目标</h2>
-              <p className="mt-2 text-sm text-muted-foreground">
-                {nextUnlock
-                  ? `当前最近的未解锁难度是 ${nextUnlock.difficulty}，需要先完成上一档通关。`
-                  : '所有难度均已解锁，可以直接挑战更高压的终局配置。'}
-              </p>
-            </section>
-          </aside>
+                )
+              })}
+          </section>
         </div>
       </MainLayout>
     )
   }
 
   return (
-    <MainLayout title="主战场" subtitle={`${difficultyMeta[activeBattleScenario.difficulty].title} / ${activeBattleScenario.title}`}>
+    <MainLayout title="开始游戏" subtitle={`${selectedStage.label} / ${activeBattleScenario.title}`}>
       <div className="space-y-4">
+        {activeTutorialStep ? (
+          <div className="rounded-2xl border border-primary/30 bg-primary/10 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusBadge variant="info">教学进行中</StatusBadge>
+                  <span className="text-xs text-muted-foreground">{tutorialStepIndex + 1}/{tutorialSteps.length}</span>
+                </div>
+                <h2 className="mt-3 text-lg font-semibold">{activeTutorialStep.title}</h2>
+                <p className="mt-1 text-sm text-muted-foreground">{activeTutorialStep.detail}</p>
+              </div>
+              <div className="rounded-xl border border-primary/20 bg-background/40 px-4 py-3 text-sm text-muted-foreground">
+                完成全部教学步骤后，系统会自动解锁并选中关卡 1。
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {localBattle ? (
           <div className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-primary/8 p-4">
             <StatusBadge variant="live">本地模拟已接管</StatusBadge>
@@ -1059,19 +1256,19 @@ export default function HomePage() {
               setSelectedActionId(null)
               setSelectedCell(null)
               setSelectedTowerId(null)
+              setTutorialStepIndex(0)
               setHasStarted(false)
             }}>
               <RotateCcw className="h-4 w-4" />
-              返回准备区
+              返回关卡选择
             </Button>
             <Button
               variant="outline"
               className="gap-2"
-              onClick={() => void handleAdvanceSimulation()}
-              disabled={isRunFinished || !selectedQuickAction || selectedQuickAction.availability !== 'ready' || (battleMode === 'local' ? !localBattle : isLiveBattleFallback || !remoteRunId || isSubmittingRemote)}
+              disabled
             >
               <TimerReset className="h-4 w-4" />
-              {battleMode === 'remote' ? (isSubmittingRemote ? '正在提交在线动作...' : '提交在线动作') : '提交动作并推进'}
+              点击棋盘格子打开交互
             </Button>
             {localBattle ? (
               <Button className="gap-2" onClick={handleCompleteRun} disabled={!isRunFinished}>
@@ -1088,7 +1285,7 @@ export default function HomePage() {
             <p className="mt-2 text-sm text-muted-foreground">{activeBattleScenario.routePressure}</p>
           </div>
           <div className="rounded-2xl border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
-            当前规则版本 {activeBattleScenario.rulesVersion}。支持塔核 {activeBattleScenario.supportedTowerCores.join(' / ')}，{battleMode === 'remote' ? '在线模式会持续从 Supabase 回流当前 run 快照。' : '完成本局后会写入通关记录，并在准备界面逐级开放下一档。'}
+            当前规则版本 {activeBattleScenario.rulesVersion}。支持建筑 {activeBattleScenario.supportedTowerCores.map((type) => getBuildingLabel(type)).join(' / ')}，{battleMode === 'remote' ? '在线模式会持续从 Supabase 回流当前 run 快照。' : '完成本局后会写入通关记录，并在准备界面逐级开放下一档。'}
           </div>
         </div>
 
@@ -1098,12 +1295,29 @@ export default function HomePage() {
           enemies={activeBattleScenario.enemies}
           selectedCell={selectedCell}
           selectedTowerId={selectedTowerId}
-          enableLocalHotkeys={false}
           onCellSelect={(cell: CoreMapCell, tower) => {
             setSelectedCell({ x: cell.x, y: cell.y })
             setSelectedTowerId(tower?.id ?? null)
+
+            if (isTutorialRun && tutorialStepIndex === 0 && cell.kind === 'build') {
+              setTutorialStepIndex(1)
+              toast.success('已完成地图点选', {
+                description: '下一步请在格子旁出现的操作卡里直接执行一个动作。',
+              })
+            }
           }}
-          showIntel
+          interactionWindow={{
+            label: activeBattleScenario.actionWindow.label,
+            summary: activeBattleScenario.actionWindow.summary,
+            deadlineTick: localPhaseState?.deadline_tick ?? activeBattleScenario.currentTick,
+            quickActions: activeQuickActions,
+            options: activeBattleScenario.actionWindow.options,
+            activeActionId: effectiveSelectedActionId,
+            isBusy: battleMode === 'remote' ? isSubmittingRemote || isLiveBattleFallback || !remoteRunId : !localBattle,
+            isRunFinished,
+            onActionTrigger: handleTriggerAction,
+          }}
+          showIntel={false}
           fillViewport
           showFrame={false}
           showHeader={false}
@@ -1149,7 +1363,7 @@ export default function HomePage() {
               <p className="mt-2 text-2xl font-semibold text-foreground">#{localPhaseState?.sequence ?? '-'}</p>
             </div>
             <div className="rounded-lg border border-border bg-card px-4 py-3">
-              <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">动作窗口</p>
+              <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">当前阶段</p>
               <p className="mt-2 text-lg font-semibold text-cold-blue">{activeBattleScenario.actionWindow.label}</p>
             </div>
             <div className="rounded-lg border border-border bg-card px-4 py-3">
@@ -1202,134 +1416,6 @@ export default function HomePage() {
 
             <HardcoreResourcesPanel resources={activeBattleScenario.resources} />
 
-            <TacticalPanel title="当前动作窗口" variant="danger" statusLight="warning">
-              <div className="space-y-4 p-4">
-                {isRunFinished ? (
-                  <div className={cn(
-                    'rounded-lg border p-3',
-                    isRunVictory ? 'border-acid-green/30 bg-acid-green/10 text-acid-green' : 'border-alert-red/30 bg-alert-red/10 text-alert-red',
-                  )}>
-                    <p className="text-sm font-medium">{isRunVictory ? '本局已完成，可结算并写入进度。' : '本局已失败，可记录本次尝试后返回准备区。'}</p>
-                  </div>
-                ) : null}
-
-                <div className="rounded-lg border border-warning-orange/25 bg-warning-orange/5 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-[10px] uppercase tracking-[0.2em] text-warning-orange">{activeBattleScenario.actionWindow.label}</p>
-                      <p className="mt-2 text-sm leading-relaxed text-foreground">{activeBattleScenario.actionWindow.summary}</p>
-                    </div>
-                    <div className="rounded border border-border bg-background/60 px-2 py-1 text-right">
-                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">截止 Tick</p>
-                      <p className="font-mono text-sm text-warning-orange">{localPhaseState?.deadline_tick ?? activeBattleScenario.currentTick}</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-lg border border-border bg-card p-3 text-[11px] text-muted-foreground">
-                  当前地图选择：
-                  {selectedTowerId
-                    ? ` 已锁定塔核 ${activeBattleScenario.towers.find((tower) => tower.id === selectedTowerId)?.name ?? selectedTowerId}。`
-                    : selectedCell
-                      ? ` 地块 (${selectedCell.x}, ${selectedCell.y}) / ${selectedCellKind ?? '未知'}。`
-                      : ' 尚未选择地块或塔核。'}
-                  {selectedCellKind === 'build' ? ' 这会作为当前建造动作的落点。' : ''}
-                </div>
-
-                {activeBattleScenario.actionWindow.options.length > 0 ? (
-                  <div className="space-y-2">
-                    {activeBattleScenario.actionWindow.options.map((option) => {
-                      const slot = activeQuickActions.find((item) => item.actionId === option.id)
-                      const isSelected = selectedActionId === option.id
-                      return (
-                        <button
-                          key={option.id}
-                          type="button"
-                          disabled={option.locked}
-                          onClick={() => setSelectedActionId(option.id)}
-                          className={cn(
-                            'w-full rounded-lg border p-3 text-left transition-colors',
-                            isSelected ? 'border-primary bg-primary/10' : 'border-border bg-card hover:bg-muted/30',
-                            option.locked && 'cursor-not-allowed opacity-45',
-                          )}
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <span className="rounded border border-border bg-background px-1.5 py-0.5 text-[10px] font-semibold text-foreground">
-                                  {slot?.key ?? '-'}
-                                </span>
-                                <p className="text-sm font-medium">{option.label}</p>
-                              </div>
-                              <p className="mt-1 text-[11px] text-muted-foreground">收益：{option.payoff}</p>
-                            </div>
-                            <span className="rounded border border-border bg-muted/30 px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-                              {option.cost}
-                            </span>
-                          </div>
-                          <p className="mt-2 text-[11px] text-alert-red">风险：{option.risk}</p>
-                        </button>
-                      )
-                    })}
-                  </div>
-                ) : null}
-
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {activeQuickActions.map((slot) => (
-                    <button
-                      key={slot.actionId}
-                      type="button"
-                      disabled={slot.availability !== 'ready'}
-                      onClick={() => setSelectedActionId(slot.actionId)}
-                      className={cn(
-                        'rounded border p-3 text-left transition-colors',
-                        slot.availability === 'ready' && 'border-primary/30 bg-primary/5 hover:bg-primary/10',
-                        slot.availability === 'cooldown' && 'border-warning-orange/30 bg-warning-orange/5',
-                        slot.availability === 'locked' && 'cursor-not-allowed border-border bg-muted/20 opacity-60',
-                        effectiveSelectedActionId === slot.actionId && 'ring-1 ring-primary',
-                      )}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <span className="rounded border border-border bg-background px-1.5 py-0.5 text-[10px] font-semibold text-foreground">{slot.key}</span>
-                          <p className="text-xs font-medium text-foreground">{slot.label}</p>
-                        </div>
-                        <span className="text-[10px] text-muted-foreground">{slot.cost}</span>
-                      </div>
-                      <p className="mt-1 text-[11px] text-muted-foreground">{slot.detail}</p>
-                      <p className="mt-1 text-[10px] text-muted-foreground">
-                        {slot.reason ?? (slot.availability === 'ready' ? '可立即执行' : slot.availability === 'cooldown' ? '当前冷却中' : '当前不可用')}
-                      </p>
-                    </button>
-                  ))}
-                </div>
-
-                <Button
-                  className="w-full justify-between"
-                  disabled={isRunFinished || !selectedQuickAction || selectedQuickAction.availability !== 'ready' || (battleMode === 'remote' && (isSubmittingRemote || !remoteRunId || isLiveBattleFallback))}
-                  onClick={() => void handleAdvanceSimulation()}
-                >
-                  {selectedQuickAction ? `提交：${selectedQuickAction.label}` : '提交当前动作'}
-                  <Play className="h-4 w-4" />
-                </Button>
-
-                {battleMode === 'remote' && remoteSubmitError ? (
-                  <div className="rounded-lg border border-alert-red/30 bg-alert-red/10 p-3 text-[11px] text-alert-red">
-                    {remoteSubmitError}
-                  </div>
-                ) : null}
-
-                {selectedDecisionOption ? (
-                  <p className="text-[11px] text-muted-foreground">
-                    当前锁定决策：{selectedDecisionOption.label}。收益是“{selectedDecisionOption.payoff}”，代价是“{selectedDecisionOption.cost}”。
-                  </p>
-                ) : selectedQuickAction ? (
-                  <p className="text-[11px] text-muted-foreground">
-                    当前锁定动作：{selectedQuickAction.label}。按 Q/W/E/R 可直接提交对应槽位。
-                  </p>
-                ) : null}
-              </div>
-            </TacticalPanel>
           </div>
 
           <div className="space-y-6">

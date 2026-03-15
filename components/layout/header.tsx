@@ -1,7 +1,10 @@
 'use client'
 
+import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import { useState, useEffect } from 'react'
 import { cn } from '@/lib/utils'
+import { primaryNavigationItems } from './navigation'
 import {
   Bell,
   User,
@@ -22,9 +25,10 @@ interface HeaderProps {
   subtitle?: string
 }
 
-export function Header({ title, subtitle }: HeaderProps) {
+export function Header({}: HeaderProps) {
   const [currentTime, setCurrentTime] = useState<Date | null>(null)
   const isConnected = true
+  const pathname = usePathname()
 
   useEffect(() => {
     queueMicrotask(() => setCurrentTime(new Date()))
@@ -37,20 +41,45 @@ export function Header({ title, subtitle }: HeaderProps) {
       {/* Top accent line */}
       <div className="h-[2px] w-full bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
       
-      <div className="flex h-14 items-center justify-between px-6">
-        <div className="flex items-center gap-4">
-          {title && (
-            <div className="flex items-center gap-3">
-              <div className="hidden h-8 w-[3px] rounded-full bg-primary md:block" />
-              <div>
-                <h1 className="text-sm font-bold uppercase tracking-wider text-foreground">{title}</h1>
-                {subtitle ? (
-                  <p className="hidden text-[11px] text-muted-foreground md:block">{subtitle}</p>
-                ) : null}
-              </div>
-            </div>
-          )}
+      <div className="relative flex h-14 items-center justify-between gap-4 px-4 lg:px-6">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-dashed border-primary/40 bg-primary/8 text-[9px] font-medium uppercase tracking-[0.24em] text-primary/80">
+            Logo
+          </div>
+          <div>
+            <h1 className="text-base font-bold tracking-[0.18em] text-foreground">零域裁决</h1>
+          </div>
         </div>
+
+        <nav className="pointer-events-none absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 lg:block">
+          <div className="pointer-events-auto flex items-center gap-2 rounded-2xl border border-border/70 bg-card/55 px-2 py-1 backdrop-blur-md">
+            {primaryNavigationItems.map((item) => {
+              const Icon = item.icon
+              const isActive = pathname === item.href
+
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={cn(
+                    'flex h-10 items-center gap-2 rounded-xl border px-3 text-sm transition-colors',
+                    isActive
+                      ? 'border-primary/40 bg-primary/12 text-primary shadow-[0_0_0_1px_rgba(101,144,247,0.16)]'
+                      : 'border-transparent text-muted-foreground hover:border-primary/20 hover:bg-muted/30 hover:text-foreground',
+                  )}
+                >
+                  <span className={cn(
+                    'flex h-7 w-7 items-center justify-center rounded-lg border',
+                    isActive ? 'border-primary/30 bg-primary/10' : 'border-border/60 bg-background/50',
+                  )}>
+                    <Icon className="h-3.5 w-3.5" />
+                  </span>
+                  <span className="font-medium whitespace-nowrap">{item.label}</span>
+                </Link>
+              )
+            })}
+          </div>
+        </nav>
 
         <div className="flex items-center gap-3">
           <div className="hidden items-center gap-2 rounded border border-border bg-muted/30 px-3 py-1.5 lg:flex">

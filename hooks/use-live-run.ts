@@ -5,9 +5,8 @@ import {
   mockCoreScenario,
   mockCoreSnapshots,
   type CoreRunScenario,
-  type ReplaySnapshot,
 } from '@/lib/mock-data'
-import type { RunActionLogEntry } from '@/lib/domain'
+import type { CoreReplaySnapshot, RunActionLogEntry } from '@/lib/domain'
 import { getSupabaseBrowserClient, hasSupabasePublicEnv } from '@/lib/supabase/browser'
 import { fetchLiveRunScenario } from '@/lib/supabase/live-run'
 import { disposeChannel, subscribeToTables } from '@/lib/supabase/realtime'
@@ -15,7 +14,7 @@ import { disposeChannel, subscribeToTables } from '@/lib/supabase/realtime'
 interface LiveRunState {
   runId: string | null
   scenario: CoreRunScenario
-  snapshots: ReplaySnapshot[]
+  snapshots: CoreReplaySnapshot[]
   recentActions: RunActionLogEntry[]
   isLoading: boolean
   error: string | null
@@ -27,7 +26,7 @@ interface UseLiveRunOptions {
   runId?: string
   enabled?: boolean
   fallbackScenario?: CoreRunScenario
-  fallbackSnapshots?: ReplaySnapshot[]
+  fallbackSnapshots?: CoreReplaySnapshot[]
 }
 
 export function useLiveRun({
