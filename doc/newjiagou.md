@@ -59,3 +59,32 @@ Module 4: 赛事与数据中心 (Data Center)
 利用 Supabase 的实时订阅功能，在网页端实时滚动播报“XX 工程师的 Agent 刚刚突破了第 50 波”或“人类玩家 XX 登顶碳基榜”。
 
 对局录像 (Replays): 将整局游戏的 Action 序列以 JSON 格式存入 Supabase Storage。赛后可以在前端直接读取 JSON 进行“录像回放”，这也是供 Agent 工程师们复盘、优化模型权重的绝佳语料。
+
+当前仓库落地状态
+
+- 后端已接入 Supabase 持久化入口，配置项位于 houduan/.env.example。
+- 当前持久化表使用 PostgreSQL 表而不是 Storage，原因是现阶段回放以 JSONB 形式读写更直接，前端与 Agent 都能直接经由 REST 读取。
+- 已提供建表脚本：houduan/supabase/schema.sql。
+- 当前已落地的数据面包括：
+       - match_results：按 match + player 记录本局成绩
+       - leaderboard_entries：维护 human / agent 双轨最佳成绩
+       - match_replays：保存整局回放 JSON 与摘要字段
+
+当前已落地接口
+
+- 通用接口：
+       - GET /api/leaderboard
+       - GET /api/replays
+       - GET /api/replays/current
+       - GET /api/replays/:matchId
+- Agent 专用接口：
+       - GET /api/agent/stream
+       - GET /api/agent/replays
+       - GET /api/agent/replays/current
+       - GET /api/agent/replays/:matchId
+
+当前落库策略
+
+- 回放记录器仍保留内存实时态，保证当前对局可以立刻读。
+- 若配置了 SUPABASE_URL 与 SUPABASE_SERVICE_ROLE_KEY，则后端会每隔若干 tick 自动将回放与成绩 upsert 到 Supabase。
+- 若未配置 Supabase，排行榜与回放列表会自动回退到当前进程内存态。

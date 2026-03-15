@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
 import { io, type Socket } from 'socket.io-client'
+import { resolveGatewayToken, resolveSocketUrl } from '../lib/runtime-config'
 import type { ConnectionState, GameAction, GameState, TickEnvelope } from '../types/game-state'
 
-interface RuntimeWindow extends Window {
-  __ENV__?: Record<string, string | undefined>
+interface OptionalIdentityOverrides {
+  playerId?: string
+  playerName?: string
+  playerKind?: 'human' | 'agent'
 }
 
 interface UseGameEngineOptions {
   autoConnect?: boolean
   path?: string
   roomId?: string
-  playerId?: string
+  identity?: OptionalIdentityOverrides
+  token?: string
   query?: Record<string, string | number | boolean | undefined>
 }
 
@@ -40,29 +44,6 @@ function isGameState(value: unknown): value is GameState {
     && Array.isArray(candidate.enemies)
 }
 
-function resolveSocketUrl() {
-  if (typeof window === 'undefined') {
-    return null
-  }
-
-  const runtimeWindow = window as RuntimeWindow
-  const configuredUrl = runtimeWindow.__ENV__?.VITE_WS_URL
-    ?? runtimeWindow.__ENV__?.WS_URL
-    ?? import.meta.env.VITE_WS_URL
-
-  if (configuredUrl) {
-    return configuredUrl
-  }
-
-  if (import.meta.env.DEV) {
-    const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:'
-    return `${protocol}//${window.location.hostname}:3000`
-  }
-
-  return runtimeWindow.__ENV__?.VITE_WS_URL
-    ?? window.location.origin
-}
-
 function normalizeTickPayload(payload: unknown): GameState | null {
   if (isGameState(payload)) {
     return payload
@@ -83,6 +64,21 @@ function normalizeTickPayload(payload: unknown): GameState | null {
   return null
 }
 
+function omitReservedIdentityFields(query: Record<string, string | number | boolean | undefined> | undefined) {
+  if (!query) {
+    return {}
+  }
+
+  const {
+    playerId: _playerId,
+    playerName: _playerName,
+    playerKind: _playerKind,
+    ...safeQuery
+  } = query
+
+  return safeQuery
+}
+
 export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngineResult {
   const socketRef = useRef<Socket | null>(null)
   const [gameState, setGameState] = useState<GameState | null>(null)
@@ -92,13 +88,17 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
   const [lastActionAt, setLastActionAt] = useState<number | null>(null)
 
   const socketUrl = useMemo(() => resolveSocketUrl(), [])
+  const gatewayToken = useMemo(() => options.token ?? resolveGatewayToken(), [options.token])
   const connectionQuery = useMemo(() => {
     return {
-      ...options.query,
+      ...omitReservedIdentityFields(options.query),
+      ...(gatewayToken ? { token: gatewayToken } : {}),
       ...(options.roomId ? { roomId: options.roomId } : {}),
-      ...(options.playerId ? { playerId: options.playerId } : {}),
+      ...(options.identity?.playerId ? { playerId: options.identity.playerId } : {}),
+      ...(options.identity?.playerName ? { playerName: options.identity.playerName } : {}),
+      ...(options.identity?.playerKind ? { playerKind: options.identity.playerKind } : {}),
     }
-  }, [options.playerId, options.query, options.roomId])
+  }, [gatewayToken, options.identity, options.query, options.roomId])
 
   const handleTickUpdate = useEffectEvent((payload: unknown) => {
     const nextState = normalizeTickPayload(payload)
@@ -121,6 +121,7 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
       path: options.path,
       autoConnect: true,
       withCredentials: true,
+      auth: gatewayToken ? { token: gatewayToken } : undefined,
       query: connectionQuery,
     })
 
@@ -154,7 +155,7 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
       socket.disconnect()
       socketRef.current = null
     }
-  }, [connectionQuery, options.autoConnect, options.path, socketUrl])
+  }, [connectionQuery, gatewayToken, options.autoConnect, options.path, socketUrl])
 
   const sendAction = useCallback((action: GameAction) => {
     const socket = socketRef.current

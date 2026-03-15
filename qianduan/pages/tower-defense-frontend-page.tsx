@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react'
 import { Plug, RefreshCcw, ShieldAlert, Wifi, WifiOff } from 'lucide-react'
+import { CompetitionPanels } from '../components/competition-panels'
 import { FrontendShell } from '../components/frontend-shell'
 import { GameMap } from '../components/game-map'
 import { GameResources, ThreatCard } from '../components/game-resources'
 import { GameSidebar } from '../components/game-sidebar'
+import { useCompetitionData } from '../hooks/use-competition-data'
 import { cx } from '../lib/cx'
 import { useGameEngine } from '../hooks/use-game-engine'
 import type { GameAction, GameCell, GridPosition, TowerState } from '../types/game-state'
@@ -30,6 +32,19 @@ export function TowerDefenseFrontendPage() {
     sendAction,
     reconnect,
   } = useGameEngine()
+
+  const {
+    apiBaseUrl,
+    leaderboards,
+    replays,
+    selectedReplayId,
+    selectedReplay,
+    isLoadingOverview,
+    isLoadingReplayDetail,
+    error: competitionError,
+    selectReplay,
+    refresh: refreshCompetition,
+  } = useCompetitionData()
 
   const [selectedCell, setSelectedCell] = useState<GridPosition | null>(null)
   const [selectedTowerId, setSelectedTowerId] = useState<string | null>(null)
@@ -76,8 +91,9 @@ export function TowerDefenseFrontendPage() {
 
   return (
     <FrontendShell>
-      <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="space-y-4">
+      <div className="space-y-4">
+        <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="space-y-4">
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
             <article className="rounded-3xl border border-white/10 bg-black/20 p-4 backdrop-blur-md">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -155,19 +171,33 @@ export function TowerDefenseFrontendPage() {
               </p>
             </section>
           )}
-        </div>
+          </div>
 
-        <GameSidebar
-          gameState={gameState}
-          selectedCell={selectedCell}
-          selectedCellData={selectedCellData}
-          selectedTower={selectedTower}
-          selectedBuildType={selectedBuildType}
-          lastSentAction={lastSentAction}
-          onSelectBuildType={setSelectedBuildType}
-          onAction={handleAction}
+          <GameSidebar
+            gameState={gameState}
+            selectedCell={selectedCell}
+            selectedCellData={selectedCellData}
+            selectedTower={selectedTower}
+            selectedBuildType={selectedBuildType}
+            lastSentAction={lastSentAction}
+            onSelectBuildType={setSelectedBuildType}
+            onAction={handleAction}
+          />
+        </section>
+
+        <CompetitionPanels
+          apiBaseUrl={apiBaseUrl}
+          leaderboards={leaderboards}
+          replays={replays}
+          selectedReplayId={selectedReplayId}
+          selectedReplay={selectedReplay}
+          isLoadingOverview={isLoadingOverview}
+          isLoadingReplayDetail={isLoadingReplayDetail}
+          error={competitionError}
+          onRefresh={refreshCompetition}
+          onSelectReplay={selectReplay}
         />
-      </section>
+      </div>
     </FrontendShell>
   )
 }

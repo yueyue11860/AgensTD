@@ -5,11 +5,14 @@ import type { ServerConfig } from '../config/server-config'
 import { towerCatalog } from '../domain/tower-catalog'
 
 type TickListener = (state: GameState) => void
+type ActionListener = (action: QueuedAction) => void
 
 export class GameEngine {
   private readonly actionQueue = new ActionQueue()
 
   private readonly tickListeners = new Set<TickListener>()
+
+  private readonly actionListeners = new Set<ActionListener>()
 
   private readonly state: GameState
 
@@ -17,7 +20,7 @@ export class GameEngine {
 
   constructor(private readonly config: ServerConfig) {
     this.state = {
-      matchId: 'houduan-sandbox',
+      matchId: config.matchId,
       tick: 0,
       tickRateMs: config.tickRateMs,
       startedAt: Date.now(),
@@ -88,6 +91,11 @@ export class GameEngine {
     const actor = this.ensurePlayer(player)
     actor.lastActionAt = queuedAction.receivedAt
 
+    const actionSnapshot = structuredClone(queuedAction)
+    for (const listener of this.actionListeners) {
+      listener(actionSnapshot)
+    }
+
     this.appendLog('info', 'Action queued', {
       queueSize: this.actionQueue.size(),
       playerId: player.playerId,
@@ -99,6 +107,13 @@ export class GameEngine {
     this.tickListeners.add(listener)
     return () => {
       this.tickListeners.delete(listener)
+    }
+  }
+
+  onActionQueued(listener: ActionListener) {
+    this.actionListeners.add(listener)
+    return () => {
+      this.actionListeners.delete(listener)
     }
   }
 
