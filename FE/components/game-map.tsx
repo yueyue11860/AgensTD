@@ -4,7 +4,10 @@ import { cx } from '../lib/cx'
 import type { EnemyState, GameCell, GameState, GridPosition, TowerState } from '../types/game-state'
 
 interface GameMapProps {
-  gameState: GameState
+  tick: GameState['tick']
+  map: GameState['map']
+  towers: GameState['towers']
+  enemies: GameState['enemies']
   selectedCell: GridPosition | null
   selectedTowerId: string | null
   onCellClick: (cell: GameCell, tower: TowerState | null) => void
@@ -112,15 +115,22 @@ const GridCell = memo(function GridCell({
     && previousProps.onCellClick === nextProps.onCellClick
 })
 
-export const GameMap = memo(function GameMap({ gameState, selectedCell, selectedTowerId, onCellClick }: GameMapProps) {
+const GameMapGrid = memo(function GameMapGrid({
+  map,
+  towers,
+  enemies,
+  selectedCell,
+  selectedTowerId,
+  onCellClick,
+}: Omit<GameMapProps, 'tick'>) {
   const cellMap = useMemo(() => {
-    return new Map(gameState.map.cells.map((cell) => [`${cell.x},${cell.y}`, cell]))
-  }, [gameState.map.cells])
+    return new Map(map.cells.map((cell) => [`${cell.x},${cell.y}`, cell]))
+  }, [map.cells])
 
   const towerMap = useMemo(() => {
     const map = new Map<string, { tower: TowerState; isAnchor: boolean }>()
 
-    for (const tower of gameState.towers) {
+    for (const tower of towers) {
       for (let dx = 0; dx < tower.footprint.width; dx += 1) {
         for (let dy = 0; dy < tower.footprint.height; dy += 1) {
           map.set(`${tower.cell.x + dx},${tower.cell.y + dy}`, {
@@ -132,70 +142,84 @@ export const GameMap = memo(function GameMap({ gameState, selectedCell, selected
     }
 
     return map
-  }, [gameState.towers])
+  }, [towers])
 
   const enemyMap = useMemo(() => {
-    return new Map(gameState.enemies.map((enemy) => [`${enemy.position.x},${enemy.position.y}`, enemy]))
-  }, [gameState.enemies])
+    return new Map(enemies.map((enemy) => [`${enemy.position.x},${enemy.position.y}`, enemy]))
+  }, [enemies])
 
   const gridCoordinates = useMemo(() => {
-    return Array.from({ length: gameState.map.width * gameState.map.height }, (_, index) => ({
-      x: index % gameState.map.width,
-      y: Math.floor(index / gameState.map.width),
-      key: `${index % gameState.map.width},${Math.floor(index / gameState.map.width)}`,
+    return Array.from({ length: map.width * map.height }, (_, index) => ({
+      x: index % map.width,
+      y: Math.floor(index / map.width),
+      key: `${index % map.width},${Math.floor(index / map.width)}`,
     }))
-  }, [gameState.map.width, gameState.map.height])
+  }, [map.height, map.width])
+
+  return (
+    <div className="mt-4 overflow-auto rounded-2xl border border-white/10 bg-slate-950/60 p-3">
+      <div
+        className="grid gap-1"
+        style={{
+          gridTemplateColumns: `repeat(${map.width}, minmax(0, 1fr))`,
+          gridTemplateRows: `repeat(${map.height}, minmax(0, 1fr))`,
+          aspectRatio: `${map.width} / ${map.height}`,
+          minWidth: 'min(100%, 960px)',
+        }}
+      >
+        {gridCoordinates.map(({ x, y, key }) => {
+          const cell = cellMap.get(key) ?? { x, y, kind: 'blocked' as const }
+          const towerEntry = towerMap.get(key)
+          const tower = towerEntry?.tower ?? null
+          const enemy = enemyMap.get(key)
+          const isSelectedCell = selectedCell?.x === x && selectedCell?.y === y
+          const isSelectedTower = selectedTowerId !== null && tower?.id === selectedTowerId
+
+          return (
+            <GridCell
+              key={key}
+              x={x}
+              y={y}
+              cell={cell}
+              tower={tower}
+              isTowerAnchor={towerEntry?.isAnchor ?? false}
+              enemy={enemy ?? null}
+              isSelectedCell={isSelectedCell}
+              isSelectedTower={isSelectedTower}
+              onCellClick={onCellClick}
+            />
+          )
+        })}
+      </div>
+    </div>
+  )
+})
+
+export const GameMap = memo(function GameMap({ tick, map, towers, enemies, selectedCell, selectedTowerId, onCellClick }: GameMapProps) {
 
   return (
     <section className="rounded-3xl border border-white/10 bg-black/20 p-4 backdrop-blur-md">
       <div className="flex flex-col gap-2 border-b border-white/10 pb-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-[11px] uppercase tracking-[0.26em] text-cold-blue">战场画布</p>
-          <h2 className="mt-2 text-xl font-semibold text-white">Tick {gameState.tick.toLocaleString()}</h2>
+          <h2 className="mt-2 text-xl font-semibold text-white">Tick {tick.toLocaleString()}</h2>
           <p className="mt-1 text-sm text-slate-400">整个棋盘仅根据最近一次 tick_update 重绘，不保留任何本地战斗模拟。</p>
         </div>
         <div className="flex flex-wrap gap-2 text-xs text-slate-300">
-          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">地图 {gameState.map.width} x {gameState.map.height}</span>
-          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">塔 {gameState.towers.length}</span>
-          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">敌人 {gameState.enemies.length}</span>
+          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">地图 {map.width} x {map.height}</span>
+          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">塔 {towers.length}</span>
+          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">敌人 {enemies.length}</span>
         </div>
       </div>
 
-      <div className="mt-4 overflow-auto rounded-2xl border border-white/10 bg-slate-950/60 p-3">
-        <div
-          className="grid gap-1"
-          style={{
-            gridTemplateColumns: `repeat(${gameState.map.width}, minmax(0, 1fr))`,
-            gridTemplateRows: `repeat(${gameState.map.height}, minmax(0, 1fr))`,
-            aspectRatio: `${gameState.map.width} / ${gameState.map.height}`,
-            minWidth: 'min(100%, 960px)',
-          }}
-        >
-          {gridCoordinates.map(({ x, y, key }) => {
-            const cell = cellMap.get(key) ?? { x, y, kind: 'blocked' as const }
-            const towerEntry = towerMap.get(key)
-            const tower = towerEntry?.tower ?? null
-            const enemy = enemyMap.get(key)
-            const isSelectedCell = selectedCell?.x === x && selectedCell?.y === y
-            const isSelectedTower = selectedTowerId !== null && tower?.id === selectedTowerId
-
-            return (
-              <GridCell
-                key={key}
-                x={x}
-                y={y}
-                cell={cell}
-                tower={tower}
-                isTowerAnchor={towerEntry?.isAnchor ?? false}
-                enemy={enemy ?? null}
-                isSelectedCell={isSelectedCell}
-                isSelectedTower={isSelectedTower}
-                onCellClick={onCellClick}
-              />
-            )
-          })}
-        </div>
-      </div>
+      <GameMapGrid
+        map={map}
+        towers={towers}
+        enemies={enemies}
+        selectedCell={selectedCell}
+        selectedTowerId={selectedTowerId}
+        onCellClick={onCellClick}
+      />
 
       <div className="mt-4 grid gap-3 md:grid-cols-3">
         <article className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">

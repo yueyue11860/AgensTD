@@ -5,6 +5,8 @@ import express from 'express'
 import { createServerConfig } from './config/server-config'
 import { RoomManager } from './core/Room'
 import { GameLoop } from './core/game-loop'
+import { PerformanceTelemetry } from './core/performance-telemetry'
+import { ProjectedTickStream } from './core/projected-tick-stream'
 import { ReplayRecorder } from './core/replay-recorder'
 import { SupabaseCompetitionStore } from './data/supabase-competition-store'
 import { ActionRateLimiter } from './network/action-rate-limiter'
@@ -31,14 +33,17 @@ const httpServer = http.createServer(app)
 const roomManager = new RoomManager(config)
 const room = roomManager.getOrCreateRoom('public-1')
 const engine = room.engine
+const performanceTelemetry = new PerformanceTelemetry()
+engine.attachPerformanceTelemetry(performanceTelemetry)
 const loop = new GameLoop(engine, config.tickRateMs)
 const competitionStore = new SupabaseCompetitionStore(config)
-const replayRecorder = new ReplayRecorder(engine, config, competitionStore)
+const projectedTickStream = new ProjectedTickStream(engine, config, performanceTelemetry)
+const replayRecorder = new ReplayRecorder(engine, projectedTickStream, config, competitionStore, performanceTelemetry)
 const actionLimiter = new ActionRateLimiter(config.actionRateLimitWindowMs, config.actionRateLimitMax)
-const gateway = new SocketGateway(httpServer, room, config, actionLimiter)
+const gateway = new SocketGateway(httpServer, room, config, projectedTickStream, performanceTelemetry, actionLimiter)
 
 app.use('/api', createRestApiRouter(engine, config, actionLimiter, replayRecorder, competitionStore))
-app.use('/api/agent', createAgentApiRouter(engine, config, replayRecorder, competitionStore))
+app.use('/api/agent', createAgentApiRouter(projectedTickStream, config, replayRecorder, competitionStore, performanceTelemetry))
 
 httpServer.listen(config.port, () => {
   loop.start()

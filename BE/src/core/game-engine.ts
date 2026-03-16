@@ -5,6 +5,8 @@ import { Tower } from './entities/tower'
 import { TowerBuilder } from './tower-builder'
 import { GridMap, type GridMapCell } from './grid-map'
 import { WaveManager } from './WaveManager'
+import { performance } from 'node:perf_hooks'
+import type { PerformanceTelemetry } from './performance-telemetry'
 import type { BuildTowerAction, ClientAction, PlayerIdentity, QueuedAction, UpgradeTowerAction } from '../domain/actions'
 import type { EnemyKind, GameLogEntry, GameState, PlayerState, Position } from '../domain/game-state'
 import type { ServerConfig } from '../config/server-config'
@@ -19,6 +21,10 @@ import {
 
 type TickListener = (state: GameState) => void
 type ActionListener = (action: QueuedAction) => void
+
+interface TickListenerOptions {
+  label?: string
+}
 
 export type EngineSlotId = 'P1' | 'P2' | 'P3' | 'P4'
 
@@ -121,7 +127,7 @@ export class GameEngine {
 
   private readonly actionQueue = new ActionQueue()
 
-  private readonly tickListeners = new Set<TickListener>()
+  private readonly tickListeners = new Map<TickListener, string>()
 
   private readonly actionListeners = new Set<ActionListener>()
 
@@ -148,6 +154,8 @@ export class GameEngine {
   private overloadTicks = 0
 
   private spawnRotation = 0
+
+  private performanceTelemetry: PerformanceTelemetry | null = null
 
   constructor(config: ServerConfig, options: GameEngineOptions = {}) {
     this.config = config
@@ -317,17 +325,30 @@ export class GameEngine {
     })
   }
 
-  onTick(listener: TickListener) {
-    this.tickListeners.add(listener)
+  attachPerformanceTelemetry(performanceTelemetry: PerformanceTelemetry) {
+    this.performanceTelemetry = performanceTelemetry
+    this.performanceTelemetry.setGauge('engine.tick.listeners', this.tickListeners.size)
+    this.performanceTelemetry.setGauge('engine.action.listeners', this.actionListeners.size)
+  }
+
+  onTick(listener: TickListener, options?: TickListenerOptions) {
+    this.tickListeners.set(listener, options?.label ?? `tick-listener-${this.tickListeners.size + 1}`)
+    this.performanceTelemetry?.setGauge('engine.tick.listeners', this.tickListeners.size)
+
     return () => {
       this.tickListeners.delete(listener)
+      this.performanceTelemetry?.setGauge('engine.tick.listeners', this.tickListeners.size)
     }
   }
 
   onActionQueued(listener: ActionListener) {
     this.actionListeners.add(listener)
+
+    this.performanceTelemetry?.setGauge('engine.action.listeners', this.actionListeners.size)
+
     return () => {
       this.actionListeners.delete(listener)
+      this.performanceTelemetry?.setGauge('engine.action.listeners', this.actionListeners.size)
     }
   }
 
@@ -337,46 +358,60 @@ export class GameEngine {
   }
 
   tick() {
-    this.state.tick += 1
-    this.processQueuedActions()
+    const tickStartedAt = performance.now()
 
-    if (this.state.status === 'finished') {
+    try {
+      this.state.tick += 1
+      this.processQueuedActions()
+
+      if (this.state.status === 'finished') {
+        this.updateWaveState()
+        this.syncRuntimeState()
+        this.state.pendingActions = this.actionQueue.size()
+        this.emitTick(this.cloneStateSnapshot())
+        return
+      }
+
+      this.resolveTowerAttacks()
+      this.collectDefeatedEnemies()
+      this.updateEnemyPositions(this.config.tickRateMs / 1000)
+      this.collectDefeatedEnemies()
+      this.waveManager.update()
       this.updateWaveState()
+      this.evaluateOverloadState()
       this.syncRuntimeState()
       this.state.pendingActions = this.actionQueue.size()
 
-      const snapshot = this.cloneStateSnapshot()
-      for (const listener of this.tickListeners) {
+      if (this.state.tick % 10 === 0) {
+        this.appendLog('info', 'Tick settled', {
+          tick: this.state.tick,
+          players: this.state.players.length,
+          towers: this.towers.length,
+          enemies: this.enemies.length,
+          pendingActions: this.state.pendingActions,
+          overloadTicks: this.overloadTicks,
+          maxCapacity: this.maxCapacity,
+        })
+      }
+
+      this.emitTick(this.cloneStateSnapshot())
+    }
+    finally {
+      this.performanceTelemetry?.recordDuration('engine.tick.total', performance.now() - tickStartedAt)
+      this.performanceTelemetry?.maybeReport({ tick: this.state.tick })
+    }
+  }
+
+  private emitTick(snapshot: GameState) {
+    for (const [listener, label] of this.tickListeners.entries()) {
+      const listenerStartedAt = performance.now()
+
+      try {
         listener(snapshot)
       }
-      return
-    }
-
-    this.resolveTowerAttacks()
-    this.collectDefeatedEnemies()
-    this.updateEnemyPositions(this.config.tickRateMs / 1000)
-    this.collectDefeatedEnemies()
-    this.waveManager.update()
-    this.updateWaveState()
-    this.evaluateOverloadState()
-    this.syncRuntimeState()
-    this.state.pendingActions = this.actionQueue.size()
-
-    if (this.state.tick % 10 === 0) {
-      this.appendLog('info', 'Tick settled', {
-        tick: this.state.tick,
-        players: this.state.players.length,
-        towers: this.towers.length,
-        enemies: this.enemies.length,
-        pendingActions: this.state.pendingActions,
-        overloadTicks: this.overloadTicks,
-        maxCapacity: this.maxCapacity,
-      })
-    }
-
-    const snapshot = this.cloneStateSnapshot()
-    for (const listener of this.tickListeners) {
-      listener(snapshot)
+      finally {
+        this.performanceTelemetry?.recordDuration(`engine.listener.${label}`, performance.now() - listenerStartedAt)
+      }
     }
   }
 

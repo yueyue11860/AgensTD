@@ -1,2 +1,5 @@
 houduan/.env
 qianduan/.env
+BE/.env
+FE/.env
+.dev-runtime/

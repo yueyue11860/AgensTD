@@ -8,6 +8,9 @@ export default defineConfig({
     fs: {
       allow: ['..'],
     },
+    watch: {
+      ignored: ['**/.dev-runtime/**', '**/BE/dist/**'],
+    },
     host: '0.0.0.0',
     port: 5173,
   },

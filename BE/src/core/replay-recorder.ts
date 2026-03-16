@@ -1,6 +1,7 @@
 import type { GameEngine } from './game-engine'
 import { buildMatchResults, buildReplaySummary } from './competition-projection'
-import { projectFrontendGameState } from './state-projection'
+import type { PerformanceTelemetry } from './performance-telemetry'
+import type { ProjectedTickStream } from './projected-tick-stream'
 import type { ServerConfig } from '../config/server-config'
 import type { MatchReplay, ReplayActionRecord, ReplayFrame } from '../domain/replay'
 import type { QueuedAction } from '../domain/actions'
@@ -15,20 +16,26 @@ export class ReplayRecorder {
 
   constructor(
     engine: GameEngine,
+    projectedTickStream: ProjectedTickStream,
     private readonly config: ServerConfig,
     private readonly store: SupabaseCompetitionStore | null = null,
+    private readonly telemetry: PerformanceTelemetry | null = null,
     private readonly maxFrames: number = config.replayMaxFrames,
     private readonly maxActions: number = config.replayMaxActions,
   ) {
-    engine.onTick((state) => {
+    projectedTickStream.subscribeTick(({ state, fullState }) => {
       this.recordFrame({
         tick: state.tick,
         recordedAt: new Date().toISOString(),
-        gameState: projectFrontendGameState(state, this.config),
+        gameState: fullState,
       })
 
       if (state.tick > 0 && state.tick % this.config.persistenceFlushEveryTicks === 0) {
-        void this.flush(state).catch((error: unknown) => {
+        const flushPromise = this.telemetry
+          ? this.telemetry.measureAsync('replay.flush', async () => this.flush(state))
+          : this.flush(state)
+
+        void flushPromise.catch((error: unknown) => {
           this.logPersistenceFailure('periodic flush', error)
         })
       }
@@ -55,6 +62,11 @@ export class ReplayRecorder {
 
     const replay = this.getCurrentReplay()
     if (!replay) {
+      return
+    }
+
+    if (this.telemetry) {
+      await this.telemetry.measureAsync('replay.flushLatest', async () => this.flushReplay(replay))
       return
     }
 

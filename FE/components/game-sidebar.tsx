@@ -1,9 +1,12 @@
+import { memo } from 'react'
 import { ArrowUpRight, Cpu, Hammer, RadioTower, Send, Sparkles } from 'lucide-react'
 import { cx } from '../lib/cx'
-import type { ActionDescriptor, GameAction, GameCell, GameState, GridPosition, TowerState } from '../types/game-state'
+import type { ActionDescriptor, GameAction, GameCell, GameState, GridPosition, TowerBlueprint, TowerState } from '../types/game-state'
 
 interface GameSidebarProps {
-  gameState: GameState | null
+  buildPalette: TowerBlueprint[]
+  actionBar: GameState['actionBar']
+  notices: GameState['notices']
   selectedCell: GridPosition | null
   selectedCellData: GameCell | null
   selectedTower: TowerState | null
@@ -38,8 +41,10 @@ function ActionButton({ descriptor, onAction }: { descriptor: ActionDescriptor; 
   )
 }
 
-export function GameSidebar({
-  gameState,
+export const GameSidebar = memo(function GameSidebar({
+  buildPalette,
+  actionBar,
+  notices,
   selectedCell,
   selectedCellData,
   selectedTower,
@@ -62,7 +67,7 @@ export function GameSidebar({
         </div>
 
         <div className="mt-4 space-y-2">
-          {gameState?.buildPalette.length ? gameState.buildPalette.map((blueprint) => (
+          {buildPalette.length ? buildPalette.map((blueprint) => (
             <button
               key={blueprint.type}
               type="button"
@@ -148,20 +153,20 @@ export function GameSidebar({
         )}
       </section>
 
-      {gameState?.actionBar?.actions.length ? (
+      {actionBar?.actions.length ? (
         <section className="rounded-3xl border border-white/10 bg-black/20 p-4 backdrop-blur-md">
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-[11px] uppercase tracking-[0.26em] text-cold-blue">服务端建议动作</p>
-              <h2 className="mt-2 text-lg font-semibold text-white">{gameState.actionBar.title ?? '操作列表'}</h2>
-              {gameState.actionBar.summary ? <p className="mt-2 text-sm text-slate-400">{gameState.actionBar.summary}</p> : null}
+              <h2 className="mt-2 text-lg font-semibold text-white">{actionBar.title ?? '操作列表'}</h2>
+              {actionBar.summary ? <p className="mt-2 text-sm text-slate-400">{actionBar.summary}</p> : null}
             </div>
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-cold-blue/20 bg-cold-blue/10 text-cold-blue">
               <Sparkles className="h-5 w-5" />
             </div>
           </div>
           <div className="mt-4 space-y-2">
-            {gameState.actionBar.actions.map((descriptor) => (
+            {actionBar.actions.map((descriptor) => (
               <ActionButton key={descriptor.id} descriptor={descriptor} onAction={onAction} />
             ))}
           </div>
@@ -187,9 +192,9 @@ export function GameSidebar({
           )}
         </div>
 
-        {gameState?.notices?.length ? (
+        {notices?.length ? (
           <div className="mt-4 space-y-2">
-            {gameState.notices.map((notice) => (
+            {notices.map((notice) => (
               <div key={notice} className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-slate-300">
                 <div className="flex items-center gap-2">
                   <Cpu className="h-4 w-4 text-cold-blue" />
@@ -202,4 +207,4 @@ export function GameSidebar({
       </section>
     </aside>
   )
-}
+})

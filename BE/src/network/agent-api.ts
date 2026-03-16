@@ -1,12 +1,10 @@
 import { Router, type Request, type Response } from 'express'
 import { buildReplaySummary } from '../core/competition-projection'
-import { projectFrontendGameState, projectFrontendGameStatePatch, projectFrontendNoticeUpdate, projectFrontendUiStateUpdate } from '../core/state-projection'
-import type { GameEngine } from '../core/game-engine'
+import type { PerformanceTelemetry } from '../core/performance-telemetry'
+import type { ProjectedTickStream } from '../core/projected-tick-stream'
 import type { ReplayRecorder } from '../core/replay-recorder'
 import type { ServerConfig } from '../config/server-config'
 import type { ReplaySummary } from '../domain/competition'
-import type { FrontendGameState } from '../domain/frontend-game-state'
-import type { GameNoticeUpdate, GameStatePatch, GameUiStateUpdate } from '../../../shared/contracts/game'
 import { authenticateGatewayToken, extractHttpToken } from './gateway-auth'
 import type { SupabaseCompetitionStore } from '../data/supabase-competition-store'
 
@@ -29,12 +27,14 @@ function logCompetitionStoreFailure(operation: string, error: unknown) {
 }
 
 export function createAgentApiRouter(
-  engine: GameEngine,
+  projectedTickStream: ProjectedTickStream,
   config: ServerConfig,
   replayRecorder: ReplayRecorder,
   competitionStore: SupabaseCompetitionStore | null,
+  telemetry: PerformanceTelemetry,
 ) {
   const router = Router()
+  const sseConnections = new Set<Response>()
 
   router.get('/stream', (request, response) => {
     const principal = resolveAgentPrincipal(request, config)
@@ -50,49 +50,50 @@ export function createAgentApiRouter(
       'X-Accel-Buffering': 'no',
     })
 
-    response.write(`event: ready\n`)
-    response.write(`data: ${JSON.stringify({ ok: true, playerId: principal.playerId, playerKind: principal.playerKind })}\n\n`)
+    writeSseEvent(telemetry, 'agent.sse.ready', response, 'ready', {
+      ok: true,
+      playerId: principal.playerId,
+      playerKind: principal.playerKind,
+    })
 
-    const initialState = projectFrontendGameState(engine.getStateSnapshot(), config)
-    let lastStreamState: FrontendGameState | null = initialState
+    sseConnections.add(response)
+    telemetry.setGauge('agent.sse.connections', sseConnections.size)
 
-    response.write(`event: tick_update\n`)
-    response.write(`data: ${JSON.stringify({ mode: 'full', gameState: initialState })}\n\n`)
+    writeSseEvent(telemetry, 'agent.sse.tick_update.full', response, 'tick_update', {
+      mode: 'full',
+      gameState: projectedTickStream.getCurrentFullState(),
+    })
 
-    const unsubscribe = engine.onTick((state) => {
-      const uiUpdate = projectFrontendUiStateUpdate(state, config, lastStreamState)
-      const noticeUpdate = projectFrontendNoticeUpdate(state, lastStreamState)
-      const patch = projectFrontendGameStatePatch(state, config, lastStreamState)
-      lastStreamState = mergeFrontendNoticeUpdate(
-        mergeFrontendUiStateUpdate(
-          mergeFrontendGameStatePatch(lastStreamState, patch),
-          uiUpdate,
-        ),
-        noticeUpdate,
-      )
-
-      response.write(`event: tick_update\n`)
-      response.write(`data: ${JSON.stringify({ mode: 'patch', patch })}\n\n`)
-
-      if (Object.keys(uiUpdate).length > 0) {
-        response.write(`event: ui_state_update\n`)
-        response.write(`data: ${JSON.stringify(uiUpdate)}\n\n`)
+    const unsubscribe = projectedTickStream.subscribeBroadcast((event) => {
+      if (!event.broadcast) {
+        return
       }
 
-      if (noticeUpdate) {
-        response.write(`event: notice_update\n`)
-        response.write(`data: ${JSON.stringify(noticeUpdate)}\n\n`)
+      writeSseEvent(telemetry, 'agent.sse.tick_update.patch', response, 'tick_update', {
+        mode: 'patch',
+        patch: event.broadcast.patch,
+      })
+
+      if (Object.keys(event.broadcast.uiUpdate).length > 0) {
+        writeSseEvent(telemetry, 'agent.sse.ui_state_update', response, 'ui_state_update', event.broadcast.uiUpdate)
+      }
+
+      if (event.broadcast.noticeUpdate) {
+        writeSseEvent(telemetry, 'agent.sse.notice_update', response, 'notice_update', event.broadcast.noticeUpdate)
       }
     })
 
     const heartbeat = setInterval(() => {
-      response.write(`event: heartbeat\n`)
-      response.write(`data: ${JSON.stringify({ now: new Date().toISOString() })}\n\n`)
+      writeSseEvent(telemetry, 'agent.sse.heartbeat', response, 'heartbeat', {
+        now: new Date().toISOString(),
+      })
     }, 15000)
 
     request.on('close', () => {
       clearInterval(heartbeat)
       unsubscribe()
+      sseConnections.delete(response)
+      telemetry.setGauge('agent.sse.connections', sseConnections.size)
       response.end()
     })
   })
@@ -181,67 +182,18 @@ export function createAgentApiRouter(
   return router
 }
 
-function mergeFrontendGameStatePatch(previousState: FrontendGameState | null, patch: GameStatePatch) {
-  if (!previousState) {
-    return null
-  }
+function writeSseEvent(
+  telemetry: PerformanceTelemetry,
+  metricName: string,
+  response: Response,
+  eventName: string,
+  payload: unknown,
+) {
+  response.write(`event: ${eventName}\n`)
+  response.write(`data: ${JSON.stringify(payload)}\n\n`)
 
-  return {
-    ...previousState,
-    ...patch,
-    towers: patch.towers ?? applyEntityDelta(previousState.towers, patch.towerDelta),
-    enemies: patch.enemies ?? applyEntityDelta(previousState.enemies, patch.enemyDelta),
-    map: patch.map ?? previousState.map,
-  }
-}
-
-function mergeFrontendUiStateUpdate(previousState: FrontendGameState | null, update: GameUiStateUpdate) {
-  if (!previousState) {
-    return null
-  }
-
-  return {
-    ...previousState,
-    buildPalette: update.buildPalette ?? previousState.buildPalette,
-    actionBar: update.actionBar ?? previousState.actionBar,
-  }
-}
-
-function mergeFrontendNoticeUpdate(previousState: FrontendGameState | null, update: GameNoticeUpdate | null) {
-  if (!previousState || !update) {
-    return previousState
-  }
-
-  return {
-    ...previousState,
-    notices: update.notices,
-  }
-}
-
-function applyEntityDelta<T extends { id: string }>(currentEntities: T[], delta?: { upsert: T[]; remove: string[] }) {
-  if (!delta) {
-    return currentEntities
-  }
-
-  const removeIds = new Set(delta.remove)
-  const upsertById = new Map(delta.upsert.map((entity) => [entity.id, entity]))
-  const nextEntities: T[] = []
-
-  for (const entity of currentEntities) {
-    if (removeIds.has(entity.id)) {
-      continue
-    }
-
-    nextEntities.push(upsertById.get(entity.id) ?? entity)
-    upsertById.delete(entity.id)
-  }
-
-  for (const entity of delta.upsert) {
-    if (upsertById.has(entity.id)) {
-      nextEntities.push(entity)
-      upsertById.delete(entity.id)
-    }
-  }
-
-  return nextEntities
+  const payloadBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8')
+  telemetry.incrementCounter(`${metricName}.messages`, 1)
+  telemetry.incrementCounter(`${metricName}.bytes`, payloadBytes)
+  telemetry.setGauge(`${metricName}.lastPayloadBytes`, payloadBytes)
 }

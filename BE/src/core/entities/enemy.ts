@@ -284,8 +284,11 @@ export class Enemy {
     }
 
     let remainingDistance = this.speed * deltaTime
+    let traversedSteps = 0
+    const maxTraversedSteps = Math.max(this.currentPath.length * 2, 32)
 
-    while (remainingDistance > 0) {
+    while (remainingDistance > 0 && traversedSteps < maxTraversedSteps) {
+      traversedSteps += 1
       const targetIndex = this.getNextTargetIndex()
       if (targetIndex === null) {
         break
@@ -440,9 +443,19 @@ export class Enemy {
       }
 
       let remainingCooldownMs = trait.remainingCooldownMs - deltaMs
-      while (remainingCooldownMs <= 0) {
+
+      if (remainingCooldownMs <= 0) {
         this.activeEffects = []
-        remainingCooldownMs += trait.intervalMs
+
+        if (trait.intervalMs > 0) {
+          const normalizedCooldownMs = remainingCooldownMs % trait.intervalMs
+          remainingCooldownMs = normalizedCooldownMs === 0
+            ? trait.intervalMs
+            : normalizedCooldownMs + trait.intervalMs
+        }
+        else {
+          remainingCooldownMs = 0
+        }
       }
 
       nextTraits.push({
@@ -484,7 +497,7 @@ export class Enemy {
     }
 
     if (this.loopStartIndex !== null && this.loopStartIndex >= 0 && this.loopStartIndex < this.currentPath.length) {
-      return Math.max(0, this.currentPath.length - LOOP_REENTRY_OFFSET)
+      return this.loopStartIndex
     }
 
     return null

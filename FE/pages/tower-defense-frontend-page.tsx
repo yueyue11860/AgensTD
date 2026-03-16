@@ -69,6 +69,27 @@ export function TowerDefenseFrontendPage() {
     return gameState.map.cells.find((cell) => cell.x === selectedCell.x && cell.y === selectedCell.y) ?? null
   }, [gameState, selectedCell])
 
+  const mapState = useMemo(() => {
+    if (!gameState) {
+      return null
+    }
+
+    return {
+      tick: gameState.tick,
+      map: gameState.map,
+      towers: gameState.towers,
+      enemies: gameState.enemies,
+    }
+  }, [gameState])
+
+  const sidebarState = useMemo(() => {
+    return {
+      buildPalette: gameState?.buildPalette ?? [],
+      actionBar: gameState?.actionBar,
+      notices: gameState?.notices,
+    }
+  }, [gameState?.actionBar, gameState?.buildPalette, gameState?.notices])
+
   const handleAction = useCallback((action: GameAction) => {
     if (sendAction(action)) {
       setLastSentAction(action)
@@ -173,7 +194,10 @@ export function TowerDefenseFrontendPage() {
 
           {gameState ? (
             <GameMap
-              gameState={gameState}
+              tick={mapState?.tick ?? 0}
+              map={mapState?.map ?? gameState.map}
+              towers={mapState?.towers ?? gameState.towers}
+              enemies={mapState?.enemies ?? gameState.enemies}
               selectedCell={selectedCell}
               selectedTowerId={selectedTowerId}
               onCellClick={handleCellClick}
@@ -192,7 +216,9 @@ export function TowerDefenseFrontendPage() {
           </div>
 
           <GameSidebar
-            gameState={gameState}
+            buildPalette={sidebarState.buildPalette}
+            actionBar={sidebarState.actionBar}
+            notices={sidebarState.notices}
             selectedCell={selectedCell}
             selectedCellData={selectedCellData}
             selectedTower={selectedTower}

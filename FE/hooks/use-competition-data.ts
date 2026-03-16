@@ -28,6 +28,10 @@ const POLL_INTERVAL_MS = 15000
 const REALTIME_FALLBACK_POLL_INTERVAL_MS = 60000
 const REALTIME_REFRESH_DEBOUNCE_MS = 400
 
+function isPageVisible() {
+  return typeof document === 'undefined' || document.visibilityState !== 'hidden'
+}
+
 function createAuthHeaders(token: string | null) {
   return token
     ? { Authorization: `Bearer ${token}` }
@@ -62,6 +66,8 @@ export function useCompetitionData() {
   const [realtimeStatus, setRealtimeStatus] = useState<CompetitionRealtimeStatus>(realtimeClient ? 'connecting' : 'disabled')
   const [realtimeError, setRealtimeError] = useState<string | null>(null)
   const refreshTimerRef = useRef<number | null>(null)
+  const isRefreshingOverviewRef = useRef(false)
+  const needsOverviewRefreshRef = useRef(false)
 
   const refreshOverview = useEffectEvent(async (signal?: AbortSignal) => {
     if (!apiBaseUrl) {
@@ -69,6 +75,14 @@ export function useCompetitionData() {
       setIsLoadingOverview(false)
       return
     }
+
+    if (isRefreshingOverviewRef.current) {
+      needsOverviewRefreshRef.current = true
+      return
+    }
+
+    isRefreshingOverviewRef.current = true
+    setIsLoadingOverview(true)
 
     try {
       const [leaderboardPayload, replayPayload] = await Promise.all([
@@ -99,7 +113,13 @@ export function useCompetitionData() {
       setError(requestError instanceof Error ? requestError.message : '读取排行榜/回放失败。')
     }
     finally {
+      isRefreshingOverviewRef.current = false
       setIsLoadingOverview(false)
+
+      if (needsOverviewRefreshRef.current && isPageVisible()) {
+        needsOverviewRefreshRef.current = false
+        void refreshOverview()
+      }
     }
   })
 
@@ -131,23 +151,30 @@ export function useCompetitionData() {
   })
 
   const scheduleOverviewRefresh = useEffectEvent(() => {
+    if (!isPageVisible()) {
+      needsOverviewRefreshRef.current = true
+      return
+    }
+
     if (refreshTimerRef.current !== null) {
       window.clearTimeout(refreshTimerRef.current)
     }
 
     refreshTimerRef.current = window.setTimeout(() => {
       refreshTimerRef.current = null
-      setIsLoadingOverview(true)
       void refreshOverview()
     }, REALTIME_REFRESH_DEBOUNCE_MS)
   })
 
   useEffect(() => {
     const controller = new AbortController()
-    setIsLoadingOverview(true)
     void refreshOverview(controller.signal)
 
     const timer = window.setInterval(() => {
+      if (!isPageVisible()) {
+        return
+      }
+
       void refreshOverview()
     }, realtimeClient ? REALTIME_FALLBACK_POLL_INTERVAL_MS : POLL_INTERVAL_MS)
 
@@ -156,6 +183,26 @@ export function useCompetitionData() {
       window.clearInterval(timer)
     }
   }, [realtimeClient, refreshOverview])
+
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return
+    }
+
+    const handleVisibilityChange = () => {
+      if (!isPageVisible() || !needsOverviewRefreshRef.current) {
+        return
+      }
+
+      needsOverviewRefreshRef.current = false
+      void refreshOverview()
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [refreshOverview])
 
   useEffect(() => {
     if (!realtimeClient) {
@@ -173,6 +220,13 @@ export function useCompetitionData() {
         event: '*',
         schema: 'public',
         table: 'leaderboard_entries',
+      }, () => {
+        scheduleOverviewRefresh()
+      })
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'match_replays',
       }, () => {
         scheduleOverviewRefresh()
       })
@@ -231,7 +285,6 @@ export function useCompetitionData() {
     realtimeError,
     selectReplay: setSelectedReplayId,
     refresh: () => {
-      setIsLoadingOverview(true)
       void refreshOverview()
     },
   }

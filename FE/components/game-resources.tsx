@@ -53,6 +53,19 @@ export const GameResources = memo(function GameResources({ resources }: GameReso
       <ResourceMetric label="主堡" value={resources.fortress} max={resources.fortressMax} icon={ShieldAlert} tone="text-alert-red" note="主堡损伤完全来自服务端权威结果。" />
     </section>
   )
+}, (previousProps, nextProps) => {
+  const previous = previousProps.resources
+  const next = nextProps.resources
+
+  return previous.gold === next.gold
+    && previous.mana === next.mana
+    && previous.manaLimit === next.manaLimit
+    && previous.heat === next.heat
+    && previous.heatLimit === next.heatLimit
+    && previous.repair === next.repair
+    && previous.threat === next.threat
+    && previous.fortress === next.fortress
+    && previous.fortressMax === next.fortressMax
 })
 
 interface ThreatCardProps {

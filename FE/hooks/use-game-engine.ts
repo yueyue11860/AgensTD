@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
+import { startTransition, useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import { resolveGatewayToken, resolveSocketUrl } from '../lib/runtime-config'
 import type { ConnectionState, GameAction, GameNoticeUpdate, GameState, GameStatePatch, GameUiStateUpdate, TickEnvelope } from '../types/game-state'
@@ -131,7 +131,7 @@ function mergeGameStatePatch(previousState: GameState | null, patch: GameStatePa
 }
 
 function applyEntityDelta<T extends { id: string }>(currentEntities: T[], delta?: { upsert: T[]; remove: string[] }) {
-  if (!delta) {
+  if (!delta || (delta.upsert.length === 0 && delta.remove.length === 0)) {
     return currentEntities
   }
 
@@ -230,6 +230,9 @@ function omitReservedIdentityFields(query: Record<string, string | number | bool
 
 export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngineResult {
   const socketRef = useRef<Socket | null>(null)
+  const committedStateRef = useRef<GameState | null>(null)
+  const queuedStateRef = useRef<GameState | null>(null)
+  const frameRequestRef = useRef<number | null>(null)
   const [gameState, setGameState] = useState<GameState | null>(null)
   const [connectionState, setConnectionState] = useState<ConnectionState>(options.autoConnect === false ? 'idle' : 'connecting')
   const [error, setError] = useState<string | null>(null)
@@ -249,8 +252,52 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
     }
   }, [gatewayToken, options.identity, options.query, options.roomId])
 
+  const flushQueuedState = useEffectEvent(() => {
+    const nextState = queuedStateRef.current
+    frameRequestRef.current = null
+
+    if (!nextState) {
+      return
+    }
+
+    queuedStateRef.current = null
+    committedStateRef.current = nextState
+    startTransition(() => {
+      setGameState(nextState)
+    })
+  })
+
+  const queueStateUpdate = useEffectEvent((updater: (currentState: GameState | null) => GameState | null) => {
+    const baseState = queuedStateRef.current ?? committedStateRef.current
+    const nextState = updater(baseState)
+    if (!nextState || nextState === baseState) {
+      return
+    }
+
+    queuedStateRef.current = nextState
+
+    if (typeof window === 'undefined') {
+      queuedStateRef.current = null
+      committedStateRef.current = nextState
+      setGameState(nextState)
+      return
+    }
+
+    if (frameRequestRef.current !== null) {
+      return
+    }
+
+    frameRequestRef.current = window.requestAnimationFrame(() => {
+      flushQueuedState()
+    })
+  })
+
+  useEffect(() => {
+    committedStateRef.current = gameState
+  }, [gameState])
+
   const handleTickUpdate = useEffectEvent((payload: unknown) => {
-    setGameState((currentState) => {
+    queueStateUpdate((currentState) => {
       const nextState = normalizeTickPayload(payload, currentState)
       if (!nextState) {
         return currentState
@@ -268,7 +315,7 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
       return
     }
 
-    setGameState((currentState) => mergeGameUiStateUpdate(currentState, payload) ?? currentState)
+    queueStateUpdate((currentState) => mergeGameUiStateUpdate(currentState, payload) ?? currentState)
   })
 
   const handleNoticeUpdate = useEffectEvent((payload: unknown) => {
@@ -276,7 +323,7 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
       return
     }
 
-    setGameState((currentState) => mergeGameNoticeUpdate(currentState, payload) ?? currentState)
+    queueStateUpdate((currentState) => mergeGameNoticeUpdate(currentState, payload) ?? currentState)
   })
 
   useEffect(() => {
@@ -320,13 +367,19 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
     })
 
     return () => {
+      if (frameRequestRef.current !== null) {
+        window.cancelAnimationFrame(frameRequestRef.current)
+        frameRequestRef.current = null
+      }
+
+      queuedStateRef.current = null
       socket.off('tick_update', handleTickUpdate)
       socket.off('ui_state_update', handleUiStateUpdate)
       socket.off('notice_update', handleNoticeUpdate)
       socket.disconnect()
       socketRef.current = null
     }
-  }, [connectionQuery, gatewayToken, options.autoConnect, options.path, socketUrl])
+  }, [connectionQuery, flushQueuedState, gatewayToken, handleNoticeUpdate, handleTickUpdate, handleUiStateUpdate, options.autoConnect, options.path, queueStateUpdate, socketUrl])
 
   const sendAction = useCallback((action: GameAction) => {
     const socket = socketRef.current
