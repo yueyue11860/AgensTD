@@ -1,12 +1,12 @@
 import { ActionQueue } from './action-queue'
+import { EnemyFactory } from './enemy-factory'
 import { Enemy } from './entities/enemy'
 import { Tower } from './entities/tower'
 import { TowerBuilder } from './tower-builder'
 import { GridMap } from './grid-map'
 import type { BuildTowerAction, ClientAction, PlayerIdentity, QueuedAction, UpgradeTowerAction } from '../domain/actions'
-import type { GameLogEntry, GameState, PlayerState, Position, TowerState } from '../domain/game-state'
+import type { EnemyKind, GameLogEntry, GameState, PlayerState, Position, TowerState } from '../domain/game-state'
 import type { ServerConfig } from '../config/server-config'
-import { enemyCatalog } from '../domain/enemy-catalog'
 import type { TowerCatalogEntry } from '../domain/tower-catalog'
 import { towerCatalog } from '../domain/tower-catalog'
 import { buildWaveSpawnSchedule, buildWaveTimeline, getWaveStateForTick, type ScheduledEnemySpawn, type WaveTimelineEntry, waveCatalog } from '../domain/wave-catalog'
@@ -22,6 +22,8 @@ export class GameEngine {
   private readonly tickListeners = new Set<TickListener>()
 
   private readonly actionListeners = new Set<ActionListener>()
+
+  private readonly enemyFactory = new EnemyFactory()
 
   private readonly state: GameState
 
@@ -436,6 +438,8 @@ export class GameEngine {
     const defeatedEnemyIds = new Set(defeatedEnemies.map((enemy) => enemy.id))
     this.enemies = this.enemies.filter((enemy) => !defeatedEnemyIds.has(enemy.id))
 
+    const splitSpawnQueue: Array<{ kind: EnemyKind, count: number, position: Position, sourceEnemyId: string }> = []
+
     for (const enemy of defeatedEnemies) {
       const owner = this.findRewardOwner(enemy)
       if (owner) {
@@ -443,7 +447,32 @@ export class GameEngine {
         owner.score += enemy.rewardGold
       }
 
+      const splitRequests = enemy.collectSplitOnDeathSpawns()
+      for (const splitRequest of splitRequests) {
+        splitSpawnQueue.push({
+          kind: splitRequest.kind,
+          count: splitRequest.count,
+          position: { x: enemy.x, y: enemy.y },
+          sourceEnemyId: enemy.id,
+        })
+      }
+
       this.appendLog('info', 'Enemy defeated', { enemyId: enemy.id, rewardGold: enemy.rewardGold })
+    }
+
+    for (const splitSpawn of splitSpawnQueue) {
+      for (let index = 0; index < splitSpawn.count; index += 1) {
+        const splitEnemy = this.spawnEnemyByKind(
+          splitSpawn.kind,
+          null,
+          `split:${splitSpawn.sourceEnemyId}`,
+          splitSpawn.position,
+        )
+
+        if (!splitEnemy) {
+          break
+        }
+      }
     }
 
     this.refreshRouteValidationOrigins()
@@ -582,55 +611,57 @@ export class GameEngine {
   }
 
   private spawnEnemy(scheduledSpawn: ScheduledEnemySpawn) {
-    const enemyConfig = enemyCatalog[scheduledSpawn.kind]
-    if (!enemyConfig) {
-      this.appendLog('warn', 'Enemy spawn skipped because kind is unknown', {
-        kind: scheduledSpawn.kind,
-        waveIndex: scheduledSpawn.waveIndex,
-      })
-      return false
+    return Boolean(
+      this.spawnEnemyByKind(
+        scheduledSpawn.kind,
+        scheduledSpawn.waveIndex,
+        scheduledSpawn.waveLabel,
+        this.state.map.spawn,
+      ),
+    )
+  }
+
+  private spawnEnemyByKind(kind: EnemyKind, waveIndex: number | null, waveLabel: string, spawn: Position) {
+    const anchor = {
+      x: Math.round(spawn.x),
+      y: Math.round(spawn.y),
     }
 
-    const path = this.gridMap.findPath(this.state.map.spawn, this.state.map.base)
+    const path = this.gridMap.findPath(anchor.x, anchor.y, this.gridMap.BASE_POINT.x, this.gridMap.BASE_POINT.y)
     if (path === null) {
       this.appendLog('error', 'Enemy spawn skipped because no path exists to base', {
         tick: this.state.tick,
-        kind: scheduledSpawn.kind,
-        waveIndex: scheduledSpawn.waveIndex,
+        kind,
+        waveIndex,
       })
-      return false
+      return null
     }
 
-    const enemy = new Enemy({
-      id: `enemy-${scheduledSpawn.kind}-${this.state.tick}-${this.enemies.length + 1}`,
-      kind: enemyConfig.kind,
-      x: this.state.map.spawn.x,
-      y: this.state.map.spawn.y,
-      hp: enemyConfig.maxHp,
-      maxHp: enemyConfig.maxHp,
-      baseSpeed: enemyConfig.speed,
-      speed: enemyConfig.speed,
-      baseDefense: enemyConfig.defense,
-      defense: enemyConfig.defense,
-      rewardGold: enemyConfig.rewardGold,
-      baseDamage: enemyConfig.baseDamage,
+    const enemy = this.enemyFactory.createByCode({
+      id: `enemy-${kind}-${this.state.tick}-${this.enemies.length + 1}`,
+      code: kind,
+      spawn,
       path,
-      pathIndex: 0,
-      lastDamagedByPlayerId: null,
-      activeEffects: [],
     })
+    if (!enemy) {
+      this.appendLog('warn', 'Enemy spawn skipped because kind is unknown', {
+        kind,
+        waveIndex,
+      })
+      return null
+    }
 
-    enemy.recalculatePath(this.state.map.spawn.x, this.state.map.spawn.y, path, this.gridMap.BASE_POINT)
+    enemy.recalculatePath(spawn.x, spawn.y, path, this.gridMap.BASE_POINT)
     this.enemies.push(enemy)
     this.appendLog('info', 'Enemy spawned', {
       enemyId: enemy.id,
       kind: enemy.kind,
-      waveIndex: scheduledSpawn.waveIndex,
-      waveLabel: scheduledSpawn.waveLabel,
+      waveIndex,
+      waveLabel,
       x: enemy.x,
       y: enemy.y,
     })
-    return true
+    return enemy
   }
 
   private findRewardOwner(enemy: Enemy) {

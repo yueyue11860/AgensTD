@@ -1,4 +1,11 @@
-import type { EnemyKind, EnemyState, EnemyStatusEffectState, Position } from '../../domain/game-state'
+import type {
+  DamageType,
+  EnemyKind,
+  EnemyState,
+  EnemyStatusEffectState,
+  EnemyTraitState,
+  Position,
+} from '../../domain/game-state'
 
 const POSITION_EPSILON = 0.0001
 
@@ -10,6 +17,11 @@ function isSamePosition(left: Position, right: Position) {
   return Math.abs(left.x - right.x) <= POSITION_EPSILON && Math.abs(left.y - right.y) <= POSITION_EPSILON
 }
 
+export interface EnemyDeathSplitRequest {
+  kind: EnemyKind
+  count: number
+}
+
 export class Enemy {
   readonly id: string
 
@@ -19,7 +31,9 @@ export class Enemy {
 
   readonly baseSpeed: number
 
-  readonly baseDefense: number
+  readonly baseArmor: number
+
+  readonly maxShield: number
 
   readonly rewardGold: number
 
@@ -31,6 +45,8 @@ export class Enemy {
 
   hp: number
 
+  shield: number
+
   currentPath: Position[]
 
   pathIndex: number
@@ -39,9 +55,13 @@ export class Enemy {
 
   activeEffects: EnemyStatusEffectState[]
 
+  traits: EnemyTraitState[]
+
   private reachedBase = false
 
   private basePoint: Position | null
+
+  private deathSplitConsumed = false
 
   constructor(state: EnemyState) {
     this.id = state.id
@@ -50,14 +70,17 @@ export class Enemy {
     this.y = state.y
     this.hp = state.hp
     this.maxHp = state.maxHp
+    this.shield = state.shield ?? 0
+    this.maxShield = state.maxShield ?? 0
     this.baseSpeed = state.baseSpeed ?? state.speed
-    this.baseDefense = state.baseDefense ?? state.defense ?? 0
+    this.baseArmor = state.baseArmor ?? state.baseDefense ?? state.armor ?? state.defense ?? 0
     this.rewardGold = state.rewardGold
     this.baseDamage = state.baseDamage
     this.currentPath = state.path.map(clonePosition)
     this.pathIndex = state.pathIndex
     this.lastDamagedByPlayerId = state.lastDamagedByPlayerId
     this.activeEffects = state.activeEffects.map((effect) => ({ ...effect }))
+    this.traits = (state.traits ?? []).map((trait) => ({ ...trait }))
     this.basePoint = state.path.length > 0 ? clonePosition(state.path[state.path.length - 1]) : null
   }
 
@@ -65,19 +88,46 @@ export class Enemy {
     return this.getEffectiveSpeed()
   }
 
+  get armor() {
+    return this.getEffectiveArmor()
+  }
+
   get defense() {
-    return this.getEffectiveDefense()
+    // 兼容旧代码路径。
+    return this.armor
   }
 
   receiveDamage(amount: number, sourcePlayerId: string | null, ignoresDefense = false) {
-    const appliedDamage = ignoresDefense ? amount : Math.max(0, amount - this.defense)
-    this.hp = Math.max(0, this.hp - appliedDamage)
+    return this.takeDamage(amount, ignoresDefense ? 'true' : 'physical', sourcePlayerId, ignoresDefense)
+  }
+
+  takeDamage(amount: number, type: DamageType, sourcePlayerId: string | null = null, ignoresArmor = false) {
+    if (!this.isAlive() || amount <= 0) {
+      return 0
+    }
+
+    let remainingDamage = amount
+    let totalAppliedDamage = 0
+
+    if (this.shield > 0) {
+      const absorbedByShield = Math.min(this.shield, remainingDamage)
+      this.shield -= absorbedByShield
+      remainingDamage -= absorbedByShield
+      totalAppliedDamage += absorbedByShield
+    }
+
+    if (remainingDamage > 0) {
+      const bypassArmor = ignoresArmor || type === 'true'
+      const hpDamage = bypassArmor ? remainingDamage : Math.max(1, remainingDamage - this.armor)
+      this.hp = Math.max(0, this.hp - hpDamage)
+      totalAppliedDamage += hpDamage
+    }
 
     if (sourcePlayerId) {
       this.lastDamagedByPlayerId = sourcePlayerId
     }
 
-    return appliedDamage
+    return totalAppliedDamage
   }
 
   addEffect(effect: EnemyStatusEffectState) {
@@ -104,11 +154,17 @@ export class Enemy {
   }
 
   updateEffects(deltaTime: number) {
-    if (deltaTime <= 0 || this.activeEffects.length === 0 || !this.isAlive()) {
+    if (deltaTime <= 0 || !this.isAlive()) {
       return
     }
 
     const deltaMs = deltaTime * 1000
+    this.updateTraits(deltaMs)
+
+    if (this.activeEffects.length === 0) {
+      return
+    }
+
     const nextEffects: EnemyStatusEffectState[] = []
 
     for (const effect of this.activeEffects) {
@@ -251,9 +307,13 @@ export class Enemy {
       y: this.y,
       hp: this.hp,
       maxHp: this.maxHp,
+      shield: this.shield,
+      maxShield: this.maxShield,
       baseSpeed: this.baseSpeed,
       speed: this.speed,
-      baseDefense: this.baseDefense,
+      baseArmor: this.baseArmor,
+      armor: this.armor,
+      baseDefense: this.baseArmor,
       defense: this.defense,
       rewardGold: this.rewardGold,
       baseDamage: this.baseDamage,
@@ -261,7 +321,31 @@ export class Enemy {
       pathIndex: this.pathIndex,
       lastDamagedByPlayerId: this.lastDamagedByPlayerId,
       activeEffects: this.activeEffects.map((effect) => ({ ...effect })),
+      traits: this.traits.map((trait) => ({ ...trait })),
     }
+  }
+
+  collectSplitOnDeathSpawns(): EnemyDeathSplitRequest[] {
+    if (this.isAlive() || this.deathSplitConsumed) {
+      return []
+    }
+
+    const splitRequests: EnemyDeathSplitRequest[] = []
+    for (const trait of this.traits) {
+      if (trait.kind !== 'split-on-death') {
+        continue
+      }
+
+      if (trait.spawnCount > 0) {
+        splitRequests.push({
+          kind: trait.spawnKind,
+          count: trait.spawnCount,
+        })
+      }
+    }
+
+    this.deathSplitConsumed = true
+    return splitRequests
   }
 
   private getEffectiveSpeed() {
@@ -278,14 +362,41 @@ export class Enemy {
     return Math.max(0, this.baseSpeed * multiplier)
   }
 
-  private getEffectiveDefense() {
+  private getEffectiveArmor() {
     let modifier = 0
 
     for (const effect of this.activeEffects) {
       modifier += effect.defenseModifier ?? 0
     }
 
-    return Math.max(0, this.baseDefense + modifier)
+    return Math.max(0, this.baseArmor + modifier)
+  }
+
+  private updateTraits(deltaMs: number) {
+    if (this.traits.length === 0 || deltaMs <= 0) {
+      return
+    }
+
+    const nextTraits: EnemyTraitState[] = []
+    for (const trait of this.traits) {
+      if (trait.kind !== 'cleanse') {
+        nextTraits.push(trait)
+        continue
+      }
+
+      let remainingCooldownMs = trait.remainingCooldownMs - deltaMs
+      while (remainingCooldownMs <= 0) {
+        this.activeEffects = []
+        remainingCooldownMs += trait.intervalMs
+      }
+
+      nextTraits.push({
+        ...trait,
+        remainingCooldownMs,
+      })
+    }
+
+    this.traits = nextTraits
   }
 
   private mergeDuration(currentDurationMs: number | null, nextDurationMs: number | null) {

@@ -60,7 +60,7 @@ class SingleTargetTowerBehavior implements TowerRuntimeBehavior {
       return report
     }
 
-    const appliedDamage = target.receiveDamage(tower.damage, tower.ownerId)
+    const appliedDamage = target.takeDamage(tower.damage, 'physical', tower.ownerId)
     tower.applyAttackEffects(target)
     tower.completeAttackCycle(target.id)
     report.attacks.push({
@@ -90,7 +90,7 @@ class AoeTowerBehavior implements TowerRuntimeBehavior {
 
     report.attacks.push({
       enemyId: primaryTarget.id,
-      damage: primaryTarget.receiveDamage(tower.damage, tower.ownerId),
+      damage: primaryTarget.takeDamage(tower.damage, 'physical', tower.ownerId),
       mode: 'aoe-primary',
     })
     tower.applyAttackEffects(primaryTarget)
@@ -102,7 +102,7 @@ class AoeTowerBehavior implements TowerRuntimeBehavior {
 
       report.attacks.push({
         enemyId: enemy.id,
-        damage: enemy.receiveDamage(tower.damage * this.splashDamageRatio, tower.ownerId),
+        damage: enemy.takeDamage(tower.damage * this.splashDamageRatio, 'physical', tower.ownerId),
         mode: 'aoe-splash',
       })
       tower.applyAttackEffects(enemy)
@@ -142,7 +142,7 @@ class BeamTowerBehavior implements TowerRuntimeBehavior {
 
     report.attacks.push({
       enemyId: target.id,
-      damage: target.receiveDamage(tower.damage * (1 + lockBonus), tower.ownerId),
+      damage: target.takeDamage(tower.damage * (1 + lockBonus), 'physical', tower.ownerId),
       mode: 'beam',
     })
     tower.applyAttackEffects(target)

@@ -3,9 +3,26 @@ import type { TowerBehaviorDefinition, TowerBehaviorKind, TowerFireRate } from '
 export type PlayerKind = 'human' | 'agent'
 export type ConnectionStatus = 'connected' | 'disconnected'
 export type LogLevel = 'info' | 'warn' | 'error'
-export type EnemyKind = 'runner' | 'swift' | 'brute'
+export type EnemyKind =
+  | 'runner'
+  | 'swift'
+  | 'brute'
+  | 'Grunt'
+  | 'Speedster'
+  | 'Tank'
+  | 'Shielded'
+  | 'Cleanser'
+  | 'Lord-01'
+  | 'Grunt-Armored'
+  | 'Tank-Fortress'
+  | 'Lord-02'
+  | 'Swarm-Drone'
+  | 'Swarm-Runner'
+  | 'Cleanser-Pro'
+  | 'Lord-03'
 export type TowerTargetingStrategy = 'nearest' | 'first' | 'strongest'
 export type StatusEffectKind = 'slow' | 'armor-break' | 'burn'
+export type DamageType = 'physical' | 'magic' | 'true'
 
 export interface Position {
   x: number
@@ -49,6 +66,20 @@ export interface EnemyStatusEffectState extends EnemyStatusEffectTemplate {
   sourcePlayerId: string | null
 }
 
+export interface EnemyCleanseTraitState {
+  kind: 'cleanse'
+  intervalMs: number
+  remainingCooldownMs: number
+}
+
+export interface EnemySplitOnDeathTraitState {
+  kind: 'split-on-death'
+  spawnKind: EnemyKind
+  spawnCount: number
+}
+
+export type EnemyTraitState = EnemyCleanseTraitState | EnemySplitOnDeathTraitState
+
 export interface PlayerState {
   id: string
   name: string
@@ -64,9 +95,15 @@ export interface EnemyState extends Position {
   kind: EnemyKind
   hp: number
   maxHp: number
+  shield: number
+  maxShield: number
   baseSpeed: number
   speed: number
+  baseArmor: number
+  armor: number
+  // 兼容旧字段，值与 armor 保持一致。
   baseDefense: number
+  // 兼容旧字段，值与 armor 保持一致。
   defense: number
   rewardGold: number
   baseDamage: number
@@ -74,6 +111,7 @@ export interface EnemyState extends Position {
   pathIndex: number
   lastDamagedByPlayerId: string | null
   activeEffects: EnemyStatusEffectState[]
+  traits: EnemyTraitState[]
 }
 
 export interface TowerState extends Position {
