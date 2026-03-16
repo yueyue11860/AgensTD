@@ -1,6 +1,6 @@
-import type { BuildTowerAction, GameAction, PlayerIdentity } from '../../../shared/contracts/game'
+import type { BuildTowerAction, GameAction, PlayerIdentity, UpgradeTowerAction } from '../../../shared/contracts/game'
 
-export type { BuildTowerAction, PlayerIdentity } from '../../../shared/contracts/game'
+export type { BuildTowerAction, PlayerIdentity, UpgradeTowerAction } from '../../../shared/contracts/game'
 
 export type ClientAction = GameAction
 

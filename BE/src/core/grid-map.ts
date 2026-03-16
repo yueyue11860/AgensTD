@@ -203,20 +203,24 @@ export class GridMap {
     return this.grid[y][x] === 0
   }
 
-  occupy(x: number, y: number) {
-    if (!this.isInside(x, y) || this.isSpecialPoint(x, y)) {
-      return
-    }
+  occupy(x: number, y: number, width = 1, height = 1) {
+    for (const position of this.getFootprintPositions(x, y, width, height)) {
+      if (!this.isInside(position.x, position.y) || this.isSpecialPoint(position.x, position.y)) {
+        continue
+      }
 
-    this.grid[y][x] = 1
+      this.grid[position.y][position.x] = 1
+    }
   }
 
-  release(x: number, y: number) {
-    if (!this.isInside(x, y) || this.isSpecialPoint(x, y)) {
-      return
-    }
+  release(x: number, y: number, width = 1, height = 1) {
+    for (const position of this.getFootprintPositions(x, y, width, height)) {
+      if (!this.isInside(position.x, position.y) || this.isSpecialPoint(position.x, position.y)) {
+        continue
+      }
 
-    this.grid[y][x] = 0
+      this.grid[position.y][position.x] = 0
+    }
   }
 
   toCells() {
@@ -231,30 +235,32 @@ export class GridMap {
     return cells
   }
 
-  canBuildTower(x: number, y: number) {
-    // 先做最便宜的非法性判断，避免无意义地触发寻路。
-    if (!this.isInside(x, y) || this.isSpecialPoint(x, y) || this.grid[y][x] === 1) {
+  canBuildTower(x: number, y: number, width = 1, height = 1) {
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
       return false
     }
 
-    const originalValue = this.grid[y][x]
-    this.grid[y][x] = 1
+    const footprint = this.getFootprintPositions(x, y, width, height)
 
-    try {
-      // 严格的“死胡同拦截”逻辑：
-      // 先虚拟落塔，再立即做连通性测试，只要任意关键起点无法到达基地，就拒绝建塔。
-      for (const origin of this.getValidationOrigins()) {
-        const path = this.findPathInternal(origin.x, origin.y, this.BASE_POINT.x, this.BASE_POINT.y)
-        if (path === null) {
-          return false
-        }
+    // 先做最便宜的非法性判断，避免无意义地触发寻路。
+    for (const position of footprint) {
+      if (!this.isInside(position.x, position.y) || this.isSpecialPoint(position.x, position.y) || this.grid[position.y][position.x] === 1) {
+        return false
       }
-
-      return true
-    } finally {
-      // 无论校验成功还是失败，都必须立即回滚网格状态。
-      this.grid[y][x] = originalValue
     }
+
+    const blockedKeys = new Set(footprint.map((position) => toKey(position.x, position.y)))
+
+    // 严格的“死胡同拦截”逻辑：
+    // 先虚拟落塔，再立即做连通性测试，只要任意关键起点无法到达基地，就拒绝建塔。
+    for (const origin of this.getValidationOrigins()) {
+      const path = this.findPathInternal(origin.x, origin.y, this.BASE_POINT.x, this.BASE_POINT.y, blockedKeys)
+      if (path === null) {
+        return false
+      }
+    }
+
+    return true
   }
 
   findPath(startX: number, startY: number, endX: number, endY: number): Position[] | null
@@ -438,5 +444,20 @@ export class GridMap {
   private isSpecialPoint(x: number, y: number) {
     return (x === this.SPAWN_POINT.x && y === this.SPAWN_POINT.y)
       || (x === this.BASE_POINT.x && y === this.BASE_POINT.y)
+  }
+
+  private getFootprintPositions(x: number, y: number, width: number, height: number) {
+    const positions: Position[] = []
+
+    for (let offsetY = 0; offsetY < height; offsetY += 1) {
+      for (let offsetX = 0; offsetX < width; offsetX += 1) {
+        positions.push({
+          x: x + offsetX,
+          y: y + offsetY,
+        })
+      }
+    }
+
+    return positions
   }
 }

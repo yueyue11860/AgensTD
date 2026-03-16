@@ -1,11 +1,13 @@
 import { ActionQueue } from './action-queue'
 import { Enemy } from './entities/enemy'
 import { Tower } from './entities/tower'
+import { TowerBuilder } from './tower-builder'
 import { GridMap } from './grid-map'
-import type { BuildTowerAction, ClientAction, PlayerIdentity, QueuedAction } from '../domain/actions'
+import type { BuildTowerAction, ClientAction, PlayerIdentity, QueuedAction, UpgradeTowerAction } from '../domain/actions'
 import type { GameLogEntry, GameState, PlayerState, Position, TowerState } from '../domain/game-state'
 import type { ServerConfig } from '../config/server-config'
 import { enemyCatalog } from '../domain/enemy-catalog'
+import type { TowerCatalogEntry } from '../domain/tower-catalog'
 import { towerCatalog } from '../domain/tower-catalog'
 import { buildWaveSpawnSchedule, buildWaveTimeline, getWaveStateForTick, type ScheduledEnemySpawn, type WaveTimelineEntry, waveCatalog } from '../domain/wave-catalog'
 
@@ -175,6 +177,7 @@ export class GameEngine {
     this.resolveTowerAttacks()
     this.collectDefeatedEnemies()
     const reachedBaseEnemyIds = this.updateEnemyPositions(this.config.tickRateMs / 1000)
+    this.collectDefeatedEnemies()
     this.resolveEnemiesAtBase(reachedBaseEnemyIds)
     this.spawnEnemiesForCurrentTick()
     this.updateWaveState()
@@ -213,10 +216,7 @@ export class GameEngine {
         this.handleBuildTower(queuedAction as QueuedAction & { action: BuildTowerAction })
         return
       case 'UPGRADE_TOWER':
-        this.appendLog('info', 'Upgrade action acknowledged but not implemented yet', {
-          playerId: queuedAction.player.playerId,
-          towerId: queuedAction.action.towerId,
-        })
+        this.handleUpgradeTower(queuedAction as QueuedAction & { action: UpgradeTowerAction })
         return
       case 'SELL_TOWER':
         this.appendLog('info', 'Sell action acknowledged but not implemented yet', {
@@ -230,20 +230,20 @@ export class GameEngine {
   private handleBuildTower(queuedAction: QueuedAction & { action: BuildTowerAction }) {
     const player = this.ensurePlayer(queuedAction.player)
     const { x, y, type } = queuedAction.action
-    const stats = towerCatalog[type]
+    const stats = TowerBuilder.getConfigBySelection(type)
 
     if (!stats) {
       this.appendLog('warn', 'Unknown tower type rejected', { playerId: player.id, type })
       return
     }
 
-    if (!this.isValidBuildCoordinate(x, y)) {
+    if (!this.isValidBuildPlacement(x, y, stats.width, stats.height)) {
       this.appendLog('warn', 'Build rejected because coordinates are invalid', { playerId: player.id, x, y })
       return
     }
 
     this.refreshRouteValidationOrigins()
-    if (!this.gridMap.canBuildTower(x, y)) {
+    if (!this.gridMap.canBuildTower(x, y, stats.width, stats.height)) {
       this.appendLog('warn', 'Build rejected because tower would block the route to base', {
         playerId: player.id,
         x,
@@ -263,24 +263,96 @@ export class GameEngine {
 
     player.gold -= stats.cost
 
-    const tower: TowerState = {
-      id: `tower-${this.state.tick}-${this.towers.length + 1}`,
+    const builtTower = TowerBuilder.createFromSelection(type, {
       ownerId: player.id,
-      type,
       x,
       y,
-      damage: stats.damage,
-      range: stats.range,
-      fireRateTicks: stats.fireRateTicks,
-      cooldownTicks: 0,
-      targetingStrategy: stats.targetingStrategy,
+      tick: this.state.tick,
+      sequence: this.towers.length + 1,
+    })
+    if (!builtTower) {
+      this.appendLog('warn', 'Tower builder failed to create tower', { playerId: player.id, type })
+      player.gold += stats.cost
+      return
     }
 
-    this.towers.push(new Tower(tower))
-    this.gridMap.occupy(x, y)
+    this.towers.push(builtTower.tower)
+    this.gridMap.occupy(x, y, stats.width, stats.height)
     this.syncMapCells()
     this.shouldRecalculateEnemyPaths = true
-    this.appendLog('info', 'Tower built', { playerId: player.id, towerId: tower.id, type, x, y })
+    this.appendLog('info', 'Tower built', { playerId: player.id, towerId: builtTower.state.id, type, x, y })
+  }
+
+  private handleUpgradeTower(queuedAction: QueuedAction & { action: UpgradeTowerAction }) {
+    const player = this.ensurePlayer(queuedAction.player)
+    const towerIndex = this.towers.findIndex((tower) => tower.id === queuedAction.action.towerId)
+
+    if (towerIndex < 0) {
+      this.appendLog('warn', 'Upgrade rejected because tower does not exist', {
+        playerId: player.id,
+        towerId: queuedAction.action.towerId,
+      })
+      return
+    }
+
+    const currentTower = this.towers[towerIndex]
+    if (currentTower.ownerId !== player.id) {
+      this.appendLog('warn', 'Upgrade rejected because tower owner does not match player', {
+        playerId: player.id,
+        towerId: currentTower.id,
+        ownerId: currentTower.ownerId,
+      })
+      return
+    }
+
+    const currentConfig = TowerBuilder.getConfigBySelection(currentTower.type)
+    const nextConfig = TowerBuilder.getNextConfigBySelection(currentTower.type)
+    if (!currentConfig || !nextConfig) {
+      this.appendLog('warn', 'Upgrade rejected because tower is already at max level', {
+        playerId: player.id,
+        towerId: currentTower.id,
+        type: currentTower.type,
+      })
+      return
+    }
+
+    if (player.gold < nextConfig.cost) {
+      this.appendLog('warn', 'Upgrade rejected because player has insufficient gold', {
+        playerId: player.id,
+        towerId: currentTower.id,
+        gold: player.gold,
+        requiredGold: nextConfig.cost,
+      })
+      return
+    }
+
+    if (!this.canUpgradeTowerFootprint(currentTower, nextConfig)) {
+      this.appendLog('warn', 'Upgrade rejected because upgraded footprint would block placement or pathing', {
+        playerId: player.id,
+        towerId: currentTower.id,
+        type: nextConfig.type,
+      })
+      return
+    }
+
+    player.gold -= nextConfig.cost
+    const upgradedTower = TowerBuilder.upgradeTower(currentTower, nextConfig)
+    this.towers[towerIndex] = upgradedTower.tower
+
+    if (currentTower.width !== nextConfig.width || currentTower.height !== nextConfig.height) {
+      this.gridMap.release(currentTower.x, currentTower.y, currentTower.width, currentTower.height)
+      this.gridMap.occupy(currentTower.x, currentTower.y, nextConfig.width, nextConfig.height)
+      this.syncMapCells()
+      this.shouldRecalculateEnemyPaths = true
+    }
+
+    this.appendLog('info', 'Tower upgraded', {
+      playerId: player.id,
+      towerId: currentTower.id,
+      fromType: currentConfig.type,
+      toType: nextConfig.type,
+      cost: nextConfig.cost,
+    })
   }
 
   private spawnEnemiesForCurrentTick() {
@@ -305,12 +377,53 @@ export class GameEngine {
 
   private resolveTowerAttacks() {
     for (const tower of this.towers) {
-      const target = tower.fire(this.enemies)
-      if (!target) {
+      tower.beginTick()
+    }
+
+    this.runTowerPhase('support')
+    this.runTowerPhase('action')
+  }
+
+  private runTowerPhase(phase: 'support' | 'action') {
+    for (const tower of this.towers) {
+      if (tower.getPhase() !== phase) {
         continue
       }
 
-      this.appendLog('info', 'Tower fired', { towerId: tower.id, enemyId: target.id, damage: tower.damage })
+      const report = tower.tick({
+        enemies: this.enemies,
+        towers: this.towers,
+        tickRateMs: this.config.tickRateMs,
+      })
+
+      for (const attack of report.attacks) {
+        this.appendLog('info', 'Tower applied attack effect', {
+          towerId: tower.id,
+          enemyId: attack.enemyId,
+          damage: attack.damage,
+          mode: attack.mode,
+        })
+      }
+
+      if (report.buffedTowerIds.length > 0) {
+        this.appendLog('info', 'Tower applied support aura', {
+          towerId: tower.id,
+          buffedTowerIds: report.buffedTowerIds,
+        })
+      }
+
+      if (report.grantedGold > 0) {
+        const owner = this.state.players.find((player) => player.id === tower.ownerId)
+        if (owner) {
+          owner.gold += report.grantedGold
+        }
+
+        this.appendLog('info', 'Tower generated gold', {
+          towerId: tower.id,
+          ownerId: tower.ownerId,
+          goldGranted: report.grantedGold,
+        })
+      }
     }
   }
 
@@ -340,6 +453,11 @@ export class GameEngine {
     const reachedBaseEnemyIds = new Set<string>()
 
     for (const enemy of this.enemies) {
+      enemy.updateEffects(deltaTime)
+      if (!enemy.isAlive()) {
+        continue
+      }
+
       enemy.move(deltaTime, (reachedEnemy) => {
         reachedBaseEnemyIds.add(reachedEnemy.id)
       })
@@ -385,9 +503,33 @@ export class GameEngine {
     return player
   }
 
-  private isValidBuildCoordinate(x: number, y: number) {
-    const cell = this.gridMap.getCell(x, y)
-    return cell !== null && cell.buildable && cell.walkable
+  private isValidBuildPlacement(x: number, y: number, width: number, height: number) {
+    for (let offsetY = 0; offsetY < height; offsetY += 1) {
+      for (let offsetX = 0; offsetX < width; offsetX += 1) {
+        const cell = this.gridMap.getCell(x + offsetX, y + offsetY)
+        if (cell === null || !cell.buildable || !cell.walkable) {
+          return false
+        }
+      }
+    }
+
+    return true
+  }
+
+  private canUpgradeTowerFootprint(currentTower: Tower, nextConfig: TowerCatalogEntry) {
+    if (currentTower.width === nextConfig.width && currentTower.height === nextConfig.height) {
+      return true
+    }
+
+    this.gridMap.release(currentTower.x, currentTower.y, currentTower.width, currentTower.height)
+
+    try {
+      this.refreshRouteValidationOrigins()
+      return this.isValidBuildPlacement(currentTower.x, currentTower.y, nextConfig.width, nextConfig.height)
+        && this.gridMap.canBuildTower(currentTower.x, currentTower.y, nextConfig.width, nextConfig.height)
+    } finally {
+      this.gridMap.occupy(currentTower.x, currentTower.y, currentTower.width, currentTower.height)
+    }
   }
 
   private appendLog(level: GameLogEntry['level'], message: string, meta?: Record<string, unknown>) {
@@ -466,12 +608,16 @@ export class GameEngine {
       y: this.state.map.spawn.y,
       hp: enemyConfig.maxHp,
       maxHp: enemyConfig.maxHp,
+      baseSpeed: enemyConfig.speed,
       speed: enemyConfig.speed,
+      baseDefense: enemyConfig.defense,
+      defense: enemyConfig.defense,
       rewardGold: enemyConfig.rewardGold,
       baseDamage: enemyConfig.baseDamage,
       path,
       pathIndex: 0,
       lastDamagedByPlayerId: null,
+      activeEffects: [],
     })
 
     enemy.recalculatePath(this.state.map.spawn.x, this.state.map.spawn.y, path, this.gridMap.BASE_POINT)

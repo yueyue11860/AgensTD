@@ -1,4 +1,4 @@
-import type { EnemyKind, EnemyState, Position } from '../../domain/game-state'
+import type { EnemyKind, EnemyState, EnemyStatusEffectState, Position } from '../../domain/game-state'
 
 const POSITION_EPSILON = 0.0001
 
@@ -17,7 +17,9 @@ export class Enemy {
 
   readonly maxHp: number
 
-  readonly speed: number
+  readonly baseSpeed: number
+
+  readonly baseDefense: number
 
   readonly rewardGold: number
 
@@ -35,6 +37,8 @@ export class Enemy {
 
   lastDamagedByPlayerId: string | null
 
+  activeEffects: EnemyStatusEffectState[]
+
   private reachedBase = false
 
   private basePoint: Position | null
@@ -46,18 +50,103 @@ export class Enemy {
     this.y = state.y
     this.hp = state.hp
     this.maxHp = state.maxHp
-    this.speed = state.speed
+    this.baseSpeed = state.baseSpeed ?? state.speed
+    this.baseDefense = state.baseDefense ?? state.defense ?? 0
     this.rewardGold = state.rewardGold
     this.baseDamage = state.baseDamage
     this.currentPath = state.path.map(clonePosition)
     this.pathIndex = state.pathIndex
     this.lastDamagedByPlayerId = state.lastDamagedByPlayerId
+    this.activeEffects = state.activeEffects.map((effect) => ({ ...effect }))
     this.basePoint = state.path.length > 0 ? clonePosition(state.path[state.path.length - 1]) : null
   }
 
-  receiveDamage(amount: number, sourcePlayerId: string) {
-    this.hp = Math.max(0, this.hp - amount)
-    this.lastDamagedByPlayerId = sourcePlayerId
+  get speed() {
+    return this.getEffectiveSpeed()
+  }
+
+  get defense() {
+    return this.getEffectiveDefense()
+  }
+
+  receiveDamage(amount: number, sourcePlayerId: string | null, ignoresDefense = false) {
+    const appliedDamage = ignoresDefense ? amount : Math.max(0, amount - this.defense)
+    this.hp = Math.max(0, this.hp - appliedDamage)
+
+    if (sourcePlayerId) {
+      this.lastDamagedByPlayerId = sourcePlayerId
+    }
+
+    return appliedDamage
+  }
+
+  addEffect(effect: EnemyStatusEffectState) {
+    const existingEffectIndex = this.activeEffects.findIndex((activeEffect) => activeEffect.kind === effect.kind)
+
+    if (existingEffectIndex < 0) {
+      this.activeEffects.push({ ...effect })
+      return
+    }
+
+    const existingEffect = this.activeEffects[existingEffectIndex]
+    this.activeEffects[existingEffectIndex] = {
+      ...existingEffect,
+      ...effect,
+      remainingDurationMs: this.mergeDuration(existingEffect.remainingDurationMs, effect.remainingDurationMs),
+      speedMultiplier: this.mergeSpeedMultiplier(existingEffect.speedMultiplier, effect.speedMultiplier),
+      defenseModifier: this.mergeDefenseModifier(existingEffect.defenseModifier, effect.defenseModifier),
+      damagePerSecond: Math.max(existingEffect.damagePerSecond ?? 0, effect.damagePerSecond ?? 0) || undefined,
+      maxHpDamagePerSecondRatio: Math.max(
+        existingEffect.maxHpDamagePerSecondRatio ?? 0,
+        effect.maxHpDamagePerSecondRatio ?? 0,
+      ) || undefined,
+    }
+  }
+
+  updateEffects(deltaTime: number) {
+    if (deltaTime <= 0 || this.activeEffects.length === 0 || !this.isAlive()) {
+      return
+    }
+
+    const deltaMs = deltaTime * 1000
+    const nextEffects: EnemyStatusEffectState[] = []
+
+    for (const effect of this.activeEffects) {
+      const activeDurationMs = effect.remainingDurationMs === null
+        ? deltaMs
+        : Math.min(deltaMs, Math.max(0, effect.remainingDurationMs))
+
+      if (effect.damagePerSecond && effect.damagePerSecond > 0 && activeDurationMs > 0) {
+        this.receiveDamage(
+          effect.damagePerSecond * (activeDurationMs / 1000),
+          effect.sourcePlayerId,
+          effect.ignoresDefense ?? false,
+        )
+      }
+
+      if (effect.maxHpDamagePerSecondRatio && effect.maxHpDamagePerSecondRatio > 0 && activeDurationMs > 0) {
+        this.receiveDamage(
+          this.maxHp * effect.maxHpDamagePerSecondRatio * (activeDurationMs / 1000),
+          effect.sourcePlayerId,
+          effect.ignoresDefense ?? false,
+        )
+      }
+
+      if (effect.remainingDurationMs === null) {
+        nextEffects.push({ ...effect })
+        continue
+      }
+
+      const nextDurationMs = effect.remainingDurationMs - deltaMs
+      if (nextDurationMs > 0) {
+        nextEffects.push({
+          ...effect,
+          remainingDurationMs: nextDurationMs,
+        })
+      }
+    }
+
+    this.activeEffects = nextEffects
   }
 
   recalculatePath(currentX: number, currentY: number, nextPath: Position[] | null, basePoint: Position) {
@@ -162,12 +251,64 @@ export class Enemy {
       y: this.y,
       hp: this.hp,
       maxHp: this.maxHp,
+      baseSpeed: this.baseSpeed,
       speed: this.speed,
+      baseDefense: this.baseDefense,
+      defense: this.defense,
       rewardGold: this.rewardGold,
       baseDamage: this.baseDamage,
       path: this.currentPath.map(clonePosition),
       pathIndex: this.pathIndex,
       lastDamagedByPlayerId: this.lastDamagedByPlayerId,
+      activeEffects: this.activeEffects.map((effect) => ({ ...effect })),
     }
+  }
+
+  private getEffectiveSpeed() {
+    let multiplier = 1
+
+    for (const effect of this.activeEffects) {
+      if (effect.speedMultiplier === undefined) {
+        continue
+      }
+
+      multiplier *= Math.max(0, effect.speedMultiplier)
+    }
+
+    return Math.max(0, this.baseSpeed * multiplier)
+  }
+
+  private getEffectiveDefense() {
+    let modifier = 0
+
+    for (const effect of this.activeEffects) {
+      modifier += effect.defenseModifier ?? 0
+    }
+
+    return Math.max(0, this.baseDefense + modifier)
+  }
+
+  private mergeDuration(currentDurationMs: number | null, nextDurationMs: number | null) {
+    if (currentDurationMs === null || nextDurationMs === null) {
+      return null
+    }
+
+    return Math.max(currentDurationMs, nextDurationMs)
+  }
+
+  private mergeSpeedMultiplier(currentMultiplier?: number, nextMultiplier?: number) {
+    if (currentMultiplier === undefined) {
+      return nextMultiplier
+    }
+
+    if (nextMultiplier === undefined) {
+      return currentMultiplier
+    }
+
+    return Math.min(currentMultiplier, nextMultiplier)
+  }
+
+  private mergeDefenseModifier(currentModifier?: number, nextModifier?: number) {
+    return Math.min(currentModifier ?? 0, nextModifier ?? 0)
   }
 }

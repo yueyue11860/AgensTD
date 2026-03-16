@@ -2,7 +2,7 @@ import type { ServerConfig } from '../config/server-config'
 import type { GameState } from '../domain/game-state'
 import type { FrontendGameCell, FrontendGameState } from '../domain/frontend-game-state'
 import { enemyCatalog } from '../domain/enemy-catalog'
-import { towerCatalog } from '../domain/tower-catalog'
+import { getNextTowerCatalogEntryById, towerCatalog } from '../domain/tower-catalog'
 
 function buildCells(state: GameState): FrontendGameCell[] {
   return state.map.cells.map((cell) => ({
@@ -49,39 +49,50 @@ export function projectFrontendGameState(state: GameState, config: ServerConfig)
       fortress: state.base.hp,
       fortressMax: state.base.maxHp,
     },
-    towers: state.towers.map((tower) => ({
-      id: tower.id,
-      type: tower.type,
-      name: towerCatalog[tower.type]?.label ?? tower.type,
-      level: 1,
-      status: tower.cooldownTicks > 0 ? 'cooldown' : 'idle',
-      cell: { x: tower.x, y: tower.y },
-      footprint: { width: 1, height: 1 },
-      range: tower.range,
-      damage: tower.damage,
-      attackRate: tower.fireRateTicks,
-      hp: 100,
-      maxHp: 100,
-      tags: [tower.type],
-      commands: [
-        {
-          id: `${tower.id}-upgrade`,
-          label: '升级',
-          description: '升级逻辑尚未在后端实现。',
-          payload: { action: 'UPGRADE_TOWER', towerId: tower.id },
-          disabled: true,
-          reason: '后端暂未实现升级。',
-        },
-        {
-          id: `${tower.id}-sell`,
-          label: '出售',
-          description: '出售逻辑尚未在后端实现。',
-          payload: { action: 'SELL_TOWER', towerId: tower.id },
-          disabled: true,
-          reason: '后端暂未实现出售。',
-        },
-      ],
-    })),
+    towers: state.towers.map((tower) => {
+      const towerDefinition = towerCatalog[tower.type]
+      const nextTowerDefinition = getNextTowerCatalogEntryById(tower.type)
+      const towerOwner = state.players.find((player) => player.id === tower.ownerId)
+      const canUpgrade = Boolean(nextTowerDefinition) && (towerOwner?.gold ?? 0) >= (nextTowerDefinition?.cost ?? 0)
+
+      return {
+        id: tower.id,
+        type: tower.type,
+        name: towerDefinition?.label ?? tower.type,
+        level: towerDefinition?.level ?? 1,
+        status: tower.cooldownTicks > 0 ? 'cooldown' : 'idle',
+        cell: { x: tower.x, y: tower.y },
+        footprint: { width: tower.width, height: tower.height },
+        range: tower.range,
+        damage: tower.damage,
+        attackRate: typeof tower.fireRateTicks === 'number' ? tower.fireRateTicks : undefined,
+        hp: 100,
+        maxHp: 100,
+        tags: [tower.type],
+        commands: [
+          {
+            id: `${tower.id}-upgrade`,
+            label: '升级',
+            description: nextTowerDefinition
+              ? `升级到 ${nextTowerDefinition.label}，费用 ${nextTowerDefinition.cost} 金币。`
+              : '当前已是最高等级。',
+            payload: { action: 'UPGRADE_TOWER', towerId: tower.id },
+            disabled: !canUpgrade,
+            reason: nextTowerDefinition
+              ? ((towerOwner?.gold ?? 0) < nextTowerDefinition.cost ? '金币不足。' : undefined)
+              : '当前已是最高等级。',
+          },
+          {
+            id: `${tower.id}-sell`,
+            label: '出售',
+            description: '出售逻辑尚未在后端实现。',
+            payload: { action: 'SELL_TOWER', towerId: tower.id },
+            disabled: true,
+            reason: '后端暂未实现出售。',
+          },
+        ],
+      }
+    }),
     enemies: state.enemies.map((enemy) => {
       const enemyConfig = enemyCatalog[enemy.kind]
 

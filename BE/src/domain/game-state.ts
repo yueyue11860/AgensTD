@@ -1,8 +1,11 @@
+import type { TowerBehaviorDefinition, TowerBehaviorKind, TowerFireRate } from './tower-behavior'
+
 export type PlayerKind = 'human' | 'agent'
 export type ConnectionStatus = 'connected' | 'disconnected'
 export type LogLevel = 'info' | 'warn' | 'error'
 export type EnemyKind = 'runner' | 'swift' | 'brute'
 export type TowerTargetingStrategy = 'nearest' | 'first' | 'strongest'
+export type StatusEffectKind = 'slow' | 'armor-break' | 'burn'
 
 export interface Position {
   x: number
@@ -31,6 +34,21 @@ export interface WaveState {
   remainingSpawns: number
 }
 
+export interface EnemyStatusEffectTemplate {
+  kind: StatusEffectKind
+  remainingDurationMs: number | null
+  speedMultiplier?: number
+  defenseModifier?: number
+  damagePerSecond?: number
+  maxHpDamagePerSecondRatio?: number
+  ignoresDefense?: boolean
+}
+
+export interface EnemyStatusEffectState extends EnemyStatusEffectTemplate {
+  id: string
+  sourcePlayerId: string | null
+}
+
 export interface PlayerState {
   id: string
   name: string
@@ -46,23 +64,35 @@ export interface EnemyState extends Position {
   kind: EnemyKind
   hp: number
   maxHp: number
+  baseSpeed: number
   speed: number
+  baseDefense: number
+  defense: number
   rewardGold: number
   baseDamage: number
   path: Position[]
   pathIndex: number
   lastDamagedByPlayerId: string | null
+  activeEffects: EnemyStatusEffectState[]
 }
 
 export interface TowerState extends Position {
   id: string
   ownerId: string
   type: string
+  width: number
+  height: number
+  behaviorKind: TowerBehaviorKind
+  behavior: TowerBehaviorDefinition
+  attackEffects: EnemyStatusEffectTemplate[]
   damage: number
   range: number
-  fireRateTicks: number
+  fireRateTicks: TowerFireRate
   cooldownTicks: number
   targetingStrategy: TowerTargetingStrategy
+  currentTargetId: string | null
+  lockTimeMs: number
+  incomeProgressMs: number
 }
 
 export interface GameLogEntry {
