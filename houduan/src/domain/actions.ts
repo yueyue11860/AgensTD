@@ -1,27 +1,8 @@
-import type { PlayerKind, Position } from './game-state'
+import type { BuildTowerAction, GameAction, PlayerIdentity } from '../../../shared/contracts/game'
 
-export interface BuildTowerAction extends Position {
-  action: 'BUILD_TOWER'
-  type: string
-}
+export type { BuildTowerAction, PlayerIdentity } from '../../../shared/contracts/game'
 
-export interface UpgradeTowerAction {
-  action: 'UPGRADE_TOWER'
-  towerId: string
-}
-
-export interface SellTowerAction {
-  action: 'SELL_TOWER'
-  towerId: string
-}
-
-export type ClientAction = BuildTowerAction | UpgradeTowerAction | SellTowerAction
-
-export interface PlayerIdentity {
-  playerId: string
-  playerName: string
-  playerKind: PlayerKind
-}
+export type ClientAction = GameAction
 
 export interface QueuedAction {
   id: string

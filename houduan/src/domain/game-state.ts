@@ -7,6 +7,20 @@ export interface Position {
   y: number
 }
 
+export type GameMapCellKind = 'gate' | 'core' | 'build' | 'blocked'
+
+export interface GameMapCellState extends Position {
+  kind: GameMapCellKind
+  walkable: boolean
+  buildable: boolean
+  label?: string
+}
+
+export interface BaseState extends Position {
+  hp: number
+  maxHp: number
+}
+
 export interface PlayerState {
   id: string
   name: string
@@ -24,6 +38,10 @@ export interface EnemyState extends Position {
   maxHp: number
   speed: number
   rewardGold: number
+  baseDamage: number
+  path: Position[]
+  pathIndex: number
+  lastDamagedByPlayerId: string | null
 }
 
 export interface TowerState extends Position {
@@ -46,6 +64,9 @@ export interface GameLogEntry {
 export interface GameMapState {
   width: number
   height: number
+  cells: GameMapCellState[]
+  spawn: Position
+  base: Position
 }
 
 export interface GameState {
@@ -54,6 +75,7 @@ export interface GameState {
   tickRateMs: number
   startedAt: number
   map: GameMapState
+  base: BaseState
   players: PlayerState[]
   enemies: EnemyState[]
   towers: TowerState[]

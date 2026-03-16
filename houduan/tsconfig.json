@@ -3,7 +3,7 @@
 		"target": "ES2022",
 		"module": "CommonJS",
 		"moduleResolution": "Node",
-		"rootDir": "src",
+		"rootDir": "..",
 		"outDir": "dist",
 		"strict": true,
 		"esModuleInterop": true,
@@ -14,6 +14,7 @@
 		"types": ["node"]
 	},
 	"include": [
+		"../shared/**/*.ts",
 		"src/server.ts",
 		"src/config/**/*.ts",
 		"src/core/**/*.ts",

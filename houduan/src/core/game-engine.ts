@@ -1,6 +1,7 @@
 import { ActionQueue } from './action-queue'
+import { GridMap } from './grid-map'
 import type { BuildTowerAction, ClientAction, PlayerIdentity, QueuedAction } from '../domain/actions'
-import type { EnemyState, GameLogEntry, GameState, PlayerState, TowerState } from '../domain/game-state'
+import type { EnemyState, GameLogEntry, GameState, PlayerState, Position, TowerState } from '../domain/game-state'
 import type { ServerConfig } from '../config/server-config'
 import { towerCatalog } from '../domain/tower-catalog'
 
@@ -8,6 +9,8 @@ type TickListener = (state: GameState) => void
 type ActionListener = (action: QueuedAction) => void
 
 export class GameEngine {
+  private readonly config: ServerConfig
+
   private readonly actionQueue = new ActionQueue()
 
   private readonly tickListeners = new Set<TickListener>()
@@ -16,9 +19,18 @@ export class GameEngine {
 
   private readonly state: GameState
 
+  private readonly gridMap: GridMap
+
   private lastEnemySpawnTick = -10
 
-  constructor(private readonly config: ServerConfig) {
+  constructor(config: ServerConfig) {
+    this.config = config
+
+    const laneRow = Math.floor(config.mapHeight / 2)
+    const spawn = { x: 0, y: laneRow }
+    const base = { x: config.mapWidth - 1, y: laneRow }
+    this.gridMap = GridMap.create(config.mapWidth, config.mapHeight, spawn, base)
+
     this.state = {
       matchId: config.matchId,
       tick: 0,
@@ -27,6 +39,15 @@ export class GameEngine {
       map: {
         width: config.mapWidth,
         height: config.mapHeight,
+        cells: this.gridMap.toCells(),
+        spawn,
+        base,
+      },
+      base: {
+        x: base.x,
+        y: base.y,
+        hp: 20,
+        maxHp: 20,
       },
       players: [],
       enemies: [],
@@ -34,6 +55,8 @@ export class GameEngine {
       pendingActions: 0,
       logs: [],
     }
+
+    this.gridMap.setValidationOrigins([spawn])
 
     this.appendLog('info', 'GameEngine initialized', {
       tickRateMs: config.tickRateMs,
@@ -124,8 +147,10 @@ export class GameEngine {
   tick() {
     this.state.tick += 1
     this.processQueuedActions()
-    this.updateEnemies()
-    this.updateTowers()
+    this.resolveTowerAttacks()
+    this.collectDefeatedEnemies()
+    this.updateEnemyPositions()
+    this.resolveEnemiesAtBase()
     this.spawnEnemyIfNeeded()
     this.state.pendingActions = this.actionQueue.size()
 
@@ -189,8 +214,13 @@ export class GameEngine {
       return
     }
 
-    if (this.state.towers.some((tower) => tower.x === x && tower.y === y)) {
-      this.appendLog('warn', 'Build rejected because tile is occupied', { playerId: player.id, x, y })
+    this.refreshRouteValidationOrigins()
+    if (!this.gridMap.canBuildTower(x, y)) {
+      this.appendLog('warn', 'Build rejected because tower would block the route to base', {
+        playerId: player.id,
+        x,
+        y,
+      })
       return
     }
 
@@ -218,6 +248,10 @@ export class GameEngine {
     }
 
     this.state.towers.push(tower)
+    this.gridMap.occupy(x, y)
+    this.syncMapCells()
+    this.recalculateEnemyPaths()
+    this.refreshRouteValidationOrigins()
     this.appendLog('info', 'Tower built', { playerId: player.id, towerId: tower.id, type, x, y })
   }
 
@@ -227,41 +261,35 @@ export class GameEngine {
     }
 
     this.lastEnemySpawnTick = this.state.tick
+    const path = this.gridMap.findPath(this.state.map.spawn, this.state.map.base)
+    if (path.length === 0) {
+      this.appendLog('error', 'Enemy spawn skipped because no path exists to base', {
+        tick: this.state.tick,
+      })
+      return
+    }
+
     const enemy: EnemyState = {
       id: `enemy-${this.state.tick}`,
       kind: 'runner',
-      x: 0,
-      y: Math.floor(this.config.mapHeight / 2),
+      x: this.state.map.spawn.x,
+      y: this.state.map.spawn.y,
       hp: 100,
       maxHp: 100,
       speed: 1,
       rewardGold: 15,
+      baseDamage: 1,
+      path,
+      pathIndex: 0,
+      lastDamagedByPlayerId: null,
     }
 
     this.state.enemies.push(enemy)
+    this.refreshRouteValidationOrigins()
     this.appendLog('info', 'Enemy spawned', { enemyId: enemy.id, x: enemy.x, y: enemy.y })
   }
 
-  private updateEnemies() {
-    const survivors: EnemyState[] = []
-
-    for (const enemy of this.state.enemies) {
-      const nextX = enemy.x + enemy.speed
-      if (nextX >= this.state.map.width) {
-        this.appendLog('warn', 'Enemy escaped through the map boundary', { enemyId: enemy.id })
-        continue
-      }
-
-      survivors.push({
-        ...enemy,
-        x: nextX,
-      })
-    }
-
-    this.state.enemies = survivors
-  }
-
-  private updateTowers() {
+  private resolveTowerAttacks() {
     for (const tower of this.state.towers) {
       if (tower.cooldownTicks > 0) {
         tower.cooldownTicks -= 1
@@ -273,11 +301,14 @@ export class GameEngine {
         continue
       }
 
-      target.hp -= tower.damage
+      target.hp = Math.max(0, target.hp - tower.damage)
+      target.lastDamagedByPlayerId = tower.ownerId
       tower.cooldownTicks = tower.fireRateTicks
       this.appendLog('info', 'Tower fired', { towerId: tower.id, enemyId: target.id, damage: tower.damage })
     }
+  }
 
+  private collectDefeatedEnemies() {
     const defeatedEnemies = this.state.enemies.filter((enemy) => enemy.hp <= 0)
     if (defeatedEnemies.length === 0) {
       return
@@ -285,7 +316,7 @@ export class GameEngine {
 
     this.state.enemies = this.state.enemies.filter((enemy) => enemy.hp > 0)
     for (const enemy of defeatedEnemies) {
-      const owner = this.state.players[0]
+      const owner = this.findRewardOwner(enemy)
       if (owner) {
         owner.gold += enemy.rewardGold
         owner.score += enemy.rewardGold
@@ -293,6 +324,60 @@ export class GameEngine {
 
       this.appendLog('info', 'Enemy defeated', { enemyId: enemy.id, rewardGold: enemy.rewardGold })
     }
+
+    this.refreshRouteValidationOrigins()
+  }
+
+  private updateEnemyPositions() {
+    this.state.enemies = this.state.enemies.map((enemy) => {
+      const nextPath = this.gridMap.findPath({ x: enemy.x, y: enemy.y }, this.state.map.base)
+      if (nextPath.length === 0) {
+        this.appendLog('warn', 'Enemy cannot find a route to base and will hold position', { enemyId: enemy.id })
+        return {
+          ...enemy,
+          path: [{ x: enemy.x, y: enemy.y }],
+          pathIndex: 0,
+        }
+      }
+
+      const movementSteps = Math.max(1, Math.floor(enemy.speed))
+      const nextIndex = Math.min(movementSteps, nextPath.length - 1)
+      const nextPosition = nextPath[nextIndex] ?? nextPath[0]
+
+      return {
+        ...enemy,
+        x: nextPosition.x,
+        y: nextPosition.y,
+        path: nextPath,
+        pathIndex: nextIndex,
+      }
+    })
+
+    this.refreshRouteValidationOrigins()
+  }
+
+  private resolveEnemiesAtBase() {
+    if (this.state.enemies.length === 0) {
+      return
+    }
+
+    const survivors: EnemyState[] = []
+    for (const enemy of this.state.enemies) {
+      if (enemy.x === this.state.base.x && enemy.y === this.state.base.y) {
+        this.state.base.hp = Math.max(0, this.state.base.hp - enemy.baseDamage)
+        this.appendLog('warn', 'Enemy reached the base', {
+          enemyId: enemy.id,
+          baseDamage: enemy.baseDamage,
+          remainingBaseHp: this.state.base.hp,
+        })
+        continue
+      }
+
+      survivors.push(enemy)
+    }
+
+    this.state.enemies = survivors
+    this.refreshRouteValidationOrigins()
   }
 
   private findNearestEnemyInRange(tower: TowerState) {
@@ -327,18 +412,57 @@ export class GameEngine {
   }
 
   private isValidBuildCoordinate(x: number, y: number) {
-    return Number.isInteger(x)
-      && Number.isInteger(y)
-      && x >= 0
-      && y >= 0
-      && x < this.state.map.width
-      && y < this.state.map.height
-      && y !== Math.floor(this.state.map.height / 2)
+    const cell = this.gridMap.getCell(x, y)
+    return cell !== null && cell.buildable && cell.walkable
   }
 
   private appendLog(level: GameLogEntry['level'], message: string, meta?: Record<string, unknown>) {
-    void level
-    void message
-    void meta
+    const entry: GameLogEntry = {
+      tick: this.state.tick,
+      level,
+      message,
+      meta,
+    }
+
+    this.state.logs.push(entry)
+    if (this.state.logs.length > 200) {
+      this.state.logs.shift()
+    }
+  }
+
+  private refreshRouteValidationOrigins() {
+    const origins: Position[] = [this.state.map.spawn]
+
+    for (const enemy of this.state.enemies) {
+      origins.push({ x: enemy.x, y: enemy.y })
+    }
+
+    this.gridMap.setValidationOrigins(origins)
+  }
+
+  private recalculateEnemyPaths() {
+    this.state.enemies = this.state.enemies.map((enemy) => {
+      const path = this.gridMap.findPath({ x: enemy.x, y: enemy.y }, this.state.map.base)
+      return {
+        ...enemy,
+        path,
+        pathIndex: path.length > 1 ? 0 : enemy.pathIndex,
+      }
+    })
+  }
+
+  private syncMapCells() {
+    this.state.map.cells = this.gridMap.toCells()
+  }
+
+  private findRewardOwner(enemy: EnemyState) {
+    if (enemy.lastDamagedByPlayerId) {
+      const lastAttacker = this.state.players.find((player) => player.id === enemy.lastDamagedByPlayerId)
+      if (lastAttacker) {
+        return lastAttacker
+      }
+    }
+
+    return this.state.players[0]
   }
 }

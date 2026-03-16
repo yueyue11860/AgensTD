@@ -3,41 +3,30 @@ import type { GameState } from '../domain/game-state'
 import type { FrontendGameCell, FrontendGameState } from '../domain/frontend-game-state'
 import { towerCatalog } from '../domain/tower-catalog'
 
-function getLaneRow(config: ServerConfig) {
-  return Math.floor(config.mapHeight / 2)
+function buildCells(state: GameState): FrontendGameCell[] {
+  return state.map.cells.map((cell) => ({
+    x: cell.x,
+    y: cell.y,
+    kind: cell.kind,
+    walkable: cell.walkable,
+    buildable: cell.buildable,
+    label: cell.label,
+  }))
 }
 
-function buildCells(config: ServerConfig): FrontendGameCell[] {
-  const laneRow = getLaneRow(config)
-  const cells: FrontendGameCell[] = []
+function getEnemyProgress(state: GameState, enemy: GameState['enemies'][number]) {
+  const totalDistance = Math.abs(state.map.base.x - state.map.spawn.x) + Math.abs(state.map.base.y - state.map.spawn.y)
+  const remainingDistance = Math.abs(state.map.base.x - enemy.x) + Math.abs(state.map.base.y - enemy.y)
 
-  for (let y = 0; y < config.mapHeight; y += 1) {
-    for (let x = 0; x < config.mapWidth; x += 1) {
-      if (y === laneRow && x === 0) {
-        cells.push({ x, y, kind: 'gate', walkable: true, buildable: false, label: '入口' })
-        continue
-      }
-
-      if (y === laneRow && x === config.mapWidth - 1) {
-        cells.push({ x, y, kind: 'core', walkable: true, buildable: false, label: '主堡' })
-        continue
-      }
-
-      if (y === laneRow) {
-        cells.push({ x, y, kind: 'path', walkable: true, buildable: false })
-        continue
-      }
-
-      cells.push({ x, y, kind: 'build', walkable: false, buildable: true })
-    }
+  if (totalDistance === 0) {
+    return 1
   }
 
-  return cells
+  return Math.max(0, Math.min(1, 1 - remainingDistance / totalDistance))
 }
 
 export function projectFrontendGameState(state: GameState, config: ServerConfig): FrontendGameState {
   const primaryPlayer = state.players[0] ?? null
-  const laneRow = getLaneRow(config)
 
   return {
     matchId: state.matchId,
@@ -46,7 +35,7 @@ export function projectFrontendGameState(state: GameState, config: ServerConfig)
     map: {
       width: state.map.width,
       height: state.map.height,
-      cells: buildCells(config),
+      cells: buildCells(state),
     },
     resources: {
       gold: primaryPlayer?.gold ?? config.playerStartingGold,
@@ -56,8 +45,8 @@ export function projectFrontendGameState(state: GameState, config: ServerConfig)
       heatLimit: 100,
       repair: 0,
       threat: state.enemies.length * 10,
-      fortress: 100,
-      fortressMax: 100,
+      fortress: state.base.hp,
+      fortressMax: state.base.maxHp,
     },
     towers: state.towers.map((tower) => ({
       id: tower.id,
@@ -101,7 +90,7 @@ export function projectFrontendGameState(state: GameState, config: ServerConfig)
       maxHp: enemy.maxHp,
       threat: enemy.maxHp >= 200 ? 'high' : 'low',
       intent: 'advance',
-      progress: config.mapWidth <= 1 ? 1 : enemy.x / (config.mapWidth - 1),
+      progress: getEnemyProgress(state, enemy),
     })),
     buildPalette: Object.values(towerCatalog).map((entry, index) => ({
       type: entry.type,
@@ -123,7 +112,7 @@ export function projectFrontendGameState(state: GameState, config: ServerConfig)
     },
     notices: state.players.length === 0
       ? ['等待玩家或 Agent 连接网关。']
-      : [`当前行军路径位于第 ${laneRow + 1} 行。`],
+      : [`出生点位于 (${state.map.spawn.x}, ${state.map.spawn.y})，基地剩余 ${state.base.hp}/${state.base.maxHp}。`],
     score: primaryPlayer?.score ?? 0,
     updatedAt: new Date().toISOString(),
   }

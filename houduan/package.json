@@ -5,7 +5,7 @@
   "description": "AgensTD backend service built with Node.js, TypeScript, Express and Socket.io",
   "scripts": {
     "dev": "ts-node src/server.ts",
-    "start": "node dist/server.js",
+    "start": "node dist/houduan/src/server.js",
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit"
   },

@@ -1,10 +1,22 @@
+export type PlayerKind = 'human' | 'agent'
+
 export type CellKind = 'path' | 'build' | 'blocked' | 'relay' | 'gate' | 'core' | 'hazard'
 
-export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error'
+export type TowerStatus = 'idle' | 'active' | 'cooldown' | 'disabled'
+
+export type EnemyThreat = 'low' | 'medium' | 'high' | 'boss'
+
+export type GameStatus = 'connecting' | 'waiting' | 'running' | 'paused' | 'finished'
 
 export interface GridPosition {
   x: number
   y: number
+}
+
+export interface PlayerIdentity {
+  playerId: string
+  playerName: string
+  playerKind: PlayerKind
 }
 
 export interface GameCell extends GridPosition {
@@ -26,23 +38,9 @@ export interface ResourceState {
   fortressMax?: number
 }
 
-export type TowerStatus = 'idle' | 'active' | 'cooldown' | 'disabled'
-
-export interface TowerFootprint {
-  width: number
-  height: number
-}
-
-export interface GenericAction {
-  action: string
-  [key: string]: unknown
-}
-
-export interface BuildTowerAction {
+export interface BuildTowerAction extends GridPosition {
   action: 'BUILD_TOWER'
   type: string
-  x: number
-  y: number
 }
 
 export interface UpgradeTowerAction {
@@ -55,13 +53,7 @@ export interface SellTowerAction {
   towerId: string
 }
 
-export interface TowerAbilityAction {
-  action: 'TRIGGER_TOWER_ACTION'
-  towerId: string
-  abilityId: string
-}
-
-export type GameAction = BuildTowerAction | UpgradeTowerAction | SellTowerAction | TowerAbilityAction | GenericAction
+export type GameAction = BuildTowerAction | UpgradeTowerAction | SellTowerAction
 
 export interface ActionDescriptor {
   id: string
@@ -82,6 +74,11 @@ export interface TowerBlueprint {
   reason?: string
 }
 
+export interface TowerFootprint {
+  width: number
+  height: number
+}
+
 export interface TowerState {
   id: string
   type: string
@@ -99,8 +96,6 @@ export interface TowerState {
   commands?: ActionDescriptor[]
 }
 
-export type EnemyThreat = 'low' | 'medium' | 'high' | 'boss'
-
 export interface EnemyState {
   id: string
   type: string
@@ -117,7 +112,7 @@ export interface EnemyState {
 export interface GameState {
   matchId?: string
   tick: number
-  status: 'connecting' | 'waiting' | 'running' | 'paused' | 'finished'
+  status: GameStatus
   map: {
     width: number
     height: number

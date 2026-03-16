@@ -1,9 +1,9 @@
-import type { GameAction, GameState } from './game-state'
+import type { GameAction, GameState, PlayerIdentity } from './game'
 
 export interface LeaderboardEntry {
   playerId: string
   playerName: string
-  playerKind: 'human' | 'agent'
+  playerKind: PlayerIdentity['playerKind']
   bestSurvivedWaves: number
   bestScore: number
   lastMatchId: string
@@ -15,8 +15,6 @@ export interface DualLeaderboard {
   agent: LeaderboardEntry[]
   all: LeaderboardEntry[]
 }
-
-export type CompetitionRealtimeStatus = 'disabled' | 'connecting' | 'subscribed' | 'error'
 
 export interface ReplaySummary {
   matchId: string
@@ -30,16 +28,10 @@ export interface ReplaySummary {
   topScore: number
 }
 
-export interface ReplayActor {
-  playerId: string
-  playerName: string
-  playerKind: 'human' | 'agent'
-}
-
 export interface ReplayActionRecord {
   id: string
   receivedAt: number
-  player: ReplayActor
+  player: PlayerIdentity
   action: GameAction
 }
 
@@ -55,4 +47,8 @@ export interface MatchReplay {
   updatedAt: string
   actions: ReplayActionRecord[]
   frames: ReplayFrame[]
+}
+
+export interface MatchReplayEnvelope {
+  replay: MatchReplay
 }
