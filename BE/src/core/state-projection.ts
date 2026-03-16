@@ -28,11 +28,17 @@ function getEnemyProgress(state: GameState, enemy: GameState['enemies'][number])
 
 export function projectFrontendGameState(state: GameState, config: ServerConfig): FrontendGameState {
   const primaryPlayer = state.players[0] ?? null
+  const resultNotice = state.result
+    ? state.result.outcome === 'victory'
+      ? `战局结束：胜利。${state.result.reason ?? '已清空全部波次。'}`
+      : `战局结束：失败。${state.result.reason ?? '场上怪物持续超载。'}`
+    : null
 
   return {
     matchId: state.matchId,
     tick: state.tick,
-    status: state.players.length > 0 ? 'running' : 'waiting',
+    status: state.status,
+    result: state.result,
     map: {
       width: state.map.width,
       height: state.map.height,
@@ -46,8 +52,8 @@ export function projectFrontendGameState(state: GameState, config: ServerConfig)
       heatLimit: 100,
       repair: 0,
       threat: state.enemies.length * 10,
-      fortress: state.base.hp,
-      fortressMax: state.base.maxHp,
+      fortress: Math.max(0, state.maxCapacity - state.enemies.length),
+      fortressMax: state.maxCapacity,
     },
     towers: state.towers.map((tower) => {
       const towerDefinition = towerCatalog[tower.type]
@@ -128,7 +134,10 @@ export function projectFrontendGameState(state: GameState, config: ServerConfig)
     },
     notices: state.players.length === 0
       ? ['等待玩家或 Agent 连接网关。']
-      : [`出生点位于 (${state.map.spawn.x}, ${state.map.spawn.y})，当前 ${state.wave.label}，基地剩余 ${state.base.hp}/${state.base.maxHp}。`],
+      : [
+        `当前 ${state.playerCount} 人房间，刷怪容量 ${state.enemies.length}/${state.maxCapacity}，超载计数 ${state.overloadTicks}/100。`,
+        ...(resultNotice ? [resultNotice] : []),
+      ],
     score: primaryPlayer?.score ?? 0,
     updatedAt: new Date().toISOString(),
   }

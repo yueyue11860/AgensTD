@@ -3,7 +3,7 @@ import http from 'http'
 import cors from 'cors'
 import express from 'express'
 import { createServerConfig } from './config/server-config'
-import { GameEngine } from './core/game-engine'
+import { RoomManager } from './core/Room'
 import { GameLoop } from './core/game-loop'
 import { ReplayRecorder } from './core/replay-recorder'
 import { SupabaseCompetitionStore } from './data/supabase-competition-store'
@@ -28,12 +28,14 @@ app.get('/health', (_request, response) => {
 })
 
 const httpServer = http.createServer(app)
-const engine = new GameEngine(config)
+const roomManager = new RoomManager(config)
+const room = roomManager.getOrCreateRoom('public-1')
+const engine = room.engine
 const loop = new GameLoop(engine, config.tickRateMs)
 const competitionStore = new SupabaseCompetitionStore(config)
 const replayRecorder = new ReplayRecorder(engine, config, competitionStore)
 const actionLimiter = new ActionRateLimiter(config.actionRateLimitWindowMs, config.actionRateLimitMax)
-const gateway = new SocketGateway(httpServer, engine, config, actionLimiter)
+const gateway = new SocketGateway(httpServer, room, config, actionLimiter)
 
 app.use('/api', createRestApiRouter(engine, config, actionLimiter, replayRecorder, competitionStore))
 app.use('/api/agent', createAgentApiRouter(engine, config, replayRecorder, competitionStore))

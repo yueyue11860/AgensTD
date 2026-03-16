@@ -1,6 +1,6 @@
 import type { Position } from '../domain/game-state'
 
-export type GridMapCellKind = 'gate' | 'core' | 'build' | 'blocked'
+export type GridMapCellKind = 'gate' | 'core' | 'path' | 'build' | 'blocked'
 
 export interface GridMapCell extends Position {
   kind: GridMapCellKind
@@ -9,18 +9,12 @@ export interface GridMapCell extends Position {
   label?: string
 }
 
-interface SearchNode extends Position {
-  g: number
-  h: number
-  f: number
+interface TerrainCell {
+  kind: GridMapCellKind
+  label?: string
 }
 
-const DIRECTIONS: ReadonlyArray<Position> = [
-  { x: 1, y: 0 },
-  { x: -1, y: 0 },
-  { x: 0, y: 1 },
-  { x: 0, y: -1 },
-]
+const WALKABLE_CELL_KINDS = new Set<GridMapCellKind>(['gate', 'core', 'path'])
 
 function toKey(x: number, y: number) {
   return `${x},${y}`
@@ -30,72 +24,10 @@ function clonePosition(position: Position): Position {
   return { x: position.x, y: position.y }
 }
 
-class MinHeap<T> {
-  private readonly items: T[] = []
-
-  constructor(private readonly compare: (left: T, right: T) => number) {}
-
-  push(value: T) {
-    this.items.push(value)
-    this.bubbleUp(this.items.length - 1)
-  }
-
-  pop() {
-    if (this.items.length === 0) {
-      return null
-    }
-
-    const first = this.items[0]
-    const last = this.items.pop()
-    if (this.items.length > 0 && last) {
-      this.items[0] = last
-      this.bubbleDown(0)
-    }
-
-    return first
-  }
-
-  get size() {
-    return this.items.length
-  }
-
-  private bubbleUp(startIndex: number) {
-    let index = startIndex
-
-    while (index > 0) {
-      const parentIndex = Math.floor((index - 1) / 2)
-      if (this.compare(this.items[index], this.items[parentIndex]) >= 0) {
-        return
-      }
-
-      ;[this.items[index], this.items[parentIndex]] = [this.items[parentIndex], this.items[index]]
-      index = parentIndex
-    }
-  }
-
-  private bubbleDown(startIndex: number) {
-    let index = startIndex
-
-    while (true) {
-      const leftIndex = index * 2 + 1
-      const rightIndex = leftIndex + 1
-      let nextIndex = index
-
-      if (leftIndex < this.items.length && this.compare(this.items[leftIndex], this.items[nextIndex]) < 0) {
-        nextIndex = leftIndex
-      }
-
-      if (rightIndex < this.items.length && this.compare(this.items[rightIndex], this.items[nextIndex]) < 0) {
-        nextIndex = rightIndex
-      }
-
-      if (nextIndex === index) {
-        return
-      }
-
-      ;[this.items[index], this.items[nextIndex]] = [this.items[nextIndex], this.items[index]]
-      index = nextIndex
-    }
+function cloneTerrainCell(cell: TerrainCell): TerrainCell {
+  return {
+    kind: cell.kind,
+    label: cell.label,
   }
 }
 
@@ -112,16 +44,10 @@ export class GridMap {
 
   readonly base: Position
 
-  private readonly grid: number[][]
+  private readonly terrain: TerrainCell[][]
 
-  private validationOrigins: Position[]
+  private readonly occupiedKeys = new Set<string>()
 
-  /*
-   * GridMap 在无头 Node.js 引擎里只做纯内存计算：
-   * - grid[y][x] = 0 表示可通行
-   * - grid[y][x] = 1 表示障碍物或已建造防御塔
-   * - SPAWN_POINT / BASE_POINT 永远保持可通行
-   */
   constructor(cellsOrGrid: GridMapCell[][] | number[][], spawn: Position, base: Position) {
     if (cellsOrGrid.length === 0 || cellsOrGrid[0]?.length === 0) {
       throw new Error('GridMap requires a non-empty 2D grid matrix')
@@ -138,45 +64,54 @@ export class GridMap {
       throw new Error('Spawn point and base point must be inside the grid')
     }
 
-    this.grid = this.normalizeGrid(cellsOrGrid)
-    this.grid[this.SPAWN_POINT.y][this.SPAWN_POINT.x] = 0
-    this.grid[this.BASE_POINT.y][this.BASE_POINT.x] = 0
-    this.validationOrigins = [clonePosition(spawn)]
+    this.terrain = this.normalizeTerrain(cellsOrGrid)
+    this.terrain[this.SPAWN_POINT.y][this.SPAWN_POINT.x] = { kind: 'gate', label: '入口' }
+    this.terrain[this.BASE_POINT.y][this.BASE_POINT.x] = { kind: 'core', label: '环形核心' }
   }
 
   static create(width: number, height: number, spawn: Position, base: Position, blocked: Position[] = []) {
     const blockedKeys = new Set(blocked.map((position) => toKey(position.x, position.y)))
-    const grid: number[][] = []
+    const cells: GridMapCell[][] = []
 
     for (let y = 0; y < height; y += 1) {
-      const row: number[] = []
+      const row: GridMapCell[] = []
       for (let x = 0; x < width; x += 1) {
-        const isSpecial = (x === spawn.x && y === spawn.y) || (x === base.x && y === base.y)
-        row.push(!isSpecial && blockedKeys.has(toKey(x, y)) ? 1 : 0)
+        const key = toKey(x, y)
+        const isSpawn = x === spawn.x && y === spawn.y
+        const isBase = x === base.x && y === base.y
+        const isPath = GridMap.isStraightLinePath(spawn, base, x, y)
+
+        let kind: GridMapCellKind = 'build'
+        if (blockedKeys.has(key)) {
+          kind = 'blocked'
+        }
+        else if (isSpawn) {
+          kind = 'gate'
+        }
+        else if (isBase) {
+          kind = 'core'
+        }
+        else if (isPath) {
+          kind = 'path'
+        }
+
+        row.push({
+          x,
+          y,
+          kind,
+          walkable: WALKABLE_CELL_KINDS.has(kind),
+          buildable: kind === 'build',
+        })
       }
 
-      grid.push(row)
+      cells.push(row)
     }
 
-    return new GridMap(grid, spawn, base)
+    return new GridMap(cells, spawn, base)
   }
 
-  setValidationOrigins(origins: Position[]) {
-    const uniqueOrigins = new Map<string, Position>()
-
-    for (const origin of origins) {
-      if (!this.isInside(origin.x, origin.y)) {
-        continue
-      }
-
-      uniqueOrigins.set(toKey(origin.x, origin.y), clonePosition(origin))
-    }
-
-    if (uniqueOrigins.size === 0) {
-      uniqueOrigins.set(toKey(this.SPAWN_POINT.x, this.SPAWN_POINT.y), clonePosition(this.SPAWN_POINT))
-    }
-
-    this.validationOrigins = [...uniqueOrigins.values()]
+  setValidationOrigins(_origins: Position[]) {
+    // 固定轨道下，建塔合法性不再依赖动态连通性校验。
   }
 
   isInside(x: number, y: number) {
@@ -200,26 +135,26 @@ export class GridMap {
       return false
     }
 
-    return this.grid[y][x] === 0
+    return WALKABLE_CELL_KINDS.has(this.terrain[y][x].kind)
   }
 
   occupy(x: number, y: number, width = 1, height = 1) {
     for (const position of this.getFootprintPositions(x, y, width, height)) {
-      if (!this.isInside(position.x, position.y) || this.isSpecialPoint(position.x, position.y)) {
+      if (!this.isInside(position.x, position.y)) {
         continue
       }
 
-      this.grid[position.y][position.x] = 1
+      if (this.terrain[position.y][position.x].kind !== 'build') {
+        continue
+      }
+
+      this.occupiedKeys.add(toKey(position.x, position.y))
     }
   }
 
   release(x: number, y: number, width = 1, height = 1) {
     for (const position of this.getFootprintPositions(x, y, width, height)) {
-      if (!this.isInside(position.x, position.y) || this.isSpecialPoint(position.x, position.y)) {
-        continue
-      }
-
-      this.grid[position.y][position.x] = 0
+      this.occupiedKeys.delete(toKey(position.x, position.y))
     }
   }
 
@@ -240,22 +175,9 @@ export class GridMap {
       return false
     }
 
-    const footprint = this.getFootprintPositions(x, y, width, height)
-
-    // 先做最便宜的非法性判断，避免无意义地触发寻路。
-    for (const position of footprint) {
-      if (!this.isInside(position.x, position.y) || this.isSpecialPoint(position.x, position.y) || this.grid[position.y][position.x] === 1) {
-        return false
-      }
-    }
-
-    const blockedKeys = new Set(footprint.map((position) => toKey(position.x, position.y)))
-
-    // 严格的“死胡同拦截”逻辑：
-    // 先虚拟落塔，再立即做连通性测试，只要任意关键起点无法到达基地，就拒绝建塔。
-    for (const origin of this.getValidationOrigins()) {
-      const path = this.findPathInternal(origin.x, origin.y, this.BASE_POINT.x, this.BASE_POINT.y, blockedKeys)
-      if (path === null) {
+    for (const position of this.getFootprintPositions(x, y, width, height)) {
+      const cell = this.getCell(position.x, position.y)
+      if (!cell || !cell.buildable) {
         return false
       }
     }
@@ -279,12 +201,7 @@ export class GridMap {
     throw new Error('findPath expects either coordinates or start/goal positions')
   }
 
-  private heuristic(from: Position, to: Position) {
-    return Math.abs(from.x - to.x) + Math.abs(from.y - to.y)
-  }
-
   private findPathInternal(startX: number, startY: number, endX: number, endY: number, blockedKeys?: Set<string>) {
-    // 起点、终点不合法，或者已经不可通行时，明确返回 null。
     if (!this.isInside(startX, startY) || !this.isInside(endX, endY)) {
       return null
     }
@@ -293,72 +210,32 @@ export class GridMap {
       return null
     }
 
-    if (startX === endX && startY === endY) {
-      return [{ x: startX, y: startY }]
-    }
-
-    const goal = { x: endX, y: endY }
     const startKey = toKey(startX, startY)
     const goalKey = toKey(endX, endY)
+    const queue: Position[] = [{ x: startX, y: startY }]
+    const visited = new Set<string>([startKey])
     const cameFrom = new Map<string, string>()
-    const gScores = new Map<string, number>([[startKey, 0]])
-    const closedKeys = new Set<string>()
-    const openHeap = new MinHeap<SearchNode>((left, right) => {
-      if (left.f !== right.f) {
-        return left.f - right.f
-      }
 
-      if (left.h !== right.h) {
-        return left.h - right.h
-      }
-
-      return left.g - right.g
-    })
-    const startH = this.heuristic({ x: startX, y: startY }, goal)
-
-    openHeap.push({ x: startX, y: startY, g: 0, h: startH, f: startH })
-
-    // A* 使用曼哈顿距离作为启发函数，适用于四方向网格，且不会高估剩余代价。
-    while (openHeap.size > 0) {
-      const current = openHeap.pop()
+    while (queue.length > 0) {
+      const current = queue.shift()
       if (!current) {
         break
       }
 
       const currentKey = toKey(current.x, current.y)
-      if (closedKeys.has(currentKey)) {
-        continue
-      }
-
       if (currentKey === goalKey) {
         return this.reconstructPath(cameFrom, currentKey)
       }
 
-      closedKeys.add(currentKey)
-
       for (const neighbor of this.getNeighbors(current.x, current.y)) {
         const neighborKey = toKey(neighbor.x, neighbor.y)
-        if (closedKeys.has(neighborKey) || !this.isWalkable(neighbor.x, neighbor.y, blockedKeys)) {
+        if (visited.has(neighborKey) || !this.isWalkable(neighbor.x, neighbor.y, blockedKeys)) {
           continue
         }
 
-        // 四方向移动时，每一步代价恒定为 1。
-        const tentativeG = current.g + 1
-        const knownG = gScores.get(neighborKey)
-        if (knownG !== undefined && tentativeG >= knownG) {
-          continue
-        }
-
-        const h = this.heuristic(neighbor, goal)
+        visited.add(neighborKey)
         cameFrom.set(neighborKey, currentKey)
-        gScores.set(neighborKey, tentativeG)
-        openHeap.push({
-          x: neighbor.x,
-          y: neighbor.y,
-          g: tentativeG,
-          h,
-          f: tentativeG + h,
-        })
+        queue.push(neighbor)
       }
     }
 
@@ -368,7 +245,14 @@ export class GridMap {
   private getNeighbors(x: number, y: number): Position[] {
     const neighbors: Position[] = []
 
-    for (const direction of DIRECTIONS) {
+    const directions: ReadonlyArray<Position> = [
+      { x: 1, y: 0 },
+      { x: -1, y: 0 },
+      { x: 0, y: 1 },
+      { x: 0, y: -1 },
+    ]
+
+    for (const direction of directions) {
       const nextX = x + direction.x
       const nextY = y + direction.y
       if (this.isInside(nextX, nextY)) {
@@ -393,57 +277,35 @@ export class GridMap {
     return path
   }
 
-  private normalizeGrid(cellsOrGrid: GridMapCell[][] | number[][]) {
-    return cellsOrGrid.map((row, y) => row.map((cellOrValue, x) => {
+  private normalizeTerrain(cellsOrGrid: GridMapCell[][] | number[][]) {
+    return cellsOrGrid.map((row) => row.map((cellOrValue) => {
       if (typeof cellOrValue === 'number') {
-        return cellOrValue === 1 ? 1 : 0
+        return {
+          kind: cellOrValue === 0 ? 'path' : 'build',
+        } satisfies TerrainCell
       }
 
-      const isSpawn = x === this.SPAWN_POINT.x && y === this.SPAWN_POINT.y
-      const isBase = x === this.BASE_POINT.x && y === this.BASE_POINT.y
-      if (isSpawn || isBase) {
-        return 0
-      }
-
-      return cellOrValue.walkable ? 0 : 1
+      return cloneTerrainCell({
+        kind: cellOrValue.kind,
+        label: cellOrValue.label,
+      })
     }))
   }
 
   private createCellView(x: number, y: number): GridMapCell {
-    // 对外仍然暴露结构化 Cell，方便现有状态同步与前端展示复用。
-    if (x === this.SPAWN_POINT.x && y === this.SPAWN_POINT.y) {
-      return { x, y, kind: 'gate', walkable: true, buildable: false, label: '入口' }
+    const terrainCell = this.terrain[y][x]
+    const occupied = this.occupiedKeys.has(toKey(x, y))
+    const walkable = WALKABLE_CELL_KINDS.has(terrainCell.kind)
+    const buildable = terrainCell.kind === 'build' && !occupied
+
+    return {
+      x,
+      y,
+      kind: terrainCell.kind,
+      walkable,
+      buildable,
+      label: terrainCell.label,
     }
-
-    if (x === this.BASE_POINT.x && y === this.BASE_POINT.y) {
-      return { x, y, kind: 'core', walkable: true, buildable: false, label: '基地' }
-    }
-
-    if (this.grid[y][x] === 1) {
-      return { x, y, kind: 'blocked', walkable: false, buildable: false }
-    }
-
-    return { x, y, kind: 'build', walkable: true, buildable: true }
-  }
-
-  private getValidationOrigins() {
-    const uniqueOrigins = new Map<string, Position>()
-    uniqueOrigins.set(toKey(this.SPAWN_POINT.x, this.SPAWN_POINT.y), clonePosition(this.SPAWN_POINT))
-
-    for (const origin of this.validationOrigins) {
-      if (!this.isInside(origin.x, origin.y)) {
-        continue
-      }
-
-      uniqueOrigins.set(toKey(origin.x, origin.y), clonePosition(origin))
-    }
-
-    return [...uniqueOrigins.values()]
-  }
-
-  private isSpecialPoint(x: number, y: number) {
-    return (x === this.SPAWN_POINT.x && y === this.SPAWN_POINT.y)
-      || (x === this.BASE_POINT.x && y === this.BASE_POINT.y)
   }
 
   private getFootprintPositions(x: number, y: number, width: number, height: number) {
@@ -459,5 +321,17 @@ export class GridMap {
     }
 
     return positions
+  }
+
+  private static isStraightLinePath(spawn: Position, base: Position, x: number, y: number) {
+    if (spawn.x === base.x && x === spawn.x) {
+      return y >= Math.min(spawn.y, base.y) && y <= Math.max(spawn.y, base.y)
+    }
+
+    if (spawn.y === base.y && y === spawn.y) {
+      return x >= Math.min(spawn.x, base.x) && x <= Math.max(spawn.x, base.x)
+    }
+
+    return false
   }
 }

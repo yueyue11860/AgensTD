@@ -1,8 +1,8 @@
 import type { Server as HttpServer } from 'http'
 import { Server, type Socket } from 'socket.io'
+import { Room } from '../core/Room'
 import { projectFrontendGameState } from '../core/state-projection'
 import type { PlayerIdentity } from '../domain/actions'
-import { GameEngine } from '../core/game-engine'
 import type { ServerConfig } from '../config/server-config'
 import { submitAction } from './action-submission'
 import { ActionRateLimiter } from './action-rate-limiter'
@@ -22,13 +22,16 @@ export class SocketGateway {
 
   private readonly config: ServerConfig
 
+  private readonly room: Room
+
   constructor(
     httpServer: HttpServer,
-    private readonly engine: GameEngine,
+    room: Room,
     config: ServerConfig,
     private readonly actionLimiter: ActionRateLimiter,
   ) {
     this.config = config
+    this.room = room
     this.io = new Server(httpServer, {
       cors: {
         origin: config.corsOrigin === '*' ? true : config.corsOrigin,
@@ -51,20 +54,34 @@ export class SocketGateway {
       this.handleConnection(socket)
     })
 
-    this.engine.onTick((state) => {
+    this.room.engine.onTick((state) => {
       this.io.emit('tick_update', projectFrontendGameState(state, this.config))
     })
   }
 
   private handleConnection(socket: Socket) {
     const identity = this.resolvePlayerIdentity(socket)
-    this.engine.registerPlayer(identity)
+    const assignedSlot = this.room.joinPlayer(identity.playerId)
+    if (!assignedSlot) {
+      socket.emit('engine_error', {
+        code: 'ROOM_FULL',
+        message: 'Room is full',
+      })
+      socket.disconnect(true)
+      return
+    }
 
-    socket.emit('tick_update', projectFrontendGameState(this.engine.getStateSnapshot(), this.config))
+    this.room.engine.registerPlayer(identity)
+
+    socket.emit('room_joined', {
+      roomId: this.room.id,
+      slot: assignedSlot,
+    })
+    socket.emit('tick_update', projectFrontendGameState(this.room.engine.getStateSnapshot(), this.config))
 
     socket.on('send_action', (payload: unknown) => {
       const submission = submitAction({
-        engine: this.engine,
+        engine: this.room.engine,
         limiter: this.actionLimiter,
         player: identity,
         payload,
@@ -87,7 +104,8 @@ export class SocketGateway {
     })
 
     socket.on('disconnect', () => {
-      this.engine.markPlayerDisconnected(identity.playerId)
+      this.room.leavePlayer(identity.playerId)
+      this.room.engine.markPlayerDisconnected(identity.playerId)
     })
   }
 

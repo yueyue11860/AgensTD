@@ -6,6 +6,7 @@ import type {
   EnemyTraitState,
   Position,
 } from '../../domain/game-state'
+import { LOOP_REENTRY_OFFSET } from '../../config/arena-layout'
 
 const POSITION_EPSILON = 0.0001
 
@@ -20,6 +21,12 @@ function isSamePosition(left: Position, right: Position) {
 export interface EnemyDeathSplitRequest {
   kind: EnemyKind
   count: number
+}
+
+export interface EnemyRouteState {
+  path: Position[]
+  pathIndex: number
+  loopStartIndex: number | null
 }
 
 export class Enemy {
@@ -51,6 +58,8 @@ export class Enemy {
 
   pathIndex: number
 
+  loopStartIndex: number | null
+
   lastDamagedByPlayerId: string | null
 
   activeEffects: EnemyStatusEffectState[]
@@ -78,10 +87,34 @@ export class Enemy {
     this.baseDamage = state.baseDamage
     this.currentPath = state.path.map(clonePosition)
     this.pathIndex = state.pathIndex
+    this.loopStartIndex = null
     this.lastDamagedByPlayerId = state.lastDamagedByPlayerId
     this.activeEffects = state.activeEffects.map((effect) => ({ ...effect }))
     this.traits = (state.traits ?? []).map((trait) => ({ ...trait }))
     this.basePoint = state.path.length > 0 ? clonePosition(state.path[state.path.length - 1]) : null
+  }
+
+  setRoute(route: Position[], options?: { pathIndex?: number, loopStartIndex?: number | null, position?: Position }) {
+    if (route.length === 0) {
+      this.currentPath = [{ x: this.x, y: this.y }]
+      this.pathIndex = 0
+      this.loopStartIndex = null
+      this.basePoint = null
+      return false
+    }
+
+    this.currentPath = route.map(clonePosition)
+    this.pathIndex = this.normalizePathIndex(options?.pathIndex ?? 0, this.currentPath.length)
+    this.loopStartIndex = this.normalizeLoopStartIndex(options?.loopStartIndex ?? null, this.currentPath.length)
+    this.basePoint = clonePosition(this.currentPath[this.currentPath.length - 1])
+    this.reachedBase = false
+
+    if (options?.position) {
+      this.x = options.position.x
+      this.y = options.position.y
+    }
+
+    return true
   }
 
   get speed() {
@@ -205,7 +238,13 @@ export class Enemy {
     this.activeEffects = nextEffects
   }
 
-  recalculatePath(currentX: number, currentY: number, nextPath: Position[] | null, basePoint: Position) {
+  recalculatePath(
+    currentX: number,
+    currentY: number,
+    nextPath: Position[] | null,
+    basePoint: Position,
+    options?: { loopStartIndex?: number | null },
+  ) {
     this.x = currentX
     this.y = currentY
     this.reachedBase = false
@@ -232,9 +271,11 @@ export class Enemy {
       rebuiltPath.push(clonePosition(basePoint))
     }
 
-    this.currentPath = rebuiltPath
-    this.pathIndex = 0
-    return true
+    return this.setRoute(rebuiltPath, {
+      pathIndex: 0,
+      loopStartIndex: options?.loopStartIndex ?? null,
+      position: { x: currentX, y: currentY },
+    })
   }
 
   move(deltaTime: number, onReachedBase?: (enemy: Enemy) => void) {
@@ -244,8 +285,13 @@ export class Enemy {
 
     let remainingDistance = this.speed * deltaTime
 
-    while (remainingDistance > 0 && this.pathIndex < this.currentPath.length - 1) {
-      const target = this.currentPath[this.pathIndex + 1]
+    while (remainingDistance > 0) {
+      const targetIndex = this.getNextTargetIndex()
+      if (targetIndex === null) {
+        break
+      }
+
+      const target = this.currentPath[targetIndex]
       const deltaX = target.x - this.x
       const deltaY = target.y - this.y
       const distanceToTarget = Math.hypot(deltaX, deltaY)
@@ -253,14 +299,14 @@ export class Enemy {
       if (distanceToTarget <= POSITION_EPSILON) {
         this.x = target.x
         this.y = target.y
-        this.pathIndex += 1
+        this.pathIndex = targetIndex
         continue
       }
 
       if (remainingDistance >= distanceToTarget) {
         this.x = target.x
         this.y = target.y
-        this.pathIndex += 1
+        this.pathIndex = targetIndex
         remainingDistance -= distanceToTarget
         continue
       }
@@ -274,6 +320,7 @@ export class Enemy {
     if (
       !this.reachedBase
       && this.basePoint
+      && this.loopStartIndex === null
       && isSamePosition({ x: this.x, y: this.y }, this.basePoint)
       && this.pathIndex >= this.currentPath.length - 1
     ) {
@@ -297,6 +344,14 @@ export class Enemy {
 
   getRemainingPathDistance() {
     return Math.max(0, this.currentPath.length - this.pathIndex - 1)
+  }
+
+  getRouteState(): EnemyRouteState {
+    return {
+      path: this.currentPath.map(clonePosition),
+      pathIndex: this.pathIndex,
+      loopStartIndex: this.loopStartIndex,
+    }
   }
 
   toState(): EnemyState {
@@ -421,5 +476,41 @@ export class Enemy {
 
   private mergeDefenseModifier(currentModifier?: number, nextModifier?: number) {
     return Math.min(currentModifier ?? 0, nextModifier ?? 0)
+  }
+
+  private getNextTargetIndex() {
+    if (this.pathIndex < this.currentPath.length - 1) {
+      return this.pathIndex + 1
+    }
+
+    if (this.loopStartIndex !== null && this.loopStartIndex >= 0 && this.loopStartIndex < this.currentPath.length) {
+      return Math.max(0, this.currentPath.length - LOOP_REENTRY_OFFSET)
+    }
+
+    return null
+  }
+
+  private normalizePathIndex(pathIndex: number, pathLength: number) {
+    if (!Number.isInteger(pathIndex)) {
+      return 0
+    }
+
+    if (pathLength <= 0) {
+      return 0
+    }
+
+    return Math.max(0, Math.min(pathLength - 1, pathIndex))
+  }
+
+  private normalizeLoopStartIndex(loopStartIndex: number | null, pathLength: number) {
+    if (loopStartIndex === null || !Number.isInteger(loopStartIndex)) {
+      return null
+    }
+
+    if (pathLength <= 0) {
+      return null
+    }
+
+    return Math.max(0, Math.min(pathLength - 1, loopStartIndex))
   }
 }

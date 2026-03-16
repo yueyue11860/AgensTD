@@ -3,6 +3,8 @@ import type { TowerBehaviorDefinition, TowerBehaviorKind, TowerFireRate } from '
 export type PlayerKind = 'human' | 'agent'
 export type ConnectionStatus = 'connected' | 'disconnected'
 export type LogLevel = 'info' | 'warn' | 'error'
+export type MatchStatus = 'waiting' | 'running' | 'finished'
+export type MatchOutcome = 'victory' | 'defeat'
 export type EnemyKind =
   | 'runner'
   | 'swift'
@@ -29,7 +31,7 @@ export interface Position {
   y: number
 }
 
-export type GameMapCellKind = 'gate' | 'core' | 'build' | 'blocked'
+export type GameMapCellKind = 'gate' | 'core' | 'path' | 'build' | 'blocked'
 
 export interface GameMapCellState extends Position {
   kind: GameMapCellKind
@@ -49,6 +51,12 @@ export interface WaveState {
   startedAtTick: number
   endsAtTick: number | null
   remainingSpawns: number
+}
+
+export interface MatchResultState {
+  outcome: MatchOutcome
+  decidedAtTick: number
+  reason?: string
 }
 
 export interface EnemyStatusEffectTemplate {
@@ -153,6 +161,11 @@ export interface GameState {
   tick: number
   tickRateMs: number
   startedAt: number
+  status: MatchStatus
+  result: MatchResultState | null
+  playerCount: number
+  maxCapacity: number
+  overloadTicks: number
   map: GameMapState
   base: BaseState
   wave: WaveState

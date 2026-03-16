@@ -1,4 +1,6 @@
+import type { WaveConfig } from '../../../shared/contracts/game'
 import type { PlayerKind } from '../domain/game-state'
+import { defaultWaveConfigs } from './default-wave-configs'
 
 export interface AuthTokenConfig {
   token: string
@@ -24,6 +26,7 @@ export interface ServerConfig {
   supabaseUrl: string | null
   supabaseServiceRoleKey: string | null
   authTokens: AuthTokenConfig[]
+  waveConfigs: WaveConfig[]
 }
 
 function readNumber(name: string, fallback: number) {
@@ -78,8 +81,8 @@ export function createServerConfig(): ServerConfig {
     corsOrigin: process.env.CORS_ORIGIN ?? '*',
     matchId: process.env.MATCH_ID ?? createDefaultMatchId(),
     tickRateMs: readNumber('TICK_RATE_MS', 100),
-    mapWidth: readNumber('MAP_WIDTH', 12),
-    mapHeight: readNumber('MAP_HEIGHT', 8),
+    mapWidth: readNumber('MAP_WIDTH', 30),
+    mapHeight: readNumber('MAP_HEIGHT', 30),
     playerStartingGold: readNumber('PLAYER_STARTING_GOLD', 200),
     authRequired: readBoolean('AUTH_REQUIRED', true),
     actionRateLimitWindowMs: readNumber('ACTION_RATE_LIMIT_WINDOW_MS', 1000),
@@ -90,5 +93,6 @@ export function createServerConfig(): ServerConfig {
     supabaseUrl: readString('SUPABASE_URL'),
     supabaseServiceRoleKey: readString('SUPABASE_SERVICE_ROLE_KEY'),
     authTokens: buildAuthTokens(),
+    waveConfigs: defaultWaveConfigs,
   }
 }

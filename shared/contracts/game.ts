@@ -8,9 +8,24 @@ export type EnemyThreat = 'low' | 'medium' | 'high' | 'boss'
 
 export type GameStatus = 'connecting' | 'waiting' | 'running' | 'paused' | 'finished'
 
+export type GameOutcome = 'victory' | 'defeat'
+
 export interface GridPosition {
   x: number
   y: number
+}
+
+export interface SpawnGroup {
+  enemyType: string
+  count: number
+  interval: number
+  delay: number
+}
+
+export interface WaveConfig {
+  waveNumber: number
+  prepTime: number
+  groups: SpawnGroup[]
 }
 
 export interface PlayerIdentity {
@@ -113,6 +128,11 @@ export interface GameState {
   matchId?: string
   tick: number
   status: GameStatus
+  result: {
+    outcome: GameOutcome
+    decidedAtTick: number
+    reason?: string
+  } | null
   map: {
     width: number
     height: number

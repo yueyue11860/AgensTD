@@ -138,7 +138,10 @@ export function TowerDefenseFrontendPage() {
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
                   <p className="text-[11px] uppercase tracking-[0.2em] text-slate-400">比赛状态</p>
-                  <p className="mt-2 text-white">{gameState?.status ?? 'waiting'}</p>
+                  <p className="mt-2 text-white">
+                    {gameState?.status ?? 'waiting'}
+                    {gameState?.result ? ` · ${gameState.result.outcome}` : ''}
+                  </p>
                 </div>
               </div>
 
@@ -146,6 +149,19 @@ export function TowerDefenseFrontendPage() {
                 <div className="mt-4 flex items-start gap-3 rounded-2xl border border-alert-red/20 bg-alert-red/10 px-4 py-3 text-sm text-alert-red">
                   <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>{error}</span>
+                </div>
+              ) : null}
+
+              {gameState?.result ? (
+                <div className={cx(
+                  'mt-4 rounded-2xl border px-4 py-3 text-sm',
+                  gameState.result.outcome === 'victory'
+                    ? 'border-acid-green/20 bg-acid-green/10 text-acid-green'
+                    : 'border-alert-red/20 bg-alert-red/10 text-alert-red',
+                )}>
+                  {gameState.result.outcome === 'victory' ? '胜利' : '失败'}
+                  {gameState.result.reason ? ` · ${gameState.result.reason}` : ''}
+                  {` · Tick ${gameState.result.decidedAtTick}`}
                 </div>
               ) : null}
             </article>

@@ -3,19 +3,121 @@ import { EnemyFactory } from './enemy-factory'
 import { Enemy } from './entities/enemy'
 import { Tower } from './entities/tower'
 import { TowerBuilder } from './tower-builder'
-import { GridMap } from './grid-map'
+import { GridMap, type GridMapCell } from './grid-map'
+import { WaveManager } from './WaveManager'
 import type { BuildTowerAction, ClientAction, PlayerIdentity, QueuedAction, UpgradeTowerAction } from '../domain/actions'
-import type { EnemyKind, GameLogEntry, GameState, PlayerState, Position, TowerState } from '../domain/game-state'
+import type { EnemyKind, GameLogEntry, GameState, PlayerState, Position } from '../domain/game-state'
 import type { ServerConfig } from '../config/server-config'
 import type { TowerCatalogEntry } from '../domain/tower-catalog'
-import { towerCatalog } from '../domain/tower-catalog'
-import { buildWaveSpawnSchedule, buildWaveTimeline, getWaveStateForTick, type ScheduledEnemySpawn, type WaveTimelineEntry, waveCatalog } from '../domain/wave-catalog'
+import {
+  WAYPOINTS_MAP,
+  createArenaMapCells,
+  getArenaLoopStartIndex,
+  getArenaPrimaryBasePoint,
+  getArenaPrimarySpawnPoint,
+} from '../config/arena-layout'
 
 type TickListener = (state: GameState) => void
 type ActionListener = (action: QueuedAction) => void
 
+export type EngineSlotId = 'P1' | 'P2' | 'P3' | 'P4'
+
+export interface EngineLaneRoute {
+  slot: EngineSlotId
+  spawn: Position
+  path: Position[]
+  loopStartIndex: number
+}
+
+export interface GameEngineOptions {
+  roomId?: string
+  playerCount?: number
+  activeSlots?: EngineSlotId[]
+  mapCells?: GridMapCell[][]
+  laneRoutes?: Record<EngineSlotId, EngineLaneRoute>
+  spawnPoint?: Position
+  basePoint?: Position
+  spawnMultiplier?: number
+}
+
+interface EnemySpawnInstruction {
+  spawn: Position
+  path: Position[]
+  pathIndex: number
+  loopStartIndex: number | null
+}
+
+const SLOT_ORDER: readonly EngineSlotId[] = ['P1', 'P2', 'P3', 'P4']
+
+function clonePosition(position: Position): Position {
+  return { x: position.x, y: position.y }
+}
+
+function clonePath(path: readonly Position[]) {
+  return path.map(clonePosition)
+}
+
+function normalizePlayerCount(playerCount: number) {
+  if (!Number.isFinite(playerCount)) {
+    return 1
+  }
+
+  return Math.max(1, Math.min(4, Math.floor(playerCount)))
+}
+
+function normalizeActiveSlots(activeSlots?: EngineSlotId[]) {
+  const uniqueSlots = new Set<EngineSlotId>()
+
+  for (const slot of activeSlots ?? []) {
+    if (SLOT_ORDER.includes(slot)) {
+      uniqueSlots.add(slot)
+    }
+  }
+
+  return uniqueSlots.size > 0 ? [...uniqueSlots] : (['P1'] as EngineSlotId[])
+}
+
+function createFallbackLaneRoutes(): Record<EngineSlotId, EngineLaneRoute> {
+  return {
+    P1: {
+      slot: 'P1',
+      spawn: clonePosition(WAYPOINTS_MAP.P1[0]),
+      path: clonePath(WAYPOINTS_MAP.P1),
+      loopStartIndex: getArenaLoopStartIndex(WAYPOINTS_MAP.P1),
+    },
+    P2: {
+      slot: 'P2',
+      spawn: clonePosition(WAYPOINTS_MAP.P2[0]),
+      path: clonePath(WAYPOINTS_MAP.P2),
+      loopStartIndex: getArenaLoopStartIndex(WAYPOINTS_MAP.P2),
+    },
+    P3: {
+      slot: 'P3',
+      spawn: clonePosition(WAYPOINTS_MAP.P3[0]),
+      path: clonePath(WAYPOINTS_MAP.P3),
+      loopStartIndex: getArenaLoopStartIndex(WAYPOINTS_MAP.P3),
+    },
+    P4: {
+      slot: 'P4',
+      spawn: clonePosition(WAYPOINTS_MAP.P4[0]),
+      path: clonePath(WAYPOINTS_MAP.P4),
+      loopStartIndex: getArenaLoopStartIndex(WAYPOINTS_MAP.P4),
+    },
+  }
+}
+
+function createFallbackMapCells(width: number, height: number) {
+  return {
+    cells: createArenaMapCells(width, height),
+    spawnPoint: getArenaPrimarySpawnPoint(),
+    basePoint: getArenaPrimaryBasePoint(),
+  }
+}
+
 export class GameEngine {
   private readonly config: ServerConfig
+
+  private readonly roomId: string
 
   private readonly actionQueue = new ActionQueue()
 
@@ -33,43 +135,91 @@ export class GameEngine {
 
   private towers: Tower[] = []
 
-  private readonly waveTimeline: WaveTimelineEntry[]
+  private readonly waveManager: WaveManager
 
-  private readonly spawnSchedule: ScheduledEnemySpawn[]
+  private readonly laneRoutes: Record<EngineSlotId, EngineLaneRoute>
 
-  private nextSpawnScheduleIndex = 0
+  private activeSlots: EngineSlotId[]
 
-  private shouldRecalculateEnemyPaths = false
+  private playerCount: number
 
-  constructor(config: ServerConfig) {
+  private maxCapacity: number
+
+  private overloadTicks = 0
+
+  private spawnRotation = 0
+
+  constructor(config: ServerConfig, options: GameEngineOptions = {}) {
     this.config = config
+    this.roomId = options.roomId ?? 'default'
+    this.playerCount = normalizePlayerCount(options.playerCount ?? 1)
+    this.maxCapacity = this.playerCount * 10
+    this.activeSlots = normalizeActiveSlots(options.activeSlots)
+    this.laneRoutes = options.laneRoutes ?? createFallbackLaneRoutes()
 
-    const laneRow = Math.floor(config.mapHeight / 2)
-    const spawn = { x: 0, y: laneRow }
-    const base = { x: config.mapWidth - 1, y: laneRow }
-    this.gridMap = GridMap.create(config.mapWidth, config.mapHeight, spawn, base)
-    this.waveTimeline = buildWaveTimeline(waveCatalog)
-    this.spawnSchedule = buildWaveSpawnSchedule(this.waveTimeline)
+    const fallbackMap = createFallbackMapCells(config.mapWidth, config.mapHeight)
+    const spawnPoint = options.spawnPoint ?? fallbackMap.spawnPoint
+    const basePoint = options.basePoint ?? fallbackMap.basePoint
+    this.gridMap = new GridMap(options.mapCells ?? fallbackMap.cells, spawnPoint, basePoint)
+
+    this.waveManager = new WaveManager(config.waveConfigs, {
+      onSpawn: (enemyType) => {
+        if (this.state.status === 'finished') {
+          return
+        }
+
+        const currentWave = this.waveManager.getCurrentWave()
+        const route = this.getNextSpawnRoute()
+        this.spawnEnemyByKind(
+          enemyType as EnemyKind,
+          currentWave?.waveNumber ?? null,
+          currentWave ? `第 ${currentWave.waveNumber} 波` : 'WaveManager',
+          {
+            spawn: clonePosition(route.spawn),
+            path: clonePath(route.path),
+            pathIndex: 0,
+            loopStartIndex: route.loopStartIndex,
+          },
+        )
+      },
+      isMapClear: () => this.enemies.length === 0,
+      onVictory: () => {
+        this.finishMatch('victory', 'All waves cleared')
+      },
+    }, {
+      spawnMultiplier: options.spawnMultiplier ?? this.playerCount,
+    })
 
     this.state = {
       matchId: config.matchId,
       tick: 0,
       tickRateMs: config.tickRateMs,
       startedAt: Date.now(),
+      status: 'waiting',
+      result: null,
+      playerCount: this.playerCount,
+      maxCapacity: this.maxCapacity,
+      overloadTicks: this.overloadTicks,
       map: {
         width: config.mapWidth,
         height: config.mapHeight,
         cells: this.gridMap.toCells(),
-        spawn,
-        base,
+        spawn: clonePosition(spawnPoint),
+        base: clonePosition(basePoint),
       },
       base: {
-        x: base.x,
-        y: base.y,
+        x: basePoint.x,
+        y: basePoint.y,
         hp: 20,
         maxHp: 20,
       },
-      wave: getWaveStateForTick(0, this.waveTimeline, this.spawnSchedule, this.nextSpawnScheduleIndex),
+      wave: {
+        index: 0,
+        label: '无波次',
+        startedAtTick: 0,
+        endsAtTick: null,
+        remainingSpawns: 0,
+      },
       players: [],
       enemies: [],
       towers: [],
@@ -77,12 +227,16 @@ export class GameEngine {
       logs: [],
     }
 
-    this.gridMap.setValidationOrigins([spawn])
+    this.updateWaveState()
 
     this.appendLog('info', 'GameEngine initialized', {
+      roomId: this.roomId,
       tickRateMs: config.tickRateMs,
       mapWidth: config.mapWidth,
       mapHeight: config.mapHeight,
+      playerCount: this.playerCount,
+      maxCapacity: this.maxCapacity,
+      activeSlots: this.activeSlots,
     })
   }
 
@@ -108,6 +262,9 @@ export class GameEngine {
     }
 
     this.state.players.push(player)
+    if (this.state.status === 'waiting') {
+      this.state.status = 'running'
+    }
     this.appendLog('info', 'Player registered', { playerId: player.id, kind: player.kind })
   }
 
@@ -119,6 +276,19 @@ export class GameEngine {
 
     player.connectionStatus = 'disconnected'
     this.appendLog('warn', 'Player disconnected', { playerId })
+  }
+
+  setPlayerCount(playerCount: number) {
+    this.playerCount = normalizePlayerCount(playerCount)
+    this.maxCapacity = this.playerCount * 10
+    this.waveManager.setSpawnMultiplier(this.playerCount)
+    this.state.playerCount = this.playerCount
+    this.state.maxCapacity = this.maxCapacity
+  }
+
+  setActiveSlots(activeSlots: EngineSlotId[]) {
+    this.activeSlots = normalizeActiveSlots(activeSlots)
+    this.spawnRotation = 0
   }
 
   enqueueAction(player: PlayerIdentity, action: ClientAction) {
@@ -170,20 +340,25 @@ export class GameEngine {
     this.state.tick += 1
     this.processQueuedActions()
 
-    // 严格按 Tick 顺序执行：新塔建成后先重算活体敌人的路径，再结算塔攻击与移动。
-    if (this.shouldRecalculateEnemyPaths) {
-      this.recalculateEnemyPaths()
-      this.shouldRecalculateEnemyPaths = false
+    if (this.state.status === 'finished') {
+      this.updateWaveState()
+      this.syncRuntimeState()
+      this.state.pendingActions = this.actionQueue.size()
+
+      const snapshot = this.getStateSnapshot()
+      for (const listener of this.tickListeners) {
+        listener(snapshot)
+      }
+      return
     }
 
     this.resolveTowerAttacks()
     this.collectDefeatedEnemies()
-    const reachedBaseEnemyIds = this.updateEnemyPositions(this.config.tickRateMs / 1000)
+    this.updateEnemyPositions(this.config.tickRateMs / 1000)
     this.collectDefeatedEnemies()
-    this.resolveEnemiesAtBase(reachedBaseEnemyIds)
-    this.spawnEnemiesForCurrentTick()
+    this.waveManager.update()
     this.updateWaveState()
-    this.refreshRouteValidationOrigins()
+    this.evaluateOverloadState()
     this.syncRuntimeState()
     this.state.pendingActions = this.actionQueue.size()
 
@@ -193,6 +368,8 @@ export class GameEngine {
       towers: this.towers.length,
       enemies: this.enemies.length,
       pendingActions: this.state.pendingActions,
+      overloadTicks: this.overloadTicks,
+      maxCapacity: this.maxCapacity,
     })
 
     const snapshot = this.getStateSnapshot()
@@ -213,6 +390,14 @@ export class GameEngine {
   }
 
   private handleAction(queuedAction: QueuedAction) {
+    if (this.state.status === 'finished') {
+      this.appendLog('warn', 'Action ignored because match is already finished', {
+        playerId: queuedAction.player.playerId,
+        action: queuedAction.action.action,
+      })
+      return
+    }
+
     switch (queuedAction.action.action) {
       case 'BUILD_TOWER':
         this.handleBuildTower(queuedAction as QueuedAction & { action: BuildTowerAction })
@@ -244,9 +429,8 @@ export class GameEngine {
       return
     }
 
-    this.refreshRouteValidationOrigins()
     if (!this.gridMap.canBuildTower(x, y, stats.width, stats.height)) {
-      this.appendLog('warn', 'Build rejected because tower would block the route to base', {
+      this.appendLog('warn', 'Build rejected because placement is not on high ground', {
         playerId: player.id,
         x,
         y,
@@ -281,7 +465,6 @@ export class GameEngine {
     this.towers.push(builtTower.tower)
     this.gridMap.occupy(x, y, stats.width, stats.height)
     this.syncMapCells()
-    this.shouldRecalculateEnemyPaths = true
     this.appendLog('info', 'Tower built', { playerId: player.id, towerId: builtTower.state.id, type, x, y })
   }
 
@@ -329,7 +512,7 @@ export class GameEngine {
     }
 
     if (!this.canUpgradeTowerFootprint(currentTower, nextConfig)) {
-      this.appendLog('warn', 'Upgrade rejected because upgraded footprint would block placement or pathing', {
+      this.appendLog('warn', 'Upgrade rejected because upgraded footprint would overlap invalid terrain', {
         playerId: player.id,
         towerId: currentTower.id,
         type: nextConfig.type,
@@ -345,7 +528,6 @@ export class GameEngine {
       this.gridMap.release(currentTower.x, currentTower.y, currentTower.width, currentTower.height)
       this.gridMap.occupy(currentTower.x, currentTower.y, nextConfig.width, nextConfig.height)
       this.syncMapCells()
-      this.shouldRecalculateEnemyPaths = true
     }
 
     this.appendLog('info', 'Tower upgraded', {
@@ -355,26 +537,6 @@ export class GameEngine {
       toType: nextConfig.type,
       cost: nextConfig.cost,
     })
-  }
-
-  private spawnEnemiesForCurrentTick() {
-    let spawnedAtLeastOneEnemy = false
-
-    while (this.nextSpawnScheduleIndex < this.spawnSchedule.length) {
-      const scheduledSpawn = this.spawnSchedule[this.nextSpawnScheduleIndex]
-      if (scheduledSpawn.dueTick > this.state.tick) {
-        break
-      }
-
-      this.nextSpawnScheduleIndex += 1
-      if (this.spawnEnemy(scheduledSpawn)) {
-        spawnedAtLeastOneEnemy = true
-      }
-    }
-
-    if (spawnedAtLeastOneEnemy) {
-      this.refreshRouteValidationOrigins()
-    }
   }
 
   private resolveTowerAttacks() {
@@ -438,7 +600,12 @@ export class GameEngine {
     const defeatedEnemyIds = new Set(defeatedEnemies.map((enemy) => enemy.id))
     this.enemies = this.enemies.filter((enemy) => !defeatedEnemyIds.has(enemy.id))
 
-    const splitSpawnQueue: Array<{ kind: EnemyKind, count: number, position: Position, sourceEnemyId: string }> = []
+    const splitSpawnQueue: Array<{
+      kind: EnemyKind
+      count: number
+      route: EnemySpawnInstruction
+      sourceEnemyId: string
+    }> = []
 
     for (const enemy of defeatedEnemies) {
       const owner = this.findRewardOwner(enemy)
@@ -447,12 +614,18 @@ export class GameEngine {
         owner.score += enemy.rewardGold
       }
 
+      const routeState = enemy.getRouteState()
       const splitRequests = enemy.collectSplitOnDeathSpawns()
       for (const splitRequest of splitRequests) {
         splitSpawnQueue.push({
           kind: splitRequest.kind,
           count: splitRequest.count,
-          position: { x: enemy.x, y: enemy.y },
+          route: {
+            spawn: { x: enemy.x, y: enemy.y },
+            path: routeState.path,
+            pathIndex: routeState.pathIndex,
+            loopStartIndex: routeState.loopStartIndex,
+          },
           sourceEnemyId: enemy.id,
         })
       }
@@ -466,7 +639,7 @@ export class GameEngine {
           splitSpawn.kind,
           null,
           `split:${splitSpawn.sourceEnemyId}`,
-          splitSpawn.position,
+          splitSpawn.route,
         )
 
         if (!splitEnemy) {
@@ -474,48 +647,17 @@ export class GameEngine {
         }
       }
     }
-
-    this.refreshRouteValidationOrigins()
   }
 
   private updateEnemyPositions(deltaTime: number) {
-    const reachedBaseEnemyIds = new Set<string>()
-
     for (const enemy of this.enemies) {
       enemy.updateEffects(deltaTime)
       if (!enemy.isAlive()) {
         continue
       }
 
-      enemy.move(deltaTime, (reachedEnemy) => {
-        reachedBaseEnemyIds.add(reachedEnemy.id)
-      })
+      enemy.move(deltaTime)
     }
-
-    return reachedBaseEnemyIds
-  }
-
-  private resolveEnemiesAtBase(reachedBaseEnemyIds: Set<string>) {
-    if (reachedBaseEnemyIds.size === 0) {
-      return
-    }
-
-    const survivors: Enemy[] = []
-    for (const enemy of this.enemies) {
-      if (!reachedBaseEnemyIds.has(enemy.id)) {
-        survivors.push(enemy)
-        continue
-      }
-
-      this.state.base.hp = Math.max(0, this.state.base.hp - enemy.baseDamage)
-      this.appendLog('warn', 'Enemy reached the base', {
-        enemyId: enemy.id,
-        baseDamage: enemy.baseDamage,
-        remainingBaseHp: this.state.base.hp,
-      })
-    }
-
-    this.enemies = survivors
   }
 
   private ensurePlayer(identity: PlayerIdentity) {
@@ -536,7 +678,7 @@ export class GameEngine {
     for (let offsetY = 0; offsetY < height; offsetY += 1) {
       for (let offsetX = 0; offsetX < width; offsetX += 1) {
         const cell = this.gridMap.getCell(x + offsetX, y + offsetY)
-        if (cell === null || !cell.buildable || !cell.walkable) {
+        if (cell === null || !cell.buildable) {
           return false
         }
       }
@@ -553,7 +695,6 @@ export class GameEngine {
     this.gridMap.release(currentTower.x, currentTower.y, currentTower.width, currentTower.height)
 
     try {
-      this.refreshRouteValidationOrigins()
       return this.isValidBuildPlacement(currentTower.x, currentTower.y, nextConfig.width, nextConfig.height)
         && this.gridMap.canBuildTower(currentTower.x, currentTower.y, nextConfig.width, nextConfig.height)
     } finally {
@@ -575,73 +716,90 @@ export class GameEngine {
     }
   }
 
-  private refreshRouteValidationOrigins() {
-    const origins: Position[] = [this.state.map.spawn]
-
-    for (const enemy of this.enemies) {
-      const anchor = enemy.getGridAnchor()
-      origins.push({ x: anchor.x, y: anchor.y })
-    }
-
-    this.gridMap.setValidationOrigins(origins)
-  }
-
-  private recalculateEnemyPaths() {
-    for (const enemy of this.enemies) {
-      const start = enemy.getGridAnchor()
-      const path = this.gridMap.findPath(start.x, start.y, this.gridMap.BASE_POINT.x, this.gridMap.BASE_POINT.y)
-      const pathFound = enemy.recalculatePath(enemy.x, enemy.y, path, this.gridMap.BASE_POINT)
-      if (!pathFound) {
-        this.appendLog('warn', 'Enemy cannot find a recalculated path and will hold position', { enemyId: enemy.id })
-      }
-    }
-  }
-
   private syncMapCells() {
     this.state.map.cells = this.gridMap.toCells()
   }
 
   private updateWaveState() {
-    this.state.wave = getWaveStateForTick(
-      this.state.tick,
-      this.waveTimeline,
-      this.spawnSchedule,
-      this.nextSpawnScheduleIndex,
-    )
-  }
+    const snapshot = this.waveManager.getSnapshot()
+    const currentWave = snapshot.currentWave
 
-  private spawnEnemy(scheduledSpawn: ScheduledEnemySpawn) {
-    return Boolean(
-      this.spawnEnemyByKind(
-        scheduledSpawn.kind,
-        scheduledSpawn.waveIndex,
-        scheduledSpawn.waveLabel,
-        this.state.map.spawn,
-      ),
-    )
-  }
-
-  private spawnEnemyByKind(kind: EnemyKind, waveIndex: number | null, waveLabel: string, spawn: Position) {
-    const anchor = {
-      x: Math.round(spawn.x),
-      y: Math.round(spawn.y),
+    if (!currentWave) {
+      this.state.wave = {
+        index: 0,
+        label: snapshot.victoryTriggered ? '已完成' : '无波次',
+        startedAtTick: 0,
+        endsAtTick: null,
+        remainingSpawns: 0,
+      }
+      return
     }
 
-    const path = this.gridMap.findPath(anchor.x, anchor.y, this.gridMap.BASE_POINT.x, this.gridMap.BASE_POINT.y)
-    if (path === null) {
-      this.appendLog('error', 'Enemy spawn skipped because no path exists to base', {
-        tick: this.state.tick,
-        kind,
-        waveIndex,
-      })
-      return null
+    const phaseLabel =
+      snapshot.state === 'PREP'
+        ? '准备中'
+        : snapshot.state === 'SPAWNING'
+          ? '出怪中'
+          : '清场中'
+
+    this.state.wave = {
+      index: currentWave.waveNumber,
+      label: `第 ${currentWave.waveNumber} 波 · ${phaseLabel}`,
+      startedAtTick: Math.max(0, this.state.tick - this.waveManager.getCurrentWaveElapsedTicks()),
+      endsAtTick: null,
+      remainingSpawns: snapshot.remainingSpawns,
+    }
+  }
+
+  private evaluateOverloadState() {
+    if (this.enemies.length >= this.maxCapacity) {
+      this.overloadTicks += 1
+    }
+    else if (this.overloadTicks > 0) {
+      this.overloadTicks = 0
     }
 
+    this.state.overloadTicks = this.overloadTicks
+    this.state.maxCapacity = this.maxCapacity
+    this.state.playerCount = this.playerCount
+
+    if (this.overloadTicks >= 100) {
+      this.finishMatch('defeat', `Overload persisted for ${this.overloadTicks} ticks`)
+    }
+  }
+
+  private finishMatch(outcome: 'victory' | 'defeat', reason: string) {
+    if (this.state.status === 'finished') {
+      return
+    }
+
+    this.state.status = 'finished'
+    this.state.result = {
+      outcome,
+      decidedAtTick: this.state.tick,
+      reason,
+    }
+
+    this.appendLog('info', 'Match finished', {
+      outcome,
+      reason,
+      tick: this.state.tick,
+      overloadTicks: this.overloadTicks,
+    })
+  }
+
+  private getNextSpawnRoute() {
+    const slot = this.activeSlots[this.spawnRotation % this.activeSlots.length] ?? 'P1'
+    this.spawnRotation = (this.spawnRotation + 1) % Math.max(1, this.activeSlots.length)
+    return this.laneRoutes[slot] ?? this.laneRoutes.P1
+  }
+
+  private spawnEnemyByKind(kind: EnemyKind, waveIndex: number | null, waveLabel: string, route: EnemySpawnInstruction) {
     const enemy = this.enemyFactory.createByCode({
       id: `enemy-${kind}-${this.state.tick}-${this.enemies.length + 1}`,
       code: kind,
-      spawn,
-      path,
+      spawn: route.spawn,
+      path: route.path,
     })
     if (!enemy) {
       this.appendLog('warn', 'Enemy spawn skipped because kind is unknown', {
@@ -651,7 +809,11 @@ export class GameEngine {
       return null
     }
 
-    enemy.recalculatePath(spawn.x, spawn.y, path, this.gridMap.BASE_POINT)
+    enemy.setRoute(route.path, {
+      pathIndex: route.pathIndex,
+      loopStartIndex: route.loopStartIndex,
+      position: route.spawn,
+    })
     this.enemies.push(enemy)
     this.appendLog('info', 'Enemy spawned', {
       enemyId: enemy.id,
@@ -660,6 +822,7 @@ export class GameEngine {
       waveLabel,
       x: enemy.x,
       y: enemy.y,
+      loopStartIndex: route.loopStartIndex,
     })
     return enemy
   }
@@ -676,6 +839,9 @@ export class GameEngine {
   }
 
   private syncRuntimeState() {
+    this.state.playerCount = this.playerCount
+    this.state.maxCapacity = this.maxCapacity
+    this.state.overloadTicks = this.overloadTicks
     this.state.enemies = this.enemies.map((enemy) => enemy.toState())
     this.state.towers = this.towers.map((tower) => tower.toState())
   }
