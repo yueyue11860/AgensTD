@@ -139,6 +139,10 @@ export interface GameUiStateUpdate {
   actionBar?: GameState['actionBar']
 }
 
+export interface GameNoticeUpdate {
+  notices: GameState['notices']
+}
+
 export interface GameState {
   matchId?: string
   tick: number
@@ -181,7 +185,6 @@ export interface GameStatePatch {
   towerDelta?: EntityDelta<TowerState>
   enemyDelta?: EntityDelta<EnemyState>
   wave?: GameState['wave']
-  notices?: GameState['notices']
   score?: GameState['score']
   updatedAt?: GameState['updatedAt']
   map?: GameState['map']

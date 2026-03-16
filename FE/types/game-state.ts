@@ -7,6 +7,7 @@ export type {
   EntityDelta,
   EnemyState,
   EnemyThreat,
+  GameNoticeUpdate,
   GameUiState,
   GameUiStateUpdate,
   GameStatePatch,

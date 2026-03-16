@@ -1,11 +1,11 @@
 import type { Server as HttpServer } from 'http'
 import { Server, type Socket } from 'socket.io'
 import { Room } from '../core/Room'
-import { projectFrontendGameState, projectFrontendGameStatePatch, projectFrontendUiStateUpdate } from '../core/state-projection'
+import { projectFrontendGameState, projectFrontendGameStatePatch, projectFrontendNoticeUpdate, projectFrontendUiStateUpdate } from '../core/state-projection'
 import type { PlayerIdentity } from '../domain/actions'
 import type { ServerConfig } from '../config/server-config'
 import type { FrontendGameState } from '../domain/frontend-game-state'
-import type { GameStatePatch, GameUiStateUpdate } from '../../../shared/contracts/game'
+import type { GameNoticeUpdate, GameStatePatch, GameUiStateUpdate } from '../../../shared/contracts/game'
 import { submitAction } from './action-submission'
 import { ActionRateLimiter } from './action-rate-limiter'
 import { authenticateGatewayToken, extractSocketToken, type GatewayPrincipal } from './gateway-auth'
@@ -67,10 +67,14 @@ export class SocketGateway {
       }
 
       const uiUpdate = projectFrontendUiStateUpdate(state, this.config, this.lastBroadcastState)
+      const noticeUpdate = projectFrontendNoticeUpdate(state, this.lastBroadcastState)
       const patch = projectFrontendGameStatePatch(state, this.config, this.lastBroadcastState)
-      this.lastBroadcastState = mergeFrontendUiStateUpdate(
-        mergeFrontendGameStatePatch(this.lastBroadcastState, patch),
-        uiUpdate,
+      this.lastBroadcastState = mergeFrontendNoticeUpdate(
+        mergeFrontendUiStateUpdate(
+          mergeFrontendGameStatePatch(this.lastBroadcastState, patch),
+          uiUpdate,
+        ),
+        noticeUpdate,
       )
 
       this.io.emit('tick_update', {
@@ -80,6 +84,10 @@ export class SocketGateway {
 
       if (Object.keys(uiUpdate).length > 0) {
         this.io.emit('ui_state_update', uiUpdate)
+      }
+
+      if (noticeUpdate) {
+        this.io.emit('notice_update', noticeUpdate)
       }
     })
   }
@@ -164,7 +172,6 @@ function mergeFrontendGameStatePatch(previousState: FrontendGameState | null, pa
     towers: patch.towers ?? applyEntityDelta(previousState.towers, patch.towerDelta),
     enemies: patch.enemies ?? applyEntityDelta(previousState.enemies, patch.enemyDelta),
     map: patch.map ?? previousState.map,
-    notices: patch.notices ?? previousState.notices,
   }
 }
 
@@ -177,6 +184,17 @@ function mergeFrontendUiStateUpdate(previousState: FrontendGameState | null, upd
     ...previousState,
     buildPalette: update.buildPalette ?? previousState.buildPalette,
     actionBar: update.actionBar ?? previousState.actionBar,
+  }
+}
+
+function mergeFrontendNoticeUpdate(previousState: FrontendGameState | null, update: GameNoticeUpdate | null) {
+  if (!previousState || !update) {
+    return previousState
+  }
+
+  return {
+    ...previousState,
+    notices: update.notices,
   }
 }
 

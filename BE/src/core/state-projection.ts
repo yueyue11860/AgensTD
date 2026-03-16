@@ -3,7 +3,7 @@ import type { GameState } from '../domain/game-state'
 import type { FrontendGameCell, FrontendGameState } from '../domain/frontend-game-state'
 import { enemyCatalog } from '../domain/enemy-catalog'
 import { getNextTowerCatalogEntryById, towerCatalog } from '../domain/tower-catalog'
-import type { EntityDelta, GameStatePatch, GameUiState, GameUiStateUpdate } from '../../../shared/contracts/game'
+import type { EntityDelta, GameNoticeUpdate, GameStatePatch, GameUiState, GameUiStateUpdate } from '../../../shared/contracts/game'
 
 let cachedMapCellsSource: GameState['map']['cells'] | null = null
 let cachedProjectedMapCells: FrontendGameCell[] | null = null
@@ -313,11 +313,6 @@ function buildFrontendActionBar(): FrontendGameState['actionBar'] {
 
 function projectFrontendRuntimeState(state: GameState, config: ServerConfig): FrontendRuntimeState {
   const primaryPlayer = state.players[0] ?? null
-  const resultNotice = state.result
-    ? state.result.outcome === 'victory'
-      ? `战局结束：胜利。${state.result.reason ?? '已清空全部波次。'}`
-      : `战局结束：失败。${state.result.reason ?? '场上怪物持续超载。'}`
-    : null
 
   return {
     tick: state.tick,
@@ -397,15 +392,24 @@ function projectFrontendRuntimeState(state: GameState, config: ServerConfig): Fr
       index: state.wave.index,
       label: `${state.wave.label} · 剩余刷怪 ${state.wave.remainingSpawns}`,
     },
-    notices: state.players.length === 0
-      ? ['等待玩家或 Agent 连接网关。']
-      : [
-        `当前 ${state.playerCount} 人房间，刷怪容量 ${state.enemies.length}/${state.maxCapacity}，超载计数 ${state.overloadTicks}/100。`,
-        ...(resultNotice ? [resultNotice] : []),
-      ],
     score: primaryPlayer?.score ?? 0,
     updatedAt: new Date().toISOString(),
   }
+}
+
+function buildFrontendNotices(state: GameState): NonNullable<FrontendGameState['notices']> {
+  const resultNotice = state.result
+    ? state.result.outcome === 'victory'
+      ? `战局结束：胜利。${state.result.reason ?? '已清空全部波次。'}`
+      : `战局结束：失败。${state.result.reason ?? '场上怪物持续超载。'}`
+    : null
+
+  return state.players.length === 0
+    ? ['等待玩家或 Agent 连接网关。']
+    : [
+      `当前 ${state.playerCount} 人房间，刷怪容量 ${state.enemies.length}/${state.maxCapacity}，超载计数 ${state.overloadTicks}/100。`,
+      ...(resultNotice ? [resultNotice] : []),
+    ]
 }
 
 export function projectFrontendUiState(state: GameState, config: ServerConfig): GameUiState {
@@ -428,6 +432,7 @@ export function projectFrontendGameState(state: GameState, config: ServerConfig)
     },
     ...uiState,
     ...runtimeState,
+    notices: buildFrontendNotices(state),
   }
 }
 
@@ -463,10 +468,6 @@ export function projectFrontendGameStatePatch(
     }
   }
 
-  if (!previousState || !areStringArraysEquivalent(previousState.notices, runtimeState.notices)) {
-    patch.notices = runtimeState.notices
-  }
-
   const projectedMap: FrontendGameState['map'] = {
     width: state.map.width,
     height: state.map.height,
@@ -478,6 +479,19 @@ export function projectFrontendGameStatePatch(
   }
 
   return patch
+}
+
+export function projectFrontendNoticeUpdate(
+  state: GameState,
+  previousState: FrontendGameState | null,
+): GameNoticeUpdate | null {
+  const notices = buildFrontendNotices(state)
+
+  if (previousState && areStringArraysEquivalent(previousState.notices, notices)) {
+    return null
+  }
+
+  return { notices }
 }
 
 export function projectFrontendUiStateUpdate(

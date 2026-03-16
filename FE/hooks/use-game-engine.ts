@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import { resolveGatewayToken, resolveSocketUrl } from '../lib/runtime-config'
-import type { ConnectionState, GameAction, GameState, GameStatePatch, GameUiStateUpdate, TickEnvelope } from '../types/game-state'
+import type { ConnectionState, GameAction, GameNoticeUpdate, GameState, GameStatePatch, GameUiStateUpdate, TickEnvelope } from '../types/game-state'
 
 interface OptionalIdentityOverrides {
   playerId?: string
@@ -107,6 +107,15 @@ function isGameUiStateUpdate(value: unknown): value is GameUiStateUpdate {
   return Array.isArray(candidate.buildPalette) || Boolean(candidate.actionBar)
 }
 
+function isGameNoticeUpdate(value: unknown): value is GameNoticeUpdate {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const candidate = value as Partial<GameNoticeUpdate>
+  return Array.isArray(candidate.notices)
+}
+
 function mergeGameStatePatch(previousState: GameState | null, patch: GameStatePatch) {
   if (!previousState) {
     return null
@@ -118,7 +127,6 @@ function mergeGameStatePatch(previousState: GameState | null, patch: GameStatePa
     towers: patch.towers ?? applyEntityDelta(previousState.towers, patch.towerDelta),
     enemies: patch.enemies ?? applyEntityDelta(previousState.enemies, patch.enemyDelta),
     map: patch.map ?? previousState.map,
-    notices: patch.notices ?? previousState.notices,
   }
 }
 
@@ -159,6 +167,17 @@ function mergeGameUiStateUpdate(previousState: GameState | null, update: GameUiS
     ...previousState,
     buildPalette: update.buildPalette ?? previousState.buildPalette,
     actionBar: update.actionBar ?? previousState.actionBar,
+  }
+}
+
+function mergeGameNoticeUpdate(previousState: GameState | null, update: GameNoticeUpdate) {
+  if (!previousState) {
+    return null
+  }
+
+  return {
+    ...previousState,
+    notices: update.notices,
   }
 }
 
@@ -252,6 +271,14 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
     setGameState((currentState) => mergeGameUiStateUpdate(currentState, payload) ?? currentState)
   })
 
+  const handleNoticeUpdate = useEffectEvent((payload: unknown) => {
+    if (!isGameNoticeUpdate(payload)) {
+      return
+    }
+
+    setGameState((currentState) => mergeGameNoticeUpdate(currentState, payload) ?? currentState)
+  })
+
   useEffect(() => {
     if (typeof window === 'undefined' || options.autoConnect === false || !socketUrl) {
       return
@@ -287,6 +314,7 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
 
     socket.on('tick_update', handleTickUpdate)
     socket.on('ui_state_update', handleUiStateUpdate)
+    socket.on('notice_update', handleNoticeUpdate)
     socket.io.on('reconnect_attempt', () => {
       setConnectionState('reconnecting')
     })
@@ -294,6 +322,7 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
     return () => {
       socket.off('tick_update', handleTickUpdate)
       socket.off('ui_state_update', handleUiStateUpdate)
+      socket.off('notice_update', handleNoticeUpdate)
       socket.disconnect()
       socketRef.current = null
     }
