@@ -1,5 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { GamingPage } from './pages/gaming-page'
 import { TowerDefenseFrontendPage } from './pages/tower-defense-frontend-page'
 import './app/globals.css'
 
@@ -11,6 +12,6 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <TowerDefenseFrontendPage />
+    {window.location.pathname.replace(/\/+$/, '') === '/gaming' ? <GamingPage /> : <TowerDefenseFrontendPage />}
   </StrictMode>,
 )
