@@ -14,6 +14,7 @@ export interface ServerConfig {
   corsOrigin: string
   matchId: string
   tickRateMs: number
+  broadcastIntervalMs: number
   mapWidth: number
   mapHeight: number
   playerStartingGold: number
@@ -76,11 +77,15 @@ function buildAuthTokens(): AuthTokenConfig[] {
 }
 
 export function createServerConfig(): ServerConfig {
+  const tickRateMs = readNumber('TICK_RATE_MS', 100)
+  const broadcastIntervalMs = Math.max(tickRateMs, readNumber('BROADCAST_INTERVAL_MS', 200))
+
   return {
     port: readNumber('PORT', 3000),
     corsOrigin: process.env.CORS_ORIGIN ?? '*',
     matchId: process.env.MATCH_ID ?? createDefaultMatchId(),
-    tickRateMs: readNumber('TICK_RATE_MS', 100),
+    tickRateMs,
+    broadcastIntervalMs,
     mapWidth: readNumber('MAP_WIDTH', 30),
     mapHeight: readNumber('MAP_HEIGHT', 30),
     playerStartingGold: readNumber('PLAYER_STARTING_GOLD', 200),

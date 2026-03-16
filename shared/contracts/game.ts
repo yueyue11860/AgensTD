@@ -124,6 +124,21 @@ export interface EnemyState {
   progress?: number
 }
 
+export interface EntityDelta<T extends { id: string }> {
+  upsert: T[]
+  remove: string[]
+}
+
+export interface GameUiState {
+  buildPalette: GameState['buildPalette']
+  actionBar: GameState['actionBar']
+}
+
+export interface GameUiStateUpdate {
+  buildPalette?: GameState['buildPalette']
+  actionBar?: GameState['actionBar']
+}
+
 export interface GameState {
   matchId?: string
   tick: number
@@ -156,6 +171,30 @@ export interface GameState {
   updatedAt?: string
 }
 
-export interface TickEnvelope {
+export interface GameStatePatch {
+  tick: GameState['tick']
+  status: GameState['status']
+  result: GameState['result']
+  resources: GameState['resources']
+  towers?: GameState['towers']
+  enemies?: GameState['enemies']
+  towerDelta?: EntityDelta<TowerState>
+  enemyDelta?: EntityDelta<EnemyState>
+  wave?: GameState['wave']
+  notices?: GameState['notices']
+  score?: GameState['score']
+  updatedAt?: GameState['updatedAt']
+  map?: GameState['map']
+}
+
+export interface FullTickEnvelope {
+  mode: 'full'
   gameState: GameState
 }
+
+export interface PatchTickEnvelope {
+  mode: 'patch'
+  patch: GameStatePatch
+}
+
+export type TickEnvelope = FullTickEnvelope | PatchTickEnvelope

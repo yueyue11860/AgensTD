@@ -1,4 +1,4 @@
-import type { ComponentType } from 'react'
+import { memo, type ComponentType } from 'react'
 import { Coins, Flame, ShieldAlert, Sparkles, TriangleAlert, Wrench } from 'lucide-react'
 import { cx } from '../lib/cx'
 import type { ResourceState } from '../types/game-state'
@@ -43,7 +43,7 @@ interface GameResourcesProps {
   resources: ResourceState
 }
 
-export function GameResources({ resources }: GameResourcesProps) {
+export const GameResources = memo(function GameResources({ resources }: GameResourcesProps) {
   return (
     <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
       <ResourceMetric label="金币" value={resources.gold} icon={Coins} tone="text-yellow-400" note="仅展示服务端当前余额。" />
@@ -53,13 +53,13 @@ export function GameResources({ resources }: GameResourcesProps) {
       <ResourceMetric label="主堡" value={resources.fortress} max={resources.fortressMax} icon={ShieldAlert} tone="text-alert-red" note="主堡损伤完全来自服务端权威结果。" />
     </section>
   )
-}
+})
 
 interface ThreatCardProps {
   value: number
 }
 
-export function ThreatCard({ value }: ThreatCardProps) {
+export const ThreatCard = memo(function ThreatCard({ value }: ThreatCardProps) {
   return (
     <article className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
       <div className="flex items-center justify-between gap-3">
@@ -73,4 +73,4 @@ export function ThreatCard({ value }: ThreatCardProps) {
       </div>
     </article>
   )
-}
+})

@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 import { AlertTriangle, GitFork, RadioTower, Shield, Skull } from 'lucide-react'
 import { cx } from '../lib/cx'
 import type { EnemyState, GameCell, GameState, GridPosition, TowerState } from '../types/game-state'
@@ -7,6 +7,18 @@ interface GameMapProps {
   gameState: GameState
   selectedCell: GridPosition | null
   selectedTowerId: string | null
+  onCellClick: (cell: GameCell, tower: TowerState | null) => void
+}
+
+interface GridCellProps {
+  x: number
+  y: number
+  cell: GameCell
+  tower: TowerState | null
+  isTowerAnchor: boolean
+  enemy: EnemyState | null
+  isSelectedCell: boolean
+  isSelectedTower: boolean
   onCellClick: (cell: GameCell, tower: TowerState | null) => void
 }
 
@@ -34,7 +46,73 @@ const enemyTone: Record<EnemyState['threat'], string> = {
   boss: 'border-cold-blue/35 bg-cold-blue/12 text-cold-blue',
 }
 
-export function GameMap({ gameState, selectedCell, selectedTowerId, onCellClick }: GameMapProps) {
+const GridCell = memo(function GridCell({
+  x,
+  y,
+  cell,
+  tower,
+  isTowerAnchor,
+  enemy,
+  isSelectedCell,
+  isSelectedTower,
+  onCellClick,
+}: GridCellProps) {
+  return (
+    <button
+      type="button"
+      onClick={() => onCellClick(cell, tower)}
+      className={cx(
+        'relative aspect-square overflow-hidden rounded border text-left transition-all',
+        cellTone[cell.kind],
+        isSelectedCell && 'ring-2 ring-cold-blue',
+        isSelectedTower && 'ring-2 ring-acid-green',
+        tower && !isSelectedTower && 'ring-1 ring-inset ring-white/20',
+        tower && !isTowerAnchor && 'opacity-80',
+      )}
+      title={tower ? `${tower.name} Lv.${tower.level}` : `${cell.kind} (${x}, ${y})`}
+    >
+      {cell.kind === 'gate' ? <GitFork className="absolute left-1 top-1 h-3 w-3 text-warning-orange" /> : null}
+      {cell.kind === 'core' ? <Shield className="absolute left-1 top-1 h-3 w-3 text-acid-green" /> : null}
+      {cell.kind === 'hazard' ? <AlertTriangle className="absolute left-1 top-1 h-3 w-3 text-alert-red" /> : null}
+
+      {tower && isTowerAnchor ? (
+        <div className={cx('absolute inset-1 flex flex-col items-center justify-center rounded border text-center', towerTone[tower.status])}>
+          <RadioTower className="h-4 w-4" />
+          <span className="mt-1 text-[10px] font-semibold leading-none">Lv.{tower.level}</span>
+          <span className="mt-1 text-[9px] leading-none opacity-75">{tower.footprint.width}x{tower.footprint.height}</span>
+        </div>
+      ) : null}
+
+      {tower && !isTowerAnchor ? (
+        <div className={cx('absolute inset-1 rounded border border-dashed', towerTone[tower.status])} />
+      ) : null}
+
+      {enemy ? (
+        <div className={cx('absolute bottom-1 right-1 rounded-md border px-1.5 py-0.5 text-[9px] font-semibold', enemyTone[enemy.threat])}>
+          {enemy.threat === 'boss' ? 'BOSS' : enemy.count ?? 1}
+        </div>
+      ) : null}
+    </button>
+  )
+}, (previousProps, nextProps) => {
+  return previousProps.cell === nextProps.cell
+    && previousProps.tower?.id === nextProps.tower?.id
+    && previousProps.tower?.level === nextProps.tower?.level
+    && previousProps.tower?.status === nextProps.tower?.status
+    && previousProps.tower?.footprint.width === nextProps.tower?.footprint.width
+    && previousProps.tower?.footprint.height === nextProps.tower?.footprint.height
+    && previousProps.isTowerAnchor === nextProps.isTowerAnchor
+    && previousProps.enemy?.id === nextProps.enemy?.id
+    && previousProps.enemy?.position.x === nextProps.enemy?.position.x
+    && previousProps.enemy?.position.y === nextProps.enemy?.position.y
+    && previousProps.enemy?.threat === nextProps.enemy?.threat
+    && previousProps.enemy?.count === nextProps.enemy?.count
+    && previousProps.isSelectedCell === nextProps.isSelectedCell
+    && previousProps.isSelectedTower === nextProps.isSelectedTower
+    && previousProps.onCellClick === nextProps.onCellClick
+})
+
+export const GameMap = memo(function GameMap({ gameState, selectedCell, selectedTowerId, onCellClick }: GameMapProps) {
   const cellMap = useMemo(() => {
     return new Map(gameState.map.cells.map((cell) => [`${cell.x},${cell.y}`, cell]))
   }, [gameState.map.cells])
@@ -59,6 +137,14 @@ export function GameMap({ gameState, selectedCell, selectedTowerId, onCellClick 
   const enemyMap = useMemo(() => {
     return new Map(gameState.enemies.map((enemy) => [`${enemy.position.x},${enemy.position.y}`, enemy]))
   }, [gameState.enemies])
+
+  const gridCoordinates = useMemo(() => {
+    return Array.from({ length: gameState.map.width * gameState.map.height }, (_, index) => ({
+      x: index % gameState.map.width,
+      y: Math.floor(index / gameState.map.width),
+      key: `${index % gameState.map.width},${Math.floor(index / gameState.map.width)}`,
+    }))
+  }, [gameState.map.width, gameState.map.height])
 
   return (
     <section className="rounded-3xl border border-white/10 bg-black/20 p-4 backdrop-blur-md">
@@ -85,10 +171,7 @@ export function GameMap({ gameState, selectedCell, selectedTowerId, onCellClick 
             minWidth: 'min(100%, 960px)',
           }}
         >
-          {Array.from({ length: gameState.map.width * gameState.map.height }, (_, index) => {
-            const x = index % gameState.map.width
-            const y = Math.floor(index / gameState.map.width)
-            const key = `${x},${y}`
+          {gridCoordinates.map(({ x, y, key }) => {
             const cell = cellMap.get(key) ?? { x, y, kind: 'blocked' as const }
             const towerEntry = towerMap.get(key)
             const tower = towerEntry?.tower ?? null
@@ -97,42 +180,18 @@ export function GameMap({ gameState, selectedCell, selectedTowerId, onCellClick 
             const isSelectedTower = selectedTowerId !== null && tower?.id === selectedTowerId
 
             return (
-              <button
+              <GridCell
                 key={key}
-                type="button"
-                onClick={() => onCellClick(cell, tower)}
-                className={cx(
-                  'relative aspect-square overflow-hidden rounded border text-left transition-all',
-                  cellTone[cell.kind],
-                  isSelectedCell && 'ring-2 ring-cold-blue',
-                  isSelectedTower && 'ring-2 ring-acid-green',
-                  tower && !isSelectedTower && 'ring-1 ring-inset ring-white/20',
-                  tower && !towerEntry?.isAnchor && 'opacity-80',
-                )}
-                title={tower ? `${tower.name} Lv.${tower.level}` : `${cell.kind} (${x}, ${y})`}
-              >
-                {cell.kind === 'gate' ? <GitFork className="absolute left-1 top-1 h-3 w-3 text-warning-orange" /> : null}
-                {cell.kind === 'core' ? <Shield className="absolute left-1 top-1 h-3 w-3 text-acid-green" /> : null}
-                {cell.kind === 'hazard' ? <AlertTriangle className="absolute left-1 top-1 h-3 w-3 text-alert-red" /> : null}
-
-                {tower && towerEntry?.isAnchor ? (
-                  <div className={cx('absolute inset-1 flex flex-col items-center justify-center rounded border text-center', towerTone[tower.status])}>
-                    <RadioTower className="h-4 w-4" />
-                    <span className="mt-1 text-[10px] font-semibold leading-none">Lv.{tower.level}</span>
-                    <span className="mt-1 text-[9px] leading-none opacity-75">{tower.footprint.width}x{tower.footprint.height}</span>
-                  </div>
-                ) : null}
-
-                {tower && !towerEntry?.isAnchor ? (
-                  <div className={cx('absolute inset-1 rounded border border-dashed', towerTone[tower.status])} />
-                ) : null}
-
-                {enemy ? (
-                  <div className={cx('absolute bottom-1 right-1 rounded-md border px-1.5 py-0.5 text-[9px] font-semibold', enemyTone[enemy.threat])}>
-                    {enemy.threat === 'boss' ? 'BOSS' : enemy.count ?? 1}
-                  </div>
-                ) : null}
-              </button>
+                x={x}
+                y={y}
+                cell={cell}
+                tower={tower}
+                isTowerAnchor={towerEntry?.isAnchor ?? false}
+                enemy={enemy ?? null}
+                isSelectedCell={isSelectedCell}
+                isSelectedTower={isSelectedTower}
+                onCellClick={onCellClick}
+              />
             )
           })}
         </div>
@@ -163,4 +222,4 @@ export function GameMap({ gameState, selectedCell, selectedTowerId, onCellClick 
       </div>
     </section>
   )
-}
+})

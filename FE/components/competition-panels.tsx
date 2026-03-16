@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { Bot, RefreshCcw, Trophy, UserRound, Waves } from 'lucide-react'
 import type { CompetitionRealtimeStatus, DualLeaderboard, LeaderboardEntry, MatchReplay, ReplaySummary } from '../types/competition'
 import { cx } from '../lib/cx'
@@ -101,7 +102,7 @@ function LeaderboardList({
   )
 }
 
-export function CompetitionPanels({
+export const CompetitionPanels = memo(function CompetitionPanels({
   apiBaseUrl,
   leaderboards,
   replays,
@@ -268,4 +269,4 @@ export function CompetitionPanels({
       </article>
     </section>
   )
-}
+})

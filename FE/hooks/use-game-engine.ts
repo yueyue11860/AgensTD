@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import { resolveGatewayToken, resolveSocketUrl } from '../lib/runtime-config'
-import type { ConnectionState, GameAction, GameState, TickEnvelope } from '../types/game-state'
+import type { ConnectionState, GameAction, GameState, GameStatePatch, GameUiStateUpdate, TickEnvelope } from '../types/game-state'
 
 interface OptionalIdentityOverrides {
   playerId?: string
@@ -30,6 +30,49 @@ interface UseGameEngineResult {
   reconnect: () => void
 }
 
+function areCellsEqual(left: GameState['map']['cells'], right: GameState['map']['cells']) {
+  if (left.length !== right.length) {
+    return false
+  }
+
+  for (let index = 0; index < left.length; index += 1) {
+    const leftCell = left[index]
+    const rightCell = right[index]
+
+    if (
+      leftCell.x !== rightCell.x
+      || leftCell.y !== rightCell.y
+      || leftCell.kind !== rightCell.kind
+      || leftCell.label !== rightCell.label
+      || leftCell.walkable !== rightCell.walkable
+      || leftCell.buildable !== rightCell.buildable
+    ) {
+      return false
+    }
+  }
+
+  return true
+}
+
+function stabilizeGameState(previousState: GameState | null, nextState: GameState) {
+  if (!previousState) {
+    return nextState
+  }
+
+  const canReuseMap = previousState.map.width === nextState.map.width
+    && previousState.map.height === nextState.map.height
+    && areCellsEqual(previousState.map.cells, nextState.map.cells)
+
+  if (!canReuseMap) {
+    return nextState
+  }
+
+  return {
+    ...nextState,
+    map: previousState.map,
+  }
+}
+
 function isGameState(value: unknown): value is GameState {
   if (!value || typeof value !== 'object') {
     return false
@@ -44,16 +87,103 @@ function isGameState(value: unknown): value is GameState {
     && Array.isArray(candidate.enemies)
 }
 
-function normalizeTickPayload(payload: unknown): GameState | null {
+function isGameStatePatch(value: unknown): value is GameStatePatch {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const candidate = value as Partial<GameStatePatch>
+  return typeof candidate.tick === 'number'
+    && typeof candidate.status === 'string'
+    && Boolean(candidate.resources)
+}
+
+function isGameUiStateUpdate(value: unknown): value is GameUiStateUpdate {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const candidate = value as Partial<GameUiStateUpdate>
+  return Array.isArray(candidate.buildPalette) || Boolean(candidate.actionBar)
+}
+
+function mergeGameStatePatch(previousState: GameState | null, patch: GameStatePatch) {
+  if (!previousState) {
+    return null
+  }
+
+  return {
+    ...previousState,
+    ...patch,
+    towers: patch.towers ?? applyEntityDelta(previousState.towers, patch.towerDelta),
+    enemies: patch.enemies ?? applyEntityDelta(previousState.enemies, patch.enemyDelta),
+    map: patch.map ?? previousState.map,
+    notices: patch.notices ?? previousState.notices,
+  }
+}
+
+function applyEntityDelta<T extends { id: string }>(currentEntities: T[], delta?: { upsert: T[]; remove: string[] }) {
+  if (!delta) {
+    return currentEntities
+  }
+
+  const removeIds = new Set(delta.remove)
+  const upsertById = new Map(delta.upsert.map((entity) => [entity.id, entity]))
+  const nextEntities: T[] = []
+
+  for (const entity of currentEntities) {
+    if (removeIds.has(entity.id)) {
+      continue
+    }
+
+    nextEntities.push(upsertById.get(entity.id) ?? entity)
+    upsertById.delete(entity.id)
+  }
+
+  for (const entity of delta.upsert) {
+    if (upsertById.has(entity.id)) {
+      nextEntities.push(entity)
+      upsertById.delete(entity.id)
+    }
+  }
+
+  return nextEntities
+}
+
+function mergeGameUiStateUpdate(previousState: GameState | null, update: GameUiStateUpdate) {
+  if (!previousState) {
+    return null
+  }
+
+  return {
+    ...previousState,
+    buildPalette: update.buildPalette ?? previousState.buildPalette,
+    actionBar: update.actionBar ?? previousState.actionBar,
+  }
+}
+
+function normalizeTickPayload(payload: unknown, previousState: GameState | null): GameState | null {
   if (isGameState(payload)) {
     return payload
   }
 
   if (payload && typeof payload === 'object') {
-    const candidate = payload as Partial<TickEnvelope> & { state?: unknown }
+    const candidate = payload as Partial<TickEnvelope> & { state?: unknown, patch?: unknown, gameState?: unknown }
 
-    if (isGameState(candidate.gameState)) {
+    if (candidate.mode === 'full' && isGameState(candidate.gameState)) {
       return candidate.gameState
+    }
+
+    if (candidate.mode === 'patch' && isGameStatePatch(candidate.patch)) {
+      return mergeGameStatePatch(previousState, candidate.patch)
+    }
+
+    if ('gameState' in candidate && isGameState(candidate.gameState)) {
+      return candidate.gameState
+    }
+
+    if (isGameStatePatch(candidate.patch)) {
+      return mergeGameStatePatch(previousState, candidate.patch)
     }
 
     if (isGameState(candidate.state)) {
@@ -101,15 +231,25 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
   }, [gatewayToken, options.identity, options.query, options.roomId])
 
   const handleTickUpdate = useEffectEvent((payload: unknown) => {
-    const nextState = normalizeTickPayload(payload)
-    if (!nextState) {
-      return
-    }
+    setGameState((currentState) => {
+      const nextState = normalizeTickPayload(payload, currentState)
+      if (!nextState) {
+        return currentState
+      }
 
-    setGameState(nextState)
+      return stabilizeGameState(currentState, nextState)
+    })
     setLastTickAt(Date.now())
     setConnectionState('connected')
     setError(null)
+  })
+
+  const handleUiStateUpdate = useEffectEvent((payload: unknown) => {
+    if (!isGameUiStateUpdate(payload)) {
+      return
+    }
+
+    setGameState((currentState) => mergeGameUiStateUpdate(currentState, payload) ?? currentState)
   })
 
   useEffect(() => {
@@ -146,12 +286,14 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
     })
 
     socket.on('tick_update', handleTickUpdate)
+    socket.on('ui_state_update', handleUiStateUpdate)
     socket.io.on('reconnect_attempt', () => {
       setConnectionState('reconnecting')
     })
 
     return () => {
       socket.off('tick_update', handleTickUpdate)
+      socket.off('ui_state_update', handleUiStateUpdate)
       socket.disconnect()
       socketRef.current = null
     }

@@ -1,9 +1,11 @@
 import type { Server as HttpServer } from 'http'
 import { Server, type Socket } from 'socket.io'
 import { Room } from '../core/Room'
-import { projectFrontendGameState } from '../core/state-projection'
+import { projectFrontendGameState, projectFrontendGameStatePatch, projectFrontendUiStateUpdate } from '../core/state-projection'
 import type { PlayerIdentity } from '../domain/actions'
 import type { ServerConfig } from '../config/server-config'
+import type { FrontendGameState } from '../domain/frontend-game-state'
+import type { GameStatePatch, GameUiStateUpdate } from '../../../shared/contracts/game'
 import { submitAction } from './action-submission'
 import { ActionRateLimiter } from './action-rate-limiter'
 import { authenticateGatewayToken, extractSocketToken, type GatewayPrincipal } from './gateway-auth'
@@ -24,6 +26,10 @@ export class SocketGateway {
 
   private readonly room: Room
 
+  private readonly broadcastEveryTicks: number
+
+  private lastBroadcastState: FrontendGameState | null = null
+
   constructor(
     httpServer: HttpServer,
     room: Room,
@@ -32,6 +38,7 @@ export class SocketGateway {
   ) {
     this.config = config
     this.room = room
+    this.broadcastEveryTicks = Math.max(1, Math.round(config.broadcastIntervalMs / Math.max(1, config.tickRateMs)))
     this.io = new Server(httpServer, {
       cors: {
         origin: config.corsOrigin === '*' ? true : config.corsOrigin,
@@ -55,7 +62,25 @@ export class SocketGateway {
     })
 
     this.room.engine.onTick((state) => {
-      this.io.emit('tick_update', projectFrontendGameState(state, this.config))
+      if (state.status !== 'finished' && state.tick % this.broadcastEveryTicks !== 0) {
+        return
+      }
+
+      const uiUpdate = projectFrontendUiStateUpdate(state, this.config, this.lastBroadcastState)
+      const patch = projectFrontendGameStatePatch(state, this.config, this.lastBroadcastState)
+      this.lastBroadcastState = mergeFrontendUiStateUpdate(
+        mergeFrontendGameStatePatch(this.lastBroadcastState, patch),
+        uiUpdate,
+      )
+
+      this.io.emit('tick_update', {
+        mode: 'patch',
+        patch,
+      })
+
+      if (Object.keys(uiUpdate).length > 0) {
+        this.io.emit('ui_state_update', uiUpdate)
+      }
     })
   }
 
@@ -77,7 +102,12 @@ export class SocketGateway {
       roomId: this.room.id,
       slot: assignedSlot,
     })
-    socket.emit('tick_update', projectFrontendGameState(this.room.engine.getStateSnapshot(), this.config))
+    const fullState = projectFrontendGameState(this.room.engine.getStateSnapshot(), this.config)
+    this.lastBroadcastState = fullState
+    socket.emit('tick_update', {
+      mode: 'full',
+      gameState: fullState,
+    })
 
     socket.on('send_action', (payload: unknown) => {
       const submission = submitAction({
@@ -121,4 +151,59 @@ export class SocketGateway {
       playerKind,
     }
   }
+}
+
+function mergeFrontendGameStatePatch(previousState: FrontendGameState | null, patch: GameStatePatch) {
+  if (!previousState) {
+    return null
+  }
+
+  return {
+    ...previousState,
+    ...patch,
+    towers: patch.towers ?? applyEntityDelta(previousState.towers, patch.towerDelta),
+    enemies: patch.enemies ?? applyEntityDelta(previousState.enemies, patch.enemyDelta),
+    map: patch.map ?? previousState.map,
+    notices: patch.notices ?? previousState.notices,
+  }
+}
+
+function mergeFrontendUiStateUpdate(previousState: FrontendGameState | null, update: GameUiStateUpdate) {
+  if (!previousState) {
+    return null
+  }
+
+  return {
+    ...previousState,
+    buildPalette: update.buildPalette ?? previousState.buildPalette,
+    actionBar: update.actionBar ?? previousState.actionBar,
+  }
+}
+
+function applyEntityDelta<T extends { id: string }>(currentEntities: T[], delta?: { upsert: T[]; remove: string[] }) {
+  if (!delta) {
+    return currentEntities
+  }
+
+  const removeIds = new Set(delta.remove)
+  const upsertById = new Map(delta.upsert.map((entity) => [entity.id, entity]))
+  const nextEntities: T[] = []
+
+  for (const entity of currentEntities) {
+    if (removeIds.has(entity.id)) {
+      continue
+    }
+
+    nextEntities.push(upsertById.get(entity.id) ?? entity)
+    upsertById.delete(entity.id)
+  }
+
+  for (const entity of delta.upsert) {
+    if (upsertById.has(entity.id)) {
+      nextEntities.push(entity)
+      upsertById.delete(entity.id)
+    }
+  }
+
+  return nextEntities
 }

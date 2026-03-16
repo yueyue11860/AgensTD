@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Plug, RefreshCcw, ShieldAlert, Wifi, WifiOff } from 'lucide-react'
 import { CompetitionPanels } from '../components/competition-panels'
 import { FrontendShell } from '../components/frontend-shell'
@@ -69,13 +69,13 @@ export function TowerDefenseFrontendPage() {
     return gameState.map.cells.find((cell) => cell.x === selectedCell.x && cell.y === selectedCell.y) ?? null
   }, [gameState, selectedCell])
 
-  const handleAction = (action: GameAction) => {
+  const handleAction = useCallback((action: GameAction) => {
     if (sendAction(action)) {
       setLastSentAction(action)
     }
-  }
+  }, [sendAction])
 
-  const handleCellClick = (cell: GameCell, tower: TowerState | null) => {
+  const handleCellClick = useCallback((cell: GameCell, tower: TowerState | null) => {
     setSelectedCell({ x: cell.x, y: cell.y })
     setSelectedTowerId(tower?.id ?? null)
 
@@ -89,7 +89,7 @@ export function TowerDefenseFrontendPage() {
       x: cell.x,
       y: cell.y,
     })
-  }
+  }, [handleAction, selectedBuildType])
 
   return (
     <FrontendShell>

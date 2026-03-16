@@ -333,7 +333,7 @@ export class GameEngine {
 
   getStateSnapshot(): GameState {
     this.syncRuntimeState()
-    return structuredClone(this.state)
+    return this.cloneStateSnapshot()
   }
 
   tick() {
@@ -345,7 +345,7 @@ export class GameEngine {
       this.syncRuntimeState()
       this.state.pendingActions = this.actionQueue.size()
 
-      const snapshot = this.getStateSnapshot()
+      const snapshot = this.cloneStateSnapshot()
       for (const listener of this.tickListeners) {
         listener(snapshot)
       }
@@ -362,17 +362,19 @@ export class GameEngine {
     this.syncRuntimeState()
     this.state.pendingActions = this.actionQueue.size()
 
-    this.appendLog('info', 'Tick settled', {
-      tick: this.state.tick,
-      players: this.state.players.length,
-      towers: this.towers.length,
-      enemies: this.enemies.length,
-      pendingActions: this.state.pendingActions,
-      overloadTicks: this.overloadTicks,
-      maxCapacity: this.maxCapacity,
-    })
+    if (this.state.tick % 10 === 0) {
+      this.appendLog('info', 'Tick settled', {
+        tick: this.state.tick,
+        players: this.state.players.length,
+        towers: this.towers.length,
+        enemies: this.enemies.length,
+        pendingActions: this.state.pendingActions,
+        overloadTicks: this.overloadTicks,
+        maxCapacity: this.maxCapacity,
+      })
+    }
 
-    const snapshot = this.getStateSnapshot()
+    const snapshot = this.cloneStateSnapshot()
     for (const listener of this.tickListeners) {
       listener(snapshot)
     }
@@ -844,5 +846,9 @@ export class GameEngine {
     this.state.overloadTicks = this.overloadTicks
     this.state.enemies = this.enemies.map((enemy) => enemy.toState())
     this.state.towers = this.towers.map((tower) => tower.toState())
+  }
+
+  private cloneStateSnapshot() {
+    return structuredClone(this.state)
   }
 }

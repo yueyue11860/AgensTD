@@ -1,10 +1,12 @@
 import { Router, type Request, type Response } from 'express'
 import { buildReplaySummary } from '../core/competition-projection'
-import { projectFrontendGameState } from '../core/state-projection'
+import { projectFrontendGameState, projectFrontendGameStatePatch, projectFrontendUiStateUpdate } from '../core/state-projection'
 import type { GameEngine } from '../core/game-engine'
 import type { ReplayRecorder } from '../core/replay-recorder'
 import type { ServerConfig } from '../config/server-config'
 import type { ReplaySummary } from '../domain/competition'
+import type { FrontendGameState } from '../domain/frontend-game-state'
+import type { GameStatePatch, GameUiStateUpdate } from '../../../shared/contracts/game'
 import { authenticateGatewayToken, extractHttpToken } from './gateway-auth'
 import type { SupabaseCompetitionStore } from '../data/supabase-competition-store'
 
@@ -51,12 +53,27 @@ export function createAgentApiRouter(
     response.write(`event: ready\n`)
     response.write(`data: ${JSON.stringify({ ok: true, playerId: principal.playerId, playerKind: principal.playerKind })}\n\n`)
 
+    const initialState = projectFrontendGameState(engine.getStateSnapshot(), config)
+    let lastStreamState: FrontendGameState | null = initialState
+
     response.write(`event: tick_update\n`)
-    response.write(`data: ${JSON.stringify(projectFrontendGameState(engine.getStateSnapshot(), config))}\n\n`)
+    response.write(`data: ${JSON.stringify({ mode: 'full', gameState: initialState })}\n\n`)
 
     const unsubscribe = engine.onTick((state) => {
+      const uiUpdate = projectFrontendUiStateUpdate(state, config, lastStreamState)
+      const patch = projectFrontendGameStatePatch(state, config, lastStreamState)
+      lastStreamState = mergeFrontendUiStateUpdate(
+        mergeFrontendGameStatePatch(lastStreamState, patch),
+        uiUpdate,
+      )
+
       response.write(`event: tick_update\n`)
-      response.write(`data: ${JSON.stringify(projectFrontendGameState(state, config))}\n\n`)
+      response.write(`data: ${JSON.stringify({ mode: 'patch', patch })}\n\n`)
+
+      if (Object.keys(uiUpdate).length > 0) {
+        response.write(`event: ui_state_update\n`)
+        response.write(`data: ${JSON.stringify(uiUpdate)}\n\n`)
+      }
     })
 
     const heartbeat = setInterval(() => {
@@ -153,4 +170,59 @@ export function createAgentApiRouter(
   })
 
   return router
+}
+
+function mergeFrontendGameStatePatch(previousState: FrontendGameState | null, patch: GameStatePatch) {
+  if (!previousState) {
+    return null
+  }
+
+  return {
+    ...previousState,
+    ...patch,
+    towers: patch.towers ?? applyEntityDelta(previousState.towers, patch.towerDelta),
+    enemies: patch.enemies ?? applyEntityDelta(previousState.enemies, patch.enemyDelta),
+    map: patch.map ?? previousState.map,
+    notices: patch.notices ?? previousState.notices,
+  }
+}
+
+function mergeFrontendUiStateUpdate(previousState: FrontendGameState | null, update: GameUiStateUpdate) {
+  if (!previousState) {
+    return null
+  }
+
+  return {
+    ...previousState,
+    buildPalette: update.buildPalette ?? previousState.buildPalette,
+    actionBar: update.actionBar ?? previousState.actionBar,
+  }
+}
+
+function applyEntityDelta<T extends { id: string }>(currentEntities: T[], delta?: { upsert: T[]; remove: string[] }) {
+  if (!delta) {
+    return currentEntities
+  }
+
+  const removeIds = new Set(delta.remove)
+  const upsertById = new Map(delta.upsert.map((entity) => [entity.id, entity]))
+  const nextEntities: T[] = []
+
+  for (const entity of currentEntities) {
+    if (removeIds.has(entity.id)) {
+      continue
+    }
+
+    nextEntities.push(upsertById.get(entity.id) ?? entity)
+    upsertById.delete(entity.id)
+  }
+
+  for (const entity of delta.upsert) {
+    if (upsertById.has(entity.id)) {
+      nextEntities.push(entity)
+      upsertById.delete(entity.id)
+    }
+  }
+
+  return nextEntities
 }
