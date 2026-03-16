@@ -4,6 +4,7 @@ import { projectFrontendGameState } from '../core/state-projection'
 import type { GameEngine } from '../core/game-engine'
 import type { ReplayRecorder } from '../core/replay-recorder'
 import type { ServerConfig } from '../config/server-config'
+import type { ReplaySummary } from '../domain/competition'
 import { authenticateGatewayToken, extractHttpToken } from './gateway-auth'
 import type { SupabaseCompetitionStore } from '../data/supabase-competition-store'
 
@@ -18,6 +19,11 @@ function resolveAgentPrincipal(request: Request, config: ServerConfig) {
 
 function rejectAgentUnauthorized(response: Response) {
   response.status(403).json({ ok: false, code: 'FORBIDDEN', message: 'Agent token required' })
+}
+
+function logCompetitionStoreFailure(operation: string, error: unknown) {
+  const details = error instanceof Error ? error.message : String(error)
+  console.error(`Competition store ${operation} failed for agent API; falling back to memory: ${details}`)
 }
 
 export function createAgentApiRouter(
@@ -91,9 +97,16 @@ export function createAgentApiRouter(
       return
     }
 
-    const persistedReplays = competitionStore?.isEnabled()
-      ? await competitionStore.listRecentReplays(20)
-      : []
+    let persistedReplays: ReplaySummary[] = []
+
+    if (competitionStore?.isEnabled()) {
+      try {
+        persistedReplays = await competitionStore.listRecentReplays(20)
+      }
+      catch (error) {
+        logCompetitionStoreFailure('listRecentReplays', error)
+      }
+    }
 
     if (persistedReplays.length > 0) {
       response.json({ ok: true, replays: persistedReplays })
@@ -120,9 +133,16 @@ export function createAgentApiRouter(
       return
     }
 
-    const persistedReplay = competitionStore?.isEnabled()
-      ? await competitionStore.getReplay(request.params.matchId)
-      : null
+    let persistedReplay = null
+
+    if (competitionStore?.isEnabled()) {
+      try {
+        persistedReplay = await competitionStore.getReplay(request.params.matchId)
+      }
+      catch (error) {
+        logCompetitionStoreFailure('getReplay', error)
+      }
+    }
 
     if (!persistedReplay) {
       response.status(404).json({ ok: false, code: 'REPLAY_NOT_FOUND', message: 'Replay not found' })

@@ -11,6 +11,8 @@ export class ReplayRecorder {
 
   private isPersisting = false
 
+  private hasLoggedPersistenceFailure = false
+
   constructor(
     engine: GameEngine,
     private readonly config: ServerConfig,
@@ -26,7 +28,9 @@ export class ReplayRecorder {
       })
 
       if (state.tick > 0 && state.tick % this.config.persistenceFlushEveryTicks === 0) {
-        void this.flush(state)
+        void this.flush(state).catch((error: unknown) => {
+          this.logPersistenceFailure('periodic flush', error)
+        })
       }
     })
 
@@ -100,6 +104,7 @@ export class ReplayRecorder {
     try {
       await this.flushReplay(replay)
       await this.store.persistMatchResults(buildMatchResults(state, this.config))
+      this.hasLoggedPersistenceFailure = false
     }
     finally {
       this.isPersisting = false
@@ -112,5 +117,16 @@ export class ReplayRecorder {
     }
 
     await this.store.upsertReplay(replay, buildReplaySummary(replay))
+  }
+
+  private logPersistenceFailure(operation: string, error: unknown) {
+    const details = error instanceof Error ? error.message : String(error)
+
+    if (this.hasLoggedPersistenceFailure) {
+      return
+    }
+
+    this.hasLoggedPersistenceFailure = true
+    console.error(`Replay persistence ${operation} failed; continuing without persisted sync: ${details}`)
   }
 }

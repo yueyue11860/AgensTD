@@ -16,6 +16,8 @@ export interface DualLeaderboard {
   all: LeaderboardEntry[]
 }
 
+export type CompetitionRealtimeStatus = 'disabled' | 'connecting' | 'subscribed' | 'error'
+
 export interface ReplaySummary {
   matchId: string
   createdAt: string

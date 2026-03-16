@@ -39,3 +39,34 @@ create table if not exists public.match_replays (
   top_score integer not null default 0,
   replay_json jsonb not null
 );
+
+grant usage on schema public to anon, authenticated;
+grant select on public.leaderboard_entries to anon, authenticated;
+
+alter table public.leaderboard_entries enable row level security;
+alter table public.leaderboard_entries replica identity full;
+
+drop policy if exists "Public can read leaderboard entries" on public.leaderboard_entries;
+
+create policy "Public can read leaderboard entries"
+on public.leaderboard_entries
+for select
+to anon, authenticated
+using (true);
+
+do $$
+begin
+  if exists (
+    select 1
+    from pg_publication
+    where pubname = 'supabase_realtime'
+  ) and not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'leaderboard_entries'
+  ) then
+    execute 'alter publication supabase_realtime add table public.leaderboard_entries';
+  end if;
+end $$;

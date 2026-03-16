@@ -87,4 +87,5 @@ Module 4: 赛事与数据中心 (Data Center)
 
 - 回放记录器仍保留内存实时态，保证当前对局可以立刻读。
 - 若配置了 SUPABASE_URL 与 SUPABASE_SERVICE_ROLE_KEY，则后端会每隔若干 tick 自动将回放与成绩 upsert 到 Supabase。
+- 前端现已支持通过 Supabase Realtime 订阅 `leaderboard_entries`，榜单变更后会自动刷新 REST 榜单与回放摘要；浏览器端只需要 `SUPABASE_URL` + `SUPABASE_ANON_KEY`。
 - 若未配置 Supabase，排行榜与回放列表会自动回退到当前进程内存态。

@@ -42,6 +42,8 @@ export function TowerDefenseFrontendPage() {
     isLoadingOverview,
     isLoadingReplayDetail,
     error: competitionError,
+    realtimeStatus,
+    realtimeError,
     selectReplay,
     refresh: refreshCompetition,
   } = useCompetitionData()
@@ -194,6 +196,8 @@ export function TowerDefenseFrontendPage() {
           isLoadingOverview={isLoadingOverview}
           isLoadingReplayDetail={isLoadingReplayDetail}
           error={competitionError}
+          realtimeStatus={realtimeStatus}
+          realtimeError={realtimeError}
           onRefresh={refreshCompetition}
           onSelectReplay={selectReplay}
         />

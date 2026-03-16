@@ -6,13 +6,16 @@
 2. 复制 [.env.example](.env.example) 为 `.env`，填写：
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
-3. 启动后端：
+3. 如果前端也要接收排行榜实时更新，还需要准备浏览器端可公开使用的 `SUPABASE_ANON_KEY`，供前端 `.env` 使用。
+4. 启动后端：
 
 ```bash
 pnpm dev
 ```
 
 未配置 Supabase 时，服务仍可运行，但排行榜与回放列表只会基于当前进程内存数据。
+
+补充说明：当前 SQL 脚本会把 `leaderboard_entries` 加入 `supabase_realtime` publication，并给 `anon/authenticated` 只读权限，供前端订阅排行榜变更；不会把 `match_replays.replay_json` 暴露给浏览器端实时通道。
 
 ## 主要接口
 

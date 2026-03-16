@@ -4,6 +4,7 @@ import { projectFrontendGameState } from '../core/state-projection'
 import type { ReplayRecorder } from '../core/replay-recorder'
 import { GameEngine } from '../core/game-engine'
 import type { ServerConfig } from '../config/server-config'
+import type { ReplaySummary } from '../domain/competition'
 import { submitAction } from './action-submission'
 import { ActionRateLimiter } from './action-rate-limiter'
 import { authenticateGatewayToken, extractHttpToken } from './gateway-auth'
@@ -24,6 +25,11 @@ function parseLimit(value: unknown, fallback: number) {
   }
 
   return Math.floor(parsed)
+}
+
+function logCompetitionStoreFailure(operation: string, error: unknown) {
+  const details = error instanceof Error ? error.message : String(error)
+  console.error(`Competition store ${operation} failed; falling back to memory: ${details}`)
 }
 
 export function createRestApiRouter(
@@ -95,9 +101,16 @@ export function createRestApiRouter(
 
     const limit = parseLimit(request.query.limit, 10)
     const liveLeaderboards = buildLiveLeaderboards(engine.getStateSnapshot())
-    const persistedLeaderboards = competitionStore?.isEnabled()
-      ? await competitionStore.getDualLeaderboards(limit)
-      : null
+    let persistedLeaderboards = null
+
+    if (competitionStore?.isEnabled()) {
+      try {
+        persistedLeaderboards = await competitionStore.getDualLeaderboards(limit)
+      }
+      catch (error) {
+        logCompetitionStoreFailure('getDualLeaderboards', error)
+      }
+    }
 
     let usingPersistedLeaderboards = false
     let leaderboards = liveLeaderboards
@@ -128,9 +141,16 @@ export function createRestApiRouter(
 
     const limit = parseLimit(request.query.limit, 10)
     const currentReplay = replayRecorder.getCurrentReplay()
-    const persisted = competitionStore?.isEnabled()
-      ? await competitionStore.listRecentReplays(limit)
-      : []
+    let persisted: ReplaySummary[] = []
+
+    if (competitionStore?.isEnabled()) {
+      try {
+        persisted = await competitionStore.listRecentReplays(limit)
+      }
+      catch (error) {
+        logCompetitionStoreFailure('listRecentReplays', error)
+      }
+    }
 
     const summaries = persisted.length > 0
       ? persisted
@@ -175,9 +195,16 @@ export function createRestApiRouter(
       return
     }
 
-    const persistedReplay = competitionStore?.isEnabled()
-      ? await competitionStore.getReplay(matchId)
-      : null
+    let persistedReplay = null
+
+    if (competitionStore?.isEnabled()) {
+      try {
+        persistedReplay = await competitionStore.getReplay(matchId)
+      }
+      catch (error) {
+        logCompetitionStoreFailure('getReplay', error)
+      }
+    }
 
     if (!persistedReplay) {
       response.status(404).json({ ok: false, code: 'REPLAY_NOT_FOUND', message: 'Replay not found' })

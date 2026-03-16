@@ -1,6 +1,7 @@
-import { startTransition, useEffect, useEffectEvent, useMemo, useState } from 'react'
+import { startTransition, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
+import { getSupabaseRealtimeClient } from '../lib/supabase-browser'
 import { resolveApiBaseUrl, resolveGatewayToken } from '../lib/runtime-config'
-import type { DualLeaderboard, MatchReplay, ReplaySummary } from '../types/competition'
+import type { CompetitionRealtimeStatus, DualLeaderboard, MatchReplay, ReplaySummary } from '../types/competition'
 
 interface LeaderboardResponse {
   ok: boolean
@@ -22,6 +23,10 @@ const EMPTY_LEADERBOARDS: DualLeaderboard = {
   agent: [],
   all: [],
 }
+
+const POLL_INTERVAL_MS = 15000
+const REALTIME_FALLBACK_POLL_INTERVAL_MS = 60000
+const REALTIME_REFRESH_DEBOUNCE_MS = 400
 
 function createAuthHeaders(token: string | null) {
   return token
@@ -46,6 +51,7 @@ async function requestJson<T>(url: string, token: string | null, signal?: AbortS
 export function useCompetitionData() {
   const apiBaseUrl = useMemo(() => resolveApiBaseUrl(), [])
   const gatewayToken = useMemo(() => resolveGatewayToken(), [])
+  const realtimeClient = useMemo(() => getSupabaseRealtimeClient(), [])
   const [leaderboards, setLeaderboards] = useState<DualLeaderboard>(EMPTY_LEADERBOARDS)
   const [replays, setReplays] = useState<ReplaySummary[]>([])
   const [selectedReplayId, setSelectedReplayId] = useState<string | null>(null)
@@ -53,6 +59,9 @@ export function useCompetitionData() {
   const [isLoadingOverview, setIsLoadingOverview] = useState(true)
   const [isLoadingReplayDetail, setIsLoadingReplayDetail] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [realtimeStatus, setRealtimeStatus] = useState<CompetitionRealtimeStatus>(realtimeClient ? 'connecting' : 'disabled')
+  const [realtimeError, setRealtimeError] = useState<string | null>(null)
+  const refreshTimerRef = useRef<number | null>(null)
 
   const refreshOverview = useEffectEvent(async (signal?: AbortSignal) => {
     if (!apiBaseUrl) {
@@ -121,6 +130,18 @@ export function useCompetitionData() {
     }
   })
 
+  const scheduleOverviewRefresh = useEffectEvent(() => {
+    if (refreshTimerRef.current !== null) {
+      window.clearTimeout(refreshTimerRef.current)
+    }
+
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null
+      setIsLoadingOverview(true)
+      void refreshOverview()
+    }, REALTIME_REFRESH_DEBOUNCE_MS)
+  })
+
   useEffect(() => {
     const controller = new AbortController()
     setIsLoadingOverview(true)
@@ -128,13 +149,61 @@ export function useCompetitionData() {
 
     const timer = window.setInterval(() => {
       void refreshOverview()
-    }, 15000)
+    }, realtimeClient ? REALTIME_FALLBACK_POLL_INTERVAL_MS : POLL_INTERVAL_MS)
 
     return () => {
       controller.abort()
       window.clearInterval(timer)
     }
-  }, [refreshOverview])
+  }, [realtimeClient, refreshOverview])
+
+  useEffect(() => {
+    if (!realtimeClient) {
+      setRealtimeStatus('disabled')
+      setRealtimeError(null)
+      return
+    }
+
+    setRealtimeStatus('connecting')
+    setRealtimeError(null)
+
+    const channel = realtimeClient
+      .channel(`competition-overview-${Math.random().toString(36).slice(2)}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'leaderboard_entries',
+      }, () => {
+        scheduleOverviewRefresh()
+      })
+
+    channel.subscribe((status, subscribeError) => {
+      if (status === 'SUBSCRIBED') {
+        setRealtimeStatus('subscribed')
+        setRealtimeError(null)
+        return
+      }
+
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        setRealtimeStatus('error')
+        setRealtimeError(subscribeError?.message ?? 'Supabase Realtime 连接失败。')
+        return
+      }
+
+      if (status === 'CLOSED') {
+        setRealtimeStatus('connecting')
+      }
+    })
+
+    return () => {
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current)
+        refreshTimerRef.current = null
+      }
+
+      void realtimeClient.removeChannel(channel)
+    }
+  }, [realtimeClient, scheduleOverviewRefresh])
 
   useEffect(() => {
     if (!selectedReplayId) {
@@ -158,6 +227,8 @@ export function useCompetitionData() {
     isLoadingOverview,
     isLoadingReplayDetail,
     error,
+    realtimeStatus,
+    realtimeError,
     selectReplay: setSelectedReplayId,
     refresh: () => {
       setIsLoadingOverview(true)

@@ -86,3 +86,11 @@ export function resolveApiBaseUrl() {
 
   return `${runtimeWindow.location.origin}/api`
 }
+
+export function resolveSupabaseUrl() {
+  return readConfiguredValue('VITE_SUPABASE_URL', 'SUPABASE_URL')
+}
+
+export function resolveSupabaseAnonKey() {
+  return readConfiguredValue('VITE_SUPABASE_ANON_KEY', 'SUPABASE_ANON_KEY')
+}

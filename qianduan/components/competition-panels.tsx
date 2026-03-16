@@ -1,5 +1,5 @@
 import { Bot, RefreshCcw, Trophy, UserRound, Waves } from 'lucide-react'
-import type { DualLeaderboard, LeaderboardEntry, MatchReplay, ReplaySummary } from '../types/competition'
+import type { CompetitionRealtimeStatus, DualLeaderboard, LeaderboardEntry, MatchReplay, ReplaySummary } from '../types/competition'
 import { cx } from '../lib/cx'
 
 interface CompetitionPanelsProps {
@@ -11,12 +11,40 @@ interface CompetitionPanelsProps {
   isLoadingOverview: boolean
   isLoadingReplayDetail: boolean
   error: string | null
+  realtimeStatus: CompetitionRealtimeStatus
+  realtimeError: string | null
   onRefresh: () => void
   onSelectReplay: (matchId: string) => void
 }
 
 function formatTime(value: string) {
   return new Date(value).toLocaleString('zh-CN', { hour12: false })
+}
+
+function formatRealtimeLabel(status: CompetitionRealtimeStatus) {
+  switch (status) {
+    case 'subscribed':
+      return 'Realtime 已连接'
+    case 'connecting':
+      return 'Realtime 连接中'
+    case 'error':
+      return 'Realtime 异常'
+    default:
+      return 'Realtime 未配置'
+  }
+}
+
+function getRealtimeBadgeClassName(status: CompetitionRealtimeStatus) {
+  switch (status) {
+    case 'subscribed':
+      return 'border-acid-green/30 bg-acid-green/10 text-acid-green'
+    case 'connecting':
+      return 'border-warning-orange/30 bg-warning-orange/10 text-warning-orange'
+    case 'error':
+      return 'border-alert-red/30 bg-alert-red/10 text-alert-red'
+    default:
+      return 'border-white/10 bg-white/[0.04] text-slate-300'
+  }
 }
 
 function LeaderboardList({
@@ -82,6 +110,8 @@ export function CompetitionPanels({
   isLoadingOverview,
   isLoadingReplayDetail,
   error,
+  realtimeStatus,
+  realtimeError,
   onRefresh,
   onSelectReplay,
 }: CompetitionPanelsProps) {
@@ -95,17 +125,27 @@ export function CompetitionPanels({
           <div>
             <p className="text-[11px] uppercase tracking-[0.26em] text-cold-blue">Dual Leaderboards</p>
             <h2 className="mt-2 text-xl font-semibold text-white">碳基榜 / 硅基榜</h2>
-            <p className="mt-2 text-sm text-slate-400">排行榜优先读 Supabase 持久化成绩；未配置时回退到当前进程内实时快照。</p>
+            <p className="mt-2 text-sm text-slate-400">排行榜优先读 Supabase 持久化成绩；已配置 Realtime 时会在 leaderboard_entries 变更后自动刷新，未配置时回退到轮询和当前进程快照。</p>
           </div>
-          <button
-            type="button"
-            onClick={onRefresh}
-            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white transition-colors hover:bg-white/[0.08]"
-          >
-            <RefreshCcw className={cx('h-4 w-4', isLoadingOverview && 'animate-spin')} />
-            刷新榜单
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={cx(
+              'inline-flex items-center rounded-full border px-3 py-2 text-[11px] uppercase tracking-[0.18em]',
+              getRealtimeBadgeClassName(realtimeStatus),
+            )}>
+              {formatRealtimeLabel(realtimeStatus)}
+            </span>
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white transition-colors hover:bg-white/[0.08]"
+            >
+              <RefreshCcw className={cx('h-4 w-4', isLoadingOverview && 'animate-spin')} />
+              刷新榜单
+            </button>
+          </div>
         </div>
+
+        {realtimeError ? <p className="mt-3 text-xs text-alert-red">{realtimeError}</p> : null}
 
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
           <LeaderboardList title="Human" icon={<UserRound className="h-4 w-4" />} entries={leaderboards.human} />
