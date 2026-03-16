@@ -1,3 +1,5 @@
+import type { TowerTargetingStrategy } from './game-state'
+
 export interface TowerCatalogEntry {
   type: string
   label: string
@@ -6,6 +8,7 @@ export interface TowerCatalogEntry {
   damage: number
   range: number
   fireRateTicks: number
+  targetingStrategy: TowerTargetingStrategy
 }
 
 export const towerCatalog: Record<string, TowerCatalogEntry> = {
@@ -17,6 +20,7 @@ export const towerCatalog: Record<string, TowerCatalogEntry> = {
     damage: 20,
     range: 3.5,
     fireRateTicks: 4,
+    targetingStrategy: 'nearest',
   },
   cannon: {
     type: 'cannon',
@@ -26,5 +30,16 @@ export const towerCatalog: Record<string, TowerCatalogEntry> = {
     damage: 35,
     range: 2.5,
     fireRateTicks: 6,
+    targetingStrategy: 'strongest',
+  },
+  rail: {
+    type: 'rail',
+    label: '磁轨塔',
+    description: '超远射程，优先点杀最接近基地的前排单位。',
+    cost: 110,
+    damage: 28,
+    range: 5.5,
+    fireRateTicks: 5,
+    targetingStrategy: 'first',
   },
 }

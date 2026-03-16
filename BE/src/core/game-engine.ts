@@ -1,9 +1,13 @@
 import { ActionQueue } from './action-queue'
+import { Enemy } from './entities/enemy'
+import { Tower } from './entities/tower'
 import { GridMap } from './grid-map'
 import type { BuildTowerAction, ClientAction, PlayerIdentity, QueuedAction } from '../domain/actions'
-import type { EnemyState, GameLogEntry, GameState, PlayerState, Position, TowerState } from '../domain/game-state'
+import type { GameLogEntry, GameState, PlayerState, Position, TowerState } from '../domain/game-state'
 import type { ServerConfig } from '../config/server-config'
+import { enemyCatalog } from '../domain/enemy-catalog'
 import { towerCatalog } from '../domain/tower-catalog'
+import { buildWaveSpawnSchedule, buildWaveTimeline, getWaveStateForTick, type ScheduledEnemySpawn, type WaveTimelineEntry, waveCatalog } from '../domain/wave-catalog'
 
 type TickListener = (state: GameState) => void
 type ActionListener = (action: QueuedAction) => void
@@ -21,7 +25,17 @@ export class GameEngine {
 
   private readonly gridMap: GridMap
 
-  private lastEnemySpawnTick = -10
+  private enemies: Enemy[] = []
+
+  private towers: Tower[] = []
+
+  private readonly waveTimeline: WaveTimelineEntry[]
+
+  private readonly spawnSchedule: ScheduledEnemySpawn[]
+
+  private nextSpawnScheduleIndex = 0
+
+  private shouldRecalculateEnemyPaths = false
 
   constructor(config: ServerConfig) {
     this.config = config
@@ -30,6 +44,8 @@ export class GameEngine {
     const spawn = { x: 0, y: laneRow }
     const base = { x: config.mapWidth - 1, y: laneRow }
     this.gridMap = GridMap.create(config.mapWidth, config.mapHeight, spawn, base)
+    this.waveTimeline = buildWaveTimeline(waveCatalog)
+    this.spawnSchedule = buildWaveSpawnSchedule(this.waveTimeline)
 
     this.state = {
       matchId: config.matchId,
@@ -49,6 +65,7 @@ export class GameEngine {
         hp: 20,
         maxHp: 20,
       },
+      wave: getWaveStateForTick(0, this.waveTimeline, this.spawnSchedule, this.nextSpawnScheduleIndex),
       players: [],
       enemies: [],
       towers: [],
@@ -141,24 +158,35 @@ export class GameEngine {
   }
 
   getStateSnapshot(): GameState {
+    this.syncRuntimeState()
     return structuredClone(this.state)
   }
 
   tick() {
     this.state.tick += 1
     this.processQueuedActions()
+
+    // 严格按 Tick 顺序执行：新塔建成后先重算活体敌人的路径，再结算塔攻击与移动。
+    if (this.shouldRecalculateEnemyPaths) {
+      this.recalculateEnemyPaths()
+      this.shouldRecalculateEnemyPaths = false
+    }
+
     this.resolveTowerAttacks()
     this.collectDefeatedEnemies()
-    this.updateEnemyPositions()
-    this.resolveEnemiesAtBase()
-    this.spawnEnemyIfNeeded()
+    const reachedBaseEnemyIds = this.updateEnemyPositions(this.config.tickRateMs / 1000)
+    this.resolveEnemiesAtBase(reachedBaseEnemyIds)
+    this.spawnEnemiesForCurrentTick()
+    this.updateWaveState()
+    this.refreshRouteValidationOrigins()
+    this.syncRuntimeState()
     this.state.pendingActions = this.actionQueue.size()
 
     this.appendLog('info', 'Tick settled', {
       tick: this.state.tick,
       players: this.state.players.length,
-      towers: this.state.towers.length,
-      enemies: this.state.enemies.length,
+      towers: this.towers.length,
+      enemies: this.enemies.length,
       pendingActions: this.state.pendingActions,
     })
 
@@ -236,7 +264,7 @@ export class GameEngine {
     player.gold -= stats.cost
 
     const tower: TowerState = {
-      id: `tower-${this.state.tick}-${this.state.towers.length + 1}`,
+      id: `tower-${this.state.tick}-${this.towers.length + 1}`,
       ownerId: player.id,
       type,
       x,
@@ -245,76 +273,56 @@ export class GameEngine {
       range: stats.range,
       fireRateTicks: stats.fireRateTicks,
       cooldownTicks: 0,
+      targetingStrategy: stats.targetingStrategy,
     }
 
-    this.state.towers.push(tower)
+    this.towers.push(new Tower(tower))
     this.gridMap.occupy(x, y)
     this.syncMapCells()
-    this.recalculateEnemyPaths()
-    this.refreshRouteValidationOrigins()
+    this.shouldRecalculateEnemyPaths = true
     this.appendLog('info', 'Tower built', { playerId: player.id, towerId: tower.id, type, x, y })
   }
 
-  private spawnEnemyIfNeeded() {
-    if (this.state.tick - this.lastEnemySpawnTick < 10) {
-      return
+  private spawnEnemiesForCurrentTick() {
+    let spawnedAtLeastOneEnemy = false
+
+    while (this.nextSpawnScheduleIndex < this.spawnSchedule.length) {
+      const scheduledSpawn = this.spawnSchedule[this.nextSpawnScheduleIndex]
+      if (scheduledSpawn.dueTick > this.state.tick) {
+        break
+      }
+
+      this.nextSpawnScheduleIndex += 1
+      if (this.spawnEnemy(scheduledSpawn)) {
+        spawnedAtLeastOneEnemy = true
+      }
     }
 
-    this.lastEnemySpawnTick = this.state.tick
-    const path = this.gridMap.findPath(this.state.map.spawn, this.state.map.base)
-    if (path.length === 0) {
-      this.appendLog('error', 'Enemy spawn skipped because no path exists to base', {
-        tick: this.state.tick,
-      })
-      return
+    if (spawnedAtLeastOneEnemy) {
+      this.refreshRouteValidationOrigins()
     }
-
-    const enemy: EnemyState = {
-      id: `enemy-${this.state.tick}`,
-      kind: 'runner',
-      x: this.state.map.spawn.x,
-      y: this.state.map.spawn.y,
-      hp: 100,
-      maxHp: 100,
-      speed: 1,
-      rewardGold: 15,
-      baseDamage: 1,
-      path,
-      pathIndex: 0,
-      lastDamagedByPlayerId: null,
-    }
-
-    this.state.enemies.push(enemy)
-    this.refreshRouteValidationOrigins()
-    this.appendLog('info', 'Enemy spawned', { enemyId: enemy.id, x: enemy.x, y: enemy.y })
   }
 
   private resolveTowerAttacks() {
-    for (const tower of this.state.towers) {
-      if (tower.cooldownTicks > 0) {
-        tower.cooldownTicks -= 1
-        continue
-      }
-
-      const target = this.findNearestEnemyInRange(tower)
+    for (const tower of this.towers) {
+      const target = tower.fire(this.enemies)
       if (!target) {
         continue
       }
 
-      target.hp = Math.max(0, target.hp - tower.damage)
-      target.lastDamagedByPlayerId = tower.ownerId
-      tower.cooldownTicks = tower.fireRateTicks
       this.appendLog('info', 'Tower fired', { towerId: tower.id, enemyId: target.id, damage: tower.damage })
     }
   }
 
   private collectDefeatedEnemies() {
-    const defeatedEnemies = this.state.enemies.filter((enemy) => enemy.hp <= 0)
+    const defeatedEnemies = this.enemies.filter((enemy) => !enemy.isAlive())
     if (defeatedEnemies.length === 0) {
       return
     }
 
-    this.state.enemies = this.state.enemies.filter((enemy) => enemy.hp > 0)
+    const defeatedEnemyIds = new Set(defeatedEnemies.map((enemy) => enemy.id))
+    this.enemies = this.enemies.filter((enemy) => !defeatedEnemyIds.has(enemy.id))
+
     for (const enemy of defeatedEnemies) {
       const owner = this.findRewardOwner(enemy)
       if (owner) {
@@ -328,73 +336,39 @@ export class GameEngine {
     this.refreshRouteValidationOrigins()
   }
 
-  private updateEnemyPositions() {
-    this.state.enemies = this.state.enemies.map((enemy) => {
-      const nextPath = this.gridMap.findPath({ x: enemy.x, y: enemy.y }, this.state.map.base)
-      if (nextPath.length === 0) {
-        this.appendLog('warn', 'Enemy cannot find a route to base and will hold position', { enemyId: enemy.id })
-        return {
-          ...enemy,
-          path: [{ x: enemy.x, y: enemy.y }],
-          pathIndex: 0,
-        }
-      }
+  private updateEnemyPositions(deltaTime: number) {
+    const reachedBaseEnemyIds = new Set<string>()
 
-      const movementSteps = Math.max(1, Math.floor(enemy.speed))
-      const nextIndex = Math.min(movementSteps, nextPath.length - 1)
-      const nextPosition = nextPath[nextIndex] ?? nextPath[0]
+    for (const enemy of this.enemies) {
+      enemy.move(deltaTime, (reachedEnemy) => {
+        reachedBaseEnemyIds.add(reachedEnemy.id)
+      })
+    }
 
-      return {
-        ...enemy,
-        x: nextPosition.x,
-        y: nextPosition.y,
-        path: nextPath,
-        pathIndex: nextIndex,
-      }
-    })
-
-    this.refreshRouteValidationOrigins()
+    return reachedBaseEnemyIds
   }
 
-  private resolveEnemiesAtBase() {
-    if (this.state.enemies.length === 0) {
+  private resolveEnemiesAtBase(reachedBaseEnemyIds: Set<string>) {
+    if (reachedBaseEnemyIds.size === 0) {
       return
     }
 
-    const survivors: EnemyState[] = []
-    for (const enemy of this.state.enemies) {
-      if (enemy.x === this.state.base.x && enemy.y === this.state.base.y) {
-        this.state.base.hp = Math.max(0, this.state.base.hp - enemy.baseDamage)
-        this.appendLog('warn', 'Enemy reached the base', {
-          enemyId: enemy.id,
-          baseDamage: enemy.baseDamage,
-          remainingBaseHp: this.state.base.hp,
-        })
+    const survivors: Enemy[] = []
+    for (const enemy of this.enemies) {
+      if (!reachedBaseEnemyIds.has(enemy.id)) {
+        survivors.push(enemy)
         continue
       }
 
-      survivors.push(enemy)
+      this.state.base.hp = Math.max(0, this.state.base.hp - enemy.baseDamage)
+      this.appendLog('warn', 'Enemy reached the base', {
+        enemyId: enemy.id,
+        baseDamage: enemy.baseDamage,
+        remainingBaseHp: this.state.base.hp,
+      })
     }
 
-    this.state.enemies = survivors
-    this.refreshRouteValidationOrigins()
-  }
-
-  private findNearestEnemyInRange(tower: TowerState) {
-    let winner: EnemyState | null = null
-    let winnerDistance = Number.POSITIVE_INFINITY
-
-    for (const enemy of this.state.enemies) {
-      const distance = Math.hypot(enemy.x - tower.x, enemy.y - tower.y)
-      if (distance > tower.range || distance >= winnerDistance) {
-        continue
-      }
-
-      winner = enemy
-      winnerDistance = distance
-    }
-
-    return winner
+    this.enemies = survivors
   }
 
   private ensurePlayer(identity: PlayerIdentity) {
@@ -433,29 +407,87 @@ export class GameEngine {
   private refreshRouteValidationOrigins() {
     const origins: Position[] = [this.state.map.spawn]
 
-    for (const enemy of this.state.enemies) {
-      origins.push({ x: enemy.x, y: enemy.y })
+    for (const enemy of this.enemies) {
+      const anchor = enemy.getGridAnchor()
+      origins.push({ x: anchor.x, y: anchor.y })
     }
 
     this.gridMap.setValidationOrigins(origins)
   }
 
   private recalculateEnemyPaths() {
-    this.state.enemies = this.state.enemies.map((enemy) => {
-      const path = this.gridMap.findPath({ x: enemy.x, y: enemy.y }, this.state.map.base)
-      return {
-        ...enemy,
-        path,
-        pathIndex: path.length > 1 ? 0 : enemy.pathIndex,
+    for (const enemy of this.enemies) {
+      const start = enemy.getGridAnchor()
+      const path = this.gridMap.findPath(start.x, start.y, this.gridMap.BASE_POINT.x, this.gridMap.BASE_POINT.y)
+      const pathFound = enemy.recalculatePath(enemy.x, enemy.y, path, this.gridMap.BASE_POINT)
+      if (!pathFound) {
+        this.appendLog('warn', 'Enemy cannot find a recalculated path and will hold position', { enemyId: enemy.id })
       }
-    })
+    }
   }
 
   private syncMapCells() {
     this.state.map.cells = this.gridMap.toCells()
   }
 
-  private findRewardOwner(enemy: EnemyState) {
+  private updateWaveState() {
+    this.state.wave = getWaveStateForTick(
+      this.state.tick,
+      this.waveTimeline,
+      this.spawnSchedule,
+      this.nextSpawnScheduleIndex,
+    )
+  }
+
+  private spawnEnemy(scheduledSpawn: ScheduledEnemySpawn) {
+    const enemyConfig = enemyCatalog[scheduledSpawn.kind]
+    if (!enemyConfig) {
+      this.appendLog('warn', 'Enemy spawn skipped because kind is unknown', {
+        kind: scheduledSpawn.kind,
+        waveIndex: scheduledSpawn.waveIndex,
+      })
+      return false
+    }
+
+    const path = this.gridMap.findPath(this.state.map.spawn, this.state.map.base)
+    if (path === null) {
+      this.appendLog('error', 'Enemy spawn skipped because no path exists to base', {
+        tick: this.state.tick,
+        kind: scheduledSpawn.kind,
+        waveIndex: scheduledSpawn.waveIndex,
+      })
+      return false
+    }
+
+    const enemy = new Enemy({
+      id: `enemy-${scheduledSpawn.kind}-${this.state.tick}-${this.enemies.length + 1}`,
+      kind: enemyConfig.kind,
+      x: this.state.map.spawn.x,
+      y: this.state.map.spawn.y,
+      hp: enemyConfig.maxHp,
+      maxHp: enemyConfig.maxHp,
+      speed: enemyConfig.speed,
+      rewardGold: enemyConfig.rewardGold,
+      baseDamage: enemyConfig.baseDamage,
+      path,
+      pathIndex: 0,
+      lastDamagedByPlayerId: null,
+    })
+
+    enemy.recalculatePath(this.state.map.spawn.x, this.state.map.spawn.y, path, this.gridMap.BASE_POINT)
+    this.enemies.push(enemy)
+    this.appendLog('info', 'Enemy spawned', {
+      enemyId: enemy.id,
+      kind: enemy.kind,
+      waveIndex: scheduledSpawn.waveIndex,
+      waveLabel: scheduledSpawn.waveLabel,
+      x: enemy.x,
+      y: enemy.y,
+    })
+    return true
+  }
+
+  private findRewardOwner(enemy: Enemy) {
     if (enemy.lastDamagedByPlayerId) {
       const lastAttacker = this.state.players.find((player) => player.id === enemy.lastDamagedByPlayerId)
       if (lastAttacker) {
@@ -464,5 +496,10 @@ export class GameEngine {
     }
 
     return this.state.players[0]
+  }
+
+  private syncRuntimeState() {
+    this.state.enemies = this.enemies.map((enemy) => enemy.toState())
+    this.state.towers = this.towers.map((tower) => tower.toState())
   }
 }

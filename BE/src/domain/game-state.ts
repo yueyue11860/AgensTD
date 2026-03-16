@@ -1,6 +1,8 @@
 export type PlayerKind = 'human' | 'agent'
 export type ConnectionStatus = 'connected' | 'disconnected'
 export type LogLevel = 'info' | 'warn' | 'error'
+export type EnemyKind = 'runner' | 'swift' | 'brute'
+export type TowerTargetingStrategy = 'nearest' | 'first' | 'strongest'
 
 export interface Position {
   x: number
@@ -21,6 +23,14 @@ export interface BaseState extends Position {
   maxHp: number
 }
 
+export interface WaveState {
+  index: number
+  label: string
+  startedAtTick: number
+  endsAtTick: number | null
+  remainingSpawns: number
+}
+
 export interface PlayerState {
   id: string
   name: string
@@ -33,7 +43,7 @@ export interface PlayerState {
 
 export interface EnemyState extends Position {
   id: string
-  kind: 'runner'
+  kind: EnemyKind
   hp: number
   maxHp: number
   speed: number
@@ -52,6 +62,7 @@ export interface TowerState extends Position {
   range: number
   fireRateTicks: number
   cooldownTicks: number
+  targetingStrategy: TowerTargetingStrategy
 }
 
 export interface GameLogEntry {
@@ -76,6 +87,7 @@ export interface GameState {
   startedAt: number
   map: GameMapState
   base: BaseState
+  wave: WaveState
   players: PlayerState[]
   enemies: EnemyState[]
   towers: TowerState[]

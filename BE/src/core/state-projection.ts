@@ -1,6 +1,7 @@
 import type { ServerConfig } from '../config/server-config'
 import type { GameState } from '../domain/game-state'
 import type { FrontendGameCell, FrontendGameState } from '../domain/frontend-game-state'
+import { enemyCatalog } from '../domain/enemy-catalog'
 import { towerCatalog } from '../domain/tower-catalog'
 
 function buildCells(state: GameState): FrontendGameCell[] {
@@ -81,17 +82,21 @@ export function projectFrontendGameState(state: GameState, config: ServerConfig)
         },
       ],
     })),
-    enemies: state.enemies.map((enemy) => ({
-      id: enemy.id,
-      type: enemy.kind,
-      name: 'Runner',
-      position: { x: enemy.x, y: enemy.y },
-      hp: enemy.hp,
-      maxHp: enemy.maxHp,
-      threat: enemy.maxHp >= 200 ? 'high' : 'low',
-      intent: 'advance',
-      progress: getEnemyProgress(state, enemy),
-    })),
+    enemies: state.enemies.map((enemy) => {
+      const enemyConfig = enemyCatalog[enemy.kind]
+
+      return {
+        id: enemy.id,
+        type: enemy.kind,
+        name: enemyConfig?.label ?? enemy.kind,
+        position: { x: enemy.x, y: enemy.y },
+        hp: enemy.hp,
+        maxHp: enemy.maxHp,
+        threat: enemyConfig?.threat ?? 'low',
+        intent: 'advance',
+        progress: getEnemyProgress(state, enemy),
+      }
+    }),
     buildPalette: Object.values(towerCatalog).map((entry, index) => ({
       type: entry.type,
       label: entry.label,
@@ -103,16 +108,16 @@ export function projectFrontendGameState(state: GameState, config: ServerConfig)
     })),
     actionBar: {
       title: '建议动作',
-      summary: '当前版本仅实现 BUILD_TOWER，升级与出售保留为禁用占位。',
+      summary: '防御塔会按各自策略选择目标；升级与出售暂未实现。',
       actions: [],
     },
     wave: {
-      index: Math.floor(state.tick / 10) + 1,
-      label: `第 ${Math.floor(state.tick / 10) + 1} 波`,
+      index: state.wave.index,
+      label: `${state.wave.label} · 剩余刷怪 ${state.wave.remainingSpawns}`,
     },
     notices: state.players.length === 0
       ? ['等待玩家或 Agent 连接网关。']
-      : [`出生点位于 (${state.map.spawn.x}, ${state.map.spawn.y})，基地剩余 ${state.base.hp}/${state.base.maxHp}。`],
+      : [`出生点位于 (${state.map.spawn.x}, ${state.map.spawn.y})，当前 ${state.wave.label}，基地剩余 ${state.base.hp}/${state.base.maxHp}。`],
     score: primaryPlayer?.score ?? 0,
     updatedAt: new Date().toISOString(),
   }
