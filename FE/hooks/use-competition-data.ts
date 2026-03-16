@@ -182,7 +182,7 @@ export function useCompetitionData() {
       controller.abort()
       window.clearInterval(timer)
     }
-  }, [realtimeClient, refreshOverview])
+  }, [realtimeClient])
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -202,7 +202,7 @@ export function useCompetitionData() {
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [refreshOverview])
+  }, [])
 
   useEffect(() => {
     if (!realtimeClient) {
@@ -257,7 +257,7 @@ export function useCompetitionData() {
 
       void realtimeClient.removeChannel(channel)
     }
-  }, [realtimeClient, scheduleOverviewRefresh])
+  }, [realtimeClient])
 
   useEffect(() => {
     if (!selectedReplayId) {
@@ -270,7 +270,7 @@ export function useCompetitionData() {
     return () => {
       controller.abort()
     }
-  }, [refreshReplayDetail, selectedReplayId])
+  }, [selectedReplayId])
 
   return {
     apiBaseUrl,

@@ -379,7 +379,7 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
       socket.disconnect()
       socketRef.current = null
     }
-  }, [connectionQuery, flushQueuedState, gatewayToken, handleNoticeUpdate, handleTickUpdate, handleUiStateUpdate, options.autoConnect, options.path, queueStateUpdate, socketUrl])
+  }, [connectionQuery, gatewayToken, options.autoConnect, options.path, socketUrl])
 
   const sendAction = useCallback((action: GameAction) => {
     const socket = socketRef.current
