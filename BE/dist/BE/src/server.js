@@ -5,6 +5,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 require("dotenv/config");
 const http_1 = __importDefault(require("http"));
+const path_1 = __importDefault(require("path"));
+const fs_1 = require("fs");
 const cors_1 = __importDefault(require("cors"));
 const express_1 = __importDefault(require("express"));
 const server_config_1 = require("./config/server-config");
@@ -20,8 +22,27 @@ const rest_api_1 = require("./network/rest-api");
 const socket_gateway_1 = require("./network/socket-gateway");
 const config = (0, server_config_1.createServerConfig)();
 const app = (0, express_1.default)();
+const frontendDistDir = path_1.default.resolve(process.cwd(), '../FE/dist');
+const frontendIndexFile = path_1.default.join(frontendDistDir, 'index.html');
+const hasFrontendBuild = (0, fs_1.existsSync)(frontendIndexFile);
+function isFrontendPageRequest(request) {
+    if (request.path.startsWith('/api') || request.path.startsWith('/health') || request.path.startsWith('/socket.io')) {
+        return false;
+    }
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return false;
+    }
+    if (path_1.default.extname(request.path)) {
+        return false;
+    }
+    const acceptHeader = request.headers.accept ?? '';
+    return acceptHeader.includes('text/html');
+}
 app.use((0, cors_1.default)({ origin: config.corsOrigin === '*' ? true : config.corsOrigin, credentials: true }));
 app.use(express_1.default.json());
+if (hasFrontendBuild) {
+    app.use(express_1.default.static(frontendDistDir));
+}
 app.get('/health', (_request, response) => {
     response.json({
         ok: true,
@@ -44,6 +65,15 @@ const actionLimiter = new action_rate_limiter_1.ActionRateLimiter(config.actionR
 const gateway = new socket_gateway_1.SocketGateway(httpServer, room, config, projectedTickStream, performanceTelemetry, actionLimiter);
 app.use('/api', (0, rest_api_1.createRestApiRouter)(engine, config, actionLimiter, replayRecorder, competitionStore));
 app.use('/api/agent', (0, agent_api_1.createAgentApiRouter)(projectedTickStream, config, replayRecorder, competitionStore, performanceTelemetry));
+if (hasFrontendBuild) {
+    app.use((request, response, next) => {
+        if (!isFrontendPageRequest(request)) {
+            next();
+            return;
+        }
+        response.sendFile(frontendIndexFile);
+    });
+}
 httpServer.listen(config.port, () => {
     loop.start();
 });

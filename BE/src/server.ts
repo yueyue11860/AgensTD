@@ -1,5 +1,7 @@
 import 'dotenv/config'
 import http from 'http'
+import path from 'path'
+import { existsSync } from 'fs'
 import cors from 'cors'
 import express from 'express'
 import { createServerConfig } from './config/server-config'
@@ -16,9 +18,33 @@ import { SocketGateway } from './network/socket-gateway'
 
 const config = createServerConfig()
 const app = express()
+const frontendDistDir = path.resolve(process.cwd(), '../FE/dist')
+const frontendIndexFile = path.join(frontendDistDir, 'index.html')
+const hasFrontendBuild = existsSync(frontendIndexFile)
+
+function isFrontendPageRequest(request: express.Request) {
+  if (request.path.startsWith('/api') || request.path.startsWith('/health') || request.path.startsWith('/socket.io')) {
+    return false
+  }
+
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    return false
+  }
+
+  if (path.extname(request.path)) {
+    return false
+  }
+
+  const acceptHeader = request.headers.accept ?? ''
+  return acceptHeader.includes('text/html')
+}
 
 app.use(cors({ origin: config.corsOrigin === '*' ? true : config.corsOrigin, credentials: true }))
 app.use(express.json())
+
+if (hasFrontendBuild) {
+  app.use(express.static(frontendDistDir))
+}
 
 app.get('/health', (_request, response) => {
   response.json({
@@ -44,6 +70,17 @@ const gateway = new SocketGateway(httpServer, room, config, projectedTickStream,
 
 app.use('/api', createRestApiRouter(engine, config, actionLimiter, replayRecorder, competitionStore))
 app.use('/api/agent', createAgentApiRouter(projectedTickStream, config, replayRecorder, competitionStore, performanceTelemetry))
+
+if (hasFrontendBuild) {
+  app.use((request, response, next) => {
+    if (!isFrontendPageRequest(request)) {
+      next()
+      return
+    }
+
+    response.sendFile(frontendIndexFile)
+  })
+}
 
 httpServer.listen(config.port, () => {
   loop.start()

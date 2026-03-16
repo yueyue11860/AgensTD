@@ -5,6 +5,7 @@ import {
   Clapperboard,
   Crown,
   DoorOpen,
+  House,
   Lock,
   Play,
   Plus,
@@ -16,8 +17,10 @@ import {
   UserPlus,
   Wifi,
   WifiOff,
+  type LucideIcon,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useCompetitionData } from '../hooks/use-competition-data'
 import { useGameEngine } from '../hooks/use-game-engine'
 import { cx } from '../lib/cx'
@@ -46,12 +49,13 @@ interface RoomSummary {
 
 interface NavItem {
   label: string
-  view: CurrentView
-  icon: typeof Play
+  view: Exclude<CurrentView, 'ROOM'>
+  icon: LucideIcon
 }
 
 const HOME_NAV_ITEMS: NavItem[] = [
-  { label: '开始游戏', view: 'HOME', icon: Play },
+  { label: '首页', view: 'HOME', icon: House },
+  { label: '房间列表', view: 'LOBBY', icon: DoorOpen },
   { label: '排行榜', view: 'LEADERBOARD', icon: Trophy },
   { label: '热门回放', view: 'HOT_REPLAYS', icon: Clapperboard },
 ]
@@ -60,7 +64,7 @@ const AGENT_SKILL_DOC = `# Agent Player 接入说明
 
 这个页面用于演示 Agent Player 如何通过 **WebSocket** 接入 AgensTD 房间，并通过 JSON 指令完成同步、建塔和升级操作。
 
-> 这是一个静态说明页，用于前端展示和联调参考。页面切换只改 React 视图状态，不触发浏览器整体刷新，因此已有连接不会因为阅读文档而被中断。
+> 这是一个静态说明页，用于前端展示和联调参考。页面切换通过前端静态路由完成，不触发浏览器整体刷新，因此已有连接不会因为阅读文档而被中断。
 
 ## 1. 连接游戏房间
 
@@ -172,7 +176,7 @@ wss://your-domain.example/ws/room/RM-2088?role=agent&playerId=agent-alpha
 1. 只在收到最新 tick_update 后做决策，避免基于旧状态重复下发指令。
 2. 为每条 send_action 保留本地 request id，便于对齐 action_result 和重试策略。
 3. 遇到网络抖动时，不要刷新整个页面；应保持连接管理器存活，只做重连或重订阅。
-4. 如果要在 UI 中切换到文档、排行榜或大厅，优先使用单页应用内部状态切换，而不是 window.location 跳转。
+4. 如果要在 UI 中切换到文档、排行榜或大厅，优先使用前端静态路由切换，而不是依赖 query 参数或硬编码跳转。
 
 ## 6. 最小联调样例
 
@@ -264,6 +268,64 @@ const INITIAL_ROOMS: RoomSummary[] = [
     ],
   },
 ]
+
+const STATIC_VIEW_ROUTES: Record<Exclude<CurrentView, 'ROOM'>, string> = {
+  HOME: '/home',
+  LOBBY: '/room',
+  LEADERBOARD: '/leaderboard',
+  HOT_REPLAYS: '/hot-replays',
+  SKILL_DOC: '/skill',
+}
+
+function getRoomDetailPath(roomId: string) {
+  return `/room/${encodeURIComponent(roomId)}`
+}
+
+function normalizePathname(pathname: string) {
+  if (pathname === '/') {
+    return pathname
+  }
+
+  return pathname.replace(/\/+$/, '')
+}
+
+function resolveCurrentView(pathname: string): CurrentView {
+  const normalizedPath = normalizePathname(pathname)
+
+  if (normalizedPath === STATIC_VIEW_ROUTES.HOME || normalizedPath === '/') {
+    return 'HOME'
+  }
+
+  if (normalizedPath === STATIC_VIEW_ROUTES.LOBBY) {
+    return 'LOBBY'
+  }
+
+  if (normalizedPath.startsWith(`${STATIC_VIEW_ROUTES.LOBBY}/`)) {
+    return 'ROOM'
+  }
+
+  if (normalizedPath === STATIC_VIEW_ROUTES.LEADERBOARD) {
+    return 'LEADERBOARD'
+  }
+
+  if (normalizedPath === STATIC_VIEW_ROUTES.HOT_REPLAYS) {
+    return 'HOT_REPLAYS'
+  }
+
+  if (normalizedPath === STATIC_VIEW_ROUTES.SKILL_DOC) {
+    return 'SKILL_DOC'
+  }
+
+  return 'HOME'
+}
+
+function isNavItemActive(view: Exclude<CurrentView, 'ROOM'>, currentView: CurrentView) {
+  if (view === 'LOBBY') {
+    return currentView === 'LOBBY' || currentView === 'ROOM'
+  }
+
+  return currentView === view
+}
 
 function formatClock(timestamp: number | null) {
   if (!timestamp) {
@@ -380,7 +442,7 @@ function CountdownOverlay({ value }: { value: number }) {
   )
 }
 
-function HomeNav({ currentView, onNavigate }: { currentView: CurrentView; onNavigate: (view: CurrentView) => void }) {
+function HomeNav({ currentView, onNavigate }: { currentView: CurrentView; onNavigate: (view: Exclude<CurrentView, 'ROOM'>) => void }) {
   return (
     <nav className="mt-10 flex flex-wrap items-center justify-center gap-4">
       {HOME_NAV_ITEMS.map(({ label, view, icon: Icon }) => (
@@ -390,7 +452,7 @@ function HomeNav({ currentView, onNavigate }: { currentView: CurrentView; onNavi
           onClick={() => onNavigate(view)}
           className={cx(
             'cyber-nav-chip group min-w-40',
-            currentView === view && 'border-cyan-300/60 text-cyan-100 shadow-[0_0_30px_rgba(45,212,191,0.22)]',
+            isNavItemActive(view, currentView) && 'border-cyan-300/60 text-cyan-100 shadow-[0_0_30px_rgba(45,212,191,0.22)]',
           )}
         >
           <Icon className="h-4 w-4 transition-transform duration-300 group-hover:scale-110" />
@@ -500,7 +562,10 @@ function SkillDocPage({ onBack }: { onBack: () => void }) {
 }
 
 export function TowerDefenseFrontendPage() {
-  const [currentView, setCurrentView] = useState<CurrentView>('HOME')
+  const navigate = useNavigate()
+  const location = useLocation()
+  const { roomId: routeRoomId } = useParams<{ roomId?: string }>()
+  const currentView = resolveCurrentView(location.pathname)
   const [rooms, setRooms] = useState<RoomSummary[]>(INITIAL_ROOMS)
   const [selectedRoomId, setSelectedRoomId] = useState<string>(INITIAL_ROOMS[0]?.id ?? '')
   const [isCreateRoomOpen, setIsCreateRoomOpen] = useState(false)
@@ -531,7 +596,29 @@ export function TowerDefenseFrontendPage() {
   } = useCompetitionData()
 
   const activeReplay = selectedReplay ?? null
-  const selectedRoom = rooms.find((room) => room.id === selectedRoomId) ?? rooms[0] ?? null
+  const activeRoomId = routeRoomId ? decodeURIComponent(routeRoomId) : selectedRoomId
+  const selectedRoom = rooms.find((room) => room.id === activeRoomId) ?? (currentView === 'ROOM' ? null : rooms[0] ?? null)
+
+  function navigateToView(view: Exclude<CurrentView, 'ROOM'>) {
+    navigate(STATIC_VIEW_ROUTES[view])
+  }
+
+  useEffect(() => {
+    if (currentView !== 'ROOM') {
+      return
+    }
+
+    const room = rooms.find((candidate) => candidate.id === activeRoomId)
+
+    if (!room) {
+      navigate(STATIC_VIEW_ROUTES.LOBBY, { replace: true })
+      return
+    }
+
+    if (selectedRoomId !== room.id) {
+      setSelectedRoomId(room.id)
+    }
+  }, [activeRoomId, currentView, navigate, rooms, selectedRoomId])
 
   useEffect(() => {
     if (countdownValue === null) {
@@ -539,7 +626,7 @@ export function TowerDefenseFrontendPage() {
     }
 
     if (countdownValue === 0) {
-      window.location.assign('/gaming')
+      navigate('/gaming')
       setCountdownValue(null)
       return
     }
@@ -551,11 +638,11 @@ export function TowerDefenseFrontendPage() {
     return () => {
       window.clearTimeout(timer)
     }
-  }, [countdownValue])
+  }, [countdownValue, navigate])
 
   function joinRoom(roomId: string) {
     setSelectedRoomId(roomId)
-    setCurrentView('ROOM')
+    navigate(getRoomDetailPath(roomId))
   }
 
   function handleCreateRoom() {
@@ -582,7 +669,7 @@ export function TowerDefenseFrontendPage() {
     setNewRoomName('')
     setNewRoomPassword('')
     setIsCreateRoomOpen(false)
-    setCurrentView('ROOM')
+    navigate(getRoomDetailPath(roomId))
   }
 
   function onStartGame() {
@@ -623,7 +710,7 @@ export function TowerDefenseFrontendPage() {
             <div className="flex min-h-full flex-col justify-center">
               <div className="mx-auto max-w-3xl text-center">
                 <p className="text-sm uppercase tracking-[0.52em] text-orange-200/80">Main Navigation</p>
-                <HomeNav currentView={currentView} onNavigate={setCurrentView} />
+                <HomeNav currentView={currentView} onNavigate={navigateToView} />
               </div>
 
               <div className="mx-auto mt-14 grid w-full max-w-6xl gap-6 lg:grid-cols-2 xl:mt-18 xl:gap-8">
@@ -632,8 +719,8 @@ export function TowerDefenseFrontendPage() {
                   subtitle="进入人工操作大厅，接管真实指令、实时连接状态与即将上线的房间匹配流。"
                   accent="cyan"
                   icon={Users}
-                  meta="Click to enter LOBBY"
-                  onClick={() => setCurrentView('LOBBY')}
+                  meta="Click to enter /room"
+                  onClick={() => navigateToView('LOBBY')}
                 />
 
                 <PlayerCard
@@ -642,20 +729,20 @@ export function TowerDefenseFrontendPage() {
                   accent="orange"
                   icon={Bot}
                   meta="Observe autonomous contenders"
-                  onClick={() => setCurrentView('SKILL_DOC')}
+                  onClick={() => navigateToView('SKILL_DOC')}
                 />
               </div>
             </div>
           ) : null}
 
-          {currentView === 'SKILL_DOC' ? <SkillDocPage onBack={() => setCurrentView('HOME')} /> : null}
+          {currentView === 'SKILL_DOC' ? <SkillDocPage onBack={() => navigateToView('HOME')} /> : null}
 
           {currentView !== 'HOME' && currentView !== 'SKILL_DOC' ? (
             <div className="mx-auto w-full max-w-6xl">
               <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
                 <button
                   type="button"
-                  onClick={() => setCurrentView('HOME')}
+                  onClick={() => navigateToView('HOME')}
                   className="cyber-nav-chip"
                 >
                   <ChevronLeft className="h-4 w-4" />
@@ -667,10 +754,10 @@ export function TowerDefenseFrontendPage() {
                     <button
                       key={view}
                       type="button"
-                      onClick={() => setCurrentView(view)}
+                      onClick={() => navigateToView(view)}
                       className={cx(
                         'cyber-nav-chip',
-                        currentView === view && 'border-cyan-300/60 text-cyan-100 shadow-[0_0_24px_rgba(45,212,191,0.18)]',
+                        isNavItemActive(view, currentView) && 'border-cyan-300/60 text-cyan-100 shadow-[0_0_24px_rgba(45,212,191,0.18)]',
                       )}
                     >
                       <Icon className="h-4 w-4" />
@@ -801,7 +888,7 @@ export function TowerDefenseFrontendPage() {
                         <h2 className="mt-3 text-3xl font-semibold tracking-[0.08em] text-white lg:text-5xl">{selectedRoom.name}</h2>
                         <p className="mt-3 text-sm leading-7 text-slate-300">{selectedRoom.id} · {formatRoomStatus(selectedRoom.status)}</p>
                       </div>
-                      <button type="button" onClick={() => setCurrentView('LOBBY')} className="cyber-nav-chip">
+                      <button type="button" onClick={() => navigateToView('LOBBY')} className="cyber-nav-chip">
                         <ChevronLeft className="h-4 w-4" />
                         <span>返回大厅</span>
                       </button>

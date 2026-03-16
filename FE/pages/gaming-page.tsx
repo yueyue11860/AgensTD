@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { DoorOpen, OctagonX, Play, ShieldAlert, Skull, Wifi, WifiOff } from 'lucide-react'
+import { OctagonX, ShieldAlert, Skull } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { useGameEngine } from '../hooks/use-game-engine'
 import { cx } from '../lib/cx'
-import type { GameCell, GameState, TowerState } from '../types/game-state'
+import type { ActionDescriptor, GameAction, GameCell, GameState, TowerBlueprint, TowerState } from '../types/game-state'
 
 const BOARD_DIMENSION = 29
 
@@ -79,6 +80,9 @@ interface GamingPageProps {
   overloadTicks?: number
 }
 
+const BLUEPRINT_LEVEL_PATTERN = /(?:[-_]?)(\d+)$/
+const LABEL_LEVEL_PATTERN = /\s*\d+级$/
+
 function createFallbackBoardState(): Pick<GameState, 'tick' | 'map' | 'towers' | 'enemies' | 'resources' | 'wave' | 'buildPalette'> {
   const cells: GameCell[] = []
 
@@ -108,9 +112,9 @@ function createFallbackBoardState(): Pick<GameState, 'tick' | 'map' | 'towers' |
     },
     towers: [
       { id: 'laser-1', type: 'laser', name: '激光塔', level: 1, status: 'active', cell: { x: 12, y: 12 }, footprint: { width: 1, height: 1 }, damage: 12 },
-      { id: 'laser-2', type: 'laser', name: '激光塔', level: 1, status: 'active', cell: { x: 15, y: 12 }, footprint: { width: 1, height: 1 }, damage: 12 },
-      { id: 'cannon-1', type: 'cannon', name: '电塔', level: 1, status: 'idle', cell: { x: 12, y: 15 }, footprint: { width: 1, height: 1 }, damage: 20 },
-      { id: 'cannon-2', type: 'cannon', name: '电塔', level: 1, status: 'idle', cell: { x: 15, y: 15 }, footprint: { width: 1, height: 1 }, damage: 20 },
+      { id: 'ice-1', type: 'ice', name: '冰塔', level: 1, status: 'active', cell: { x: 15, y: 12 }, footprint: { width: 1, height: 1 }, damage: 8, attackRate: 1.1 },
+      { id: 'cannon-1', type: 'cannon', name: '炮塔', level: 1, status: 'idle', cell: { x: 12, y: 15 }, footprint: { width: 1, height: 1 }, damage: 20 },
+      { id: 'arrow-1', type: 'arrow', name: '箭塔', level: 1, status: 'idle', cell: { x: 15, y: 15 }, footprint: { width: 1, height: 1 }, damage: 10, attackRate: 1.8 },
     ],
     enemies: [
       { id: 'enemy-a', type: 'runner', name: 'Runner', position: { x: 21, y: 20 }, hp: 30, maxHp: 30, threat: 'medium', count: 1 },
@@ -130,17 +134,75 @@ function createFallbackBoardState(): Pick<GameState, 'tick' | 'map' | 'towers' |
       label: 'Wave 08',
     },
     buildPalette: [
-      { type: 'laser-1', label: '激光塔 1级', description: '每 Tick 造成伤害，5 秒内最多叠加到 5% 锁定增伤。', costLabel: '3金币' },
-      { type: 'laser-2', label: '激光塔 2级', description: '每 Tick 造成伤害，5 秒内最多叠加到 10% 锁定增伤。', costLabel: '6金币' },
-      { type: 'laser-3', label: '激光塔 3级', description: '每 Tick 造成伤害，5 秒内最多叠加到 15% 锁定增伤。', costLabel: '10金币' },
-      { type: 'tesla-1', label: '电塔 1级', description: '3x3 范围伤害并附加减防。', costLabel: '3金币' },
-      { type: 'tesla-2', label: '电塔 2级', description: '3x3 范围伤害并附加强力减防。', costLabel: '6金币' },
-      { type: 'tesla-3', label: '电塔 3级', description: '高频 3x3 范围伤害并附加减防。', costLabel: '10金币' },
-      { type: 'magic-1', label: '魔法塔 1级', description: '全图火焰打击并施加永久灼烧。', costLabel: '3金币' },
-      { type: 'magic-2', label: '魔法塔 2级', description: '更快的全图火焰打击并施加永久灼烧。', costLabel: '6金币' },
-      { type: 'magic-3', label: '魔法塔 3级', description: '高频全图火焰打击并施加永久灼烧。', costLabel: '10金币' },
+      { type: 'arrow-1', label: '箭塔 1级', description: '单体高速射击，适合补刀清杂。', costLabel: '2金币' },
+      { type: 'ice-1', label: '冰塔 1级', description: '造成减速效果，帮助队友压制路线。', costLabel: '3金币' },
+      { type: 'cannon-1', label: '炮塔 1级', description: '范围爆炸伤害，适合群体压制。', costLabel: '4金币' },
+      { type: 'laser-1', label: '激光塔 1级', description: '持续锁定输出，对高血量目标更稳定。', costLabel: '4金币' },
     ],
   }
+}
+
+function getBlueprintLevel(blueprint: TowerBlueprint) {
+  const typeMatch = blueprint.type.match(BLUEPRINT_LEVEL_PATTERN)
+  if (typeMatch) {
+    return Number(typeMatch[1])
+  }
+
+  const labelMatch = blueprint.label.match(/(\d+)级/)
+  return labelMatch ? Number(labelMatch[1]) : Number.POSITIVE_INFINITY
+}
+
+function getBlueprintFamilyKey(blueprint: TowerBlueprint) {
+  return blueprint.type.replace(BLUEPRINT_LEVEL_PATTERN, '').replace(/[-_]+$/, '').toLowerCase()
+}
+
+function getBlueprintFamilyLabel(blueprint: TowerBlueprint) {
+  return blueprint.label.replace(LABEL_LEVEL_PATTERN, '').trim()
+}
+
+function createBaseBuildCatalog(buildPalette: TowerBlueprint[]) {
+  const familyMap = new Map<string, TowerBlueprint>()
+
+  for (const blueprint of buildPalette) {
+    const familyKey = getBlueprintFamilyKey(blueprint)
+    const current = familyMap.get(familyKey)
+
+    if (!current || getBlueprintLevel(blueprint) < getBlueprintLevel(current)) {
+      familyMap.set(familyKey, {
+        ...blueprint,
+        label: getBlueprintFamilyLabel(blueprint),
+      })
+    }
+  }
+
+  return Array.from(familyMap.values())
+}
+
+function createTowerActions(tower: TowerState): ActionDescriptor[] {
+  if (tower.commands?.length) {
+    return tower.commands
+  }
+
+  return [
+    {
+      id: `${tower.id}-upgrade`,
+      label: '升级',
+      description: '消耗金币将当前建筑提升 1 级。',
+      payload: {
+        action: 'UPGRADE_TOWER',
+        towerId: tower.id,
+      },
+    },
+    {
+      id: `${tower.id}-sell`,
+      label: '拆除',
+      description: '移除当前建筑，并回收部分已投入资源。',
+      payload: {
+        action: 'SELL_TOWER',
+        towerId: tower.id,
+      },
+    },
+  ]
 }
 
 function CrisisWarning({ overloadTicks }: { overloadTicks: number }) {
@@ -176,10 +238,12 @@ function CrisisWarning({ overloadTicks }: { overloadTicks: number }) {
 function GamingBoard({
   gameState,
   selectedBuildType,
+  selectedTowerId,
   onCellClick,
 }: {
   gameState: Pick<GameState, 'map' | 'towers' | 'enemies'>
   selectedBuildType: string | null
+  selectedTowerId: string | null
   onCellClick: (cell: GameCell, tower: TowerState | null) => void
 }) {
   const boardWidth = gameState.map.width
@@ -221,6 +285,7 @@ function GamingBoard({
               cell.kind === 'gate' && 'gaming-cell-gate',
               tower && 'gaming-cell-tower',
               enemy && 'gaming-cell-enemy',
+              tower?.id === selectedTowerId && 'gaming-cell-selected',
               selectedBuildType && cell.kind === 'build' && !tower && 'gaming-cell-armable',
             )}
           >
@@ -239,24 +304,60 @@ function GamingBoard({
 }
 
 export function GamingPage({ overloadTicks = 0 }: GamingPageProps) {
-  const { gameState, sendAction, connectionState, isConnected, error, socketUrl } = useGameEngine()
+  const navigate = useNavigate()
+  const { gameState, sendAction, error, socketUrl } = useGameEngine()
   const liveState = useMemo(() => gameState ?? createFallbackBoardState(), [gameState])
-  const [selectedBuildType, setSelectedBuildType] = useState<string | null>(liveState.buildPalette[0]?.type ?? null)
-  const selectedBlueprint = liveState.buildPalette.find((item) => item.type === selectedBuildType) ?? liveState.buildPalette[0] ?? null
+  const buildCatalog = useMemo(() => createBaseBuildCatalog(liveState.buildPalette), [liveState.buildPalette])
+  const [selectedBuildType, setSelectedBuildType] = useState<string | null>(buildCatalog[0]?.type ?? null)
+  const [selectedTowerId, setSelectedTowerId] = useState<string | null>(null)
+  const [isLeaveConfirmOpen, setIsLeaveConfirmOpen] = useState(false)
+  const selectedBlueprint = buildCatalog.find((item) => item.type === selectedBuildType) ?? buildCatalog[0] ?? null
+  const selectedTower = liveState.towers.find((tower) => tower.id === selectedTowerId) ?? null
+  const selectedTowerActions = useMemo(() => (selectedTower ? createTowerActions(selectedTower) : []), [selectedTower])
 
   useEffect(() => {
-    if (!liveState.buildPalette.length) {
+    if (!buildCatalog.length) {
       setSelectedBuildType(null)
       return
     }
 
-    if (!selectedBuildType || !liveState.buildPalette.some((item) => item.type === selectedBuildType)) {
-      setSelectedBuildType(liveState.buildPalette[0].type)
+    if (!selectedBuildType || !buildCatalog.some((item) => item.type === selectedBuildType)) {
+      setSelectedBuildType(buildCatalog[0].type)
     }
-  }, [liveState.buildPalette, selectedBuildType])
+  }, [buildCatalog, selectedBuildType])
+
+  useEffect(() => {
+    if (selectedTowerId && !liveState.towers.some((tower) => tower.id === selectedTowerId)) {
+      setSelectedTowerId(null)
+    }
+  }, [liveState.towers, selectedTowerId])
+
+  useEffect(() => {
+    if (!isLeaveConfirmOpen) {
+      return
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setIsLeaveConfirmOpen(false)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isLeaveConfirmOpen])
 
   function handleCellClick(cell: GameCell, tower: TowerState | null) {
-    if (!selectedBuildType || tower || cell.kind !== 'build') {
+    if (tower) {
+      setSelectedTowerId((current) => (current === tower.id ? null : tower.id))
+      return
+    }
+
+    setSelectedTowerId(null)
+
+    if (!selectedBuildType || cell.kind !== 'build') {
       return
     }
 
@@ -268,9 +369,21 @@ export function GamingPage({ overloadTicks = 0 }: GamingPageProps) {
     })
   }
 
+  function handleTowerAction(action: GameAction) {
+    void sendAction(action)
+  }
+
+  function requestLeaveGame() {
+    setIsLeaveConfirmOpen(true)
+  }
+
+  function closeLeaveConfirm() {
+    setIsLeaveConfirmOpen(false)
+  }
+
   function leaveGame() {
     document.body.classList.remove('crisis-overload-active')
-    window.location.assign('/')
+    navigate('/room')
   }
 
   return (
@@ -280,67 +393,106 @@ export function GamingPage({ overloadTicks = 0 }: GamingPageProps) {
       <CrisisWarning overloadTicks={overloadTicks} />
 
       <section className="gaming-shell">
-        <div className="gaming-topbar">
-          <div className="gaming-pill-group">
-            <div className="gaming-pill">
-              <span>金币</span>
-              <strong>{liveState.resources.gold}</strong>
-            </div>
-            <div className="gaming-pill">
-              <span>波数</span>
-              <strong>{liveState.wave?.index ?? 0}</strong>
-            </div>
-            <div className="gaming-pill gaming-pill-status">
-              {isConnected ? <Wifi className="h-4 w-4" /> : <WifiOff className="h-4 w-4" />}
-              <strong>{connectionState}</strong>
-            </div>
-          </div>
-
-          <div className="gaming-button-group">
-            <button type="button" onClick={leaveGame} className="gaming-action-button gaming-action-button-muted">
-              <DoorOpen className="h-4 w-4" />
-              <span>返回大厅</span>
-            </button>
-            <button type="button" onClick={leaveGame} className="gaming-action-button gaming-action-button-danger">
-              <OctagonX className="h-4 w-4" />
-              <span>结束游戏</span>
-            </button>
-          </div>
-        </div>
-
         <div className="gaming-stage">
-          <GamingBoard gameState={liveState} selectedBuildType={selectedBuildType} onCellClick={handleCellClick} />
-        </div>
+          <aside className="gaming-side-rail gaming-side-rail-build">
+            <div className="gaming-pill-group gaming-pill-group-compact">
+              <div className="gaming-pill gaming-pill-compact">
+                <span>金币</span>
+                <strong>{liveState.resources.gold}</strong>
+              </div>
+              <div className="gaming-pill gaming-pill-compact">
+                <span>波数</span>
+                <strong>{liveState.wave?.index ?? 0}</strong>
+              </div>
+            </div>
 
-        <div className="gaming-bottom-dock">
-          <div className="gaming-build-list">
-            {liveState.buildPalette.map((blueprint) => (
-              <button
-                key={blueprint.type}
-                type="button"
-                onClick={() => setSelectedBuildType(blueprint.type)}
-                className={cx('gaming-build-chip', selectedBlueprint?.type === blueprint.type && 'gaming-build-chip-active')}
-              >
-                <span className="gaming-build-chip-title">{blueprint.label}</span>
-                <span className="gaming-build-chip-cost">{blueprint.costLabel ?? '--'}</span>
-              </button>
-            ))}
-          </div>
+            <div className="gaming-side-rail-scroll">
+              <section className="gaming-panel-card">
+                <div className="gaming-build-list gaming-build-list-vertical">
+                  {buildCatalog.map((blueprint) => (
+                    <button
+                      key={blueprint.type}
+                      type="button"
+                      disabled={blueprint.disabled}
+                      onClick={() => setSelectedBuildType(blueprint.type)}
+                      className={cx('gaming-build-chip gaming-build-chip-stacked', selectedBlueprint?.type === blueprint.type && 'gaming-build-chip-active')}
+                    >
+                      <span className="gaming-build-chip-title">{blueprint.label}</span>
+                      <span className="gaming-build-chip-cost">{blueprint.costLabel ?? '--'}</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
 
-          <div className="gaming-selected-card">
-            {selectedBlueprint ? (
-              <>
-                <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Selected</p>
-                <h2 className="mt-2 text-2xl font-semibold tracking-[0.04em] text-white">{selectedBlueprint.label}</h2>
-                <p className="mt-2 text-sm text-cyan-100">{selectedBlueprint.costLabel ?? '未标注费用'}</p>
-                <p className="mt-3 text-sm leading-7 text-slate-300">{selectedBlueprint.description ?? '暂无描述。'}</p>
-              </>
-            ) : null}
-            {error ? <p className="mt-3 text-sm text-orange-100">{error}</p> : null}
-            <p className="mt-3 text-xs text-slate-500">{socketUrl ?? 'Socket unavailable'}</p>
-          </div>
+              {selectedTower ? (
+                <section className="gaming-selected-card gaming-selected-card-compact">
+                  <>
+                    <div className="gaming-selected-header">
+                      <h2 className="text-lg font-semibold tracking-[0.04em] text-white">{selectedTower.name}</h2>
+                      <span className="gaming-selected-level">Lv.{selectedTower.level}</span>
+                    </div>
+
+                    <div className="gaming-tower-stats">
+                      <div className="gaming-tower-stat">伤害 {selectedTower.damage ?? '-'}</div>
+                      <div className="gaming-tower-stat">范围 {selectedTower.range ?? '-'}</div>
+                      <div className="gaming-tower-stat">攻速 {selectedTower.attackRate ?? '-'}</div>
+                      <div className="gaming-tower-stat">状态 {selectedTower.status}</div>
+                    </div>
+
+                    <div className="gaming-tower-actions">
+                      {selectedTowerActions.map((descriptor) => (
+                        <button
+                          key={descriptor.id}
+                          type="button"
+                          disabled={descriptor.disabled}
+                          onClick={() => handleTowerAction(descriptor.payload)}
+                          className={cx(
+                            'gaming-tower-action',
+                            descriptor.payload.action === 'SELL_TOWER' && 'gaming-tower-action-danger',
+                            descriptor.disabled && 'gaming-tower-action-disabled',
+                          )}
+                        >
+                          <span className="gaming-tower-action-title">{descriptor.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                  {error ? <p className="mt-3 text-sm text-orange-100">{error}</p> : null}
+                  <p className="mt-3 text-xs text-slate-500">{socketUrl ?? 'Socket unavailable'}</p>
+                </section>
+              ) : null}
+            </div>
+          </aside>
+
+          <GamingBoard gameState={liveState} selectedBuildType={selectedBuildType} selectedTowerId={selectedTowerId} onCellClick={handleCellClick} />
+
+          <aside className="gaming-side-rail gaming-side-rail-right">
+            <button type="button" onClick={requestLeaveGame} className="gaming-exit-card">
+              <OctagonX className="h-5 w-5" />
+              <span>退出游戏</span>
+            </button>
+          </aside>
         </div>
       </section>
+
+      {isLeaveConfirmOpen ? (
+        <div className="cyber-modal-backdrop" onClick={closeLeaveConfirm}>
+          <div className="gaming-confirm-panel" onClick={(event) => event.stopPropagation()}>
+            <p className="gaming-confirm-eyebrow">Exit Match</p>
+            <h2 className="mt-3 text-2xl font-semibold tracking-[0.08em] text-white">确认退出游戏？</h2>
+            <p className="mt-3 text-sm leading-7 text-slate-300">确认后将离开当前对局，并返回房间列表页面。</p>
+
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
+              <button type="button" onClick={closeLeaveConfirm} className="gaming-confirm-button gaming-confirm-button-muted">
+                取消
+              </button>
+              <button type="button" onClick={leaveGame} className="gaming-confirm-button gaming-confirm-button-danger">
+                确认退出
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   )
 }
