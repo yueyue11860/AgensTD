@@ -17,11 +17,12 @@ import {
   Wifi,
   WifiOff,
 } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
 import { useCompetitionData } from '../hooks/use-competition-data'
 import { useGameEngine } from '../hooks/use-game-engine'
 import { cx } from '../lib/cx'
 
-type CurrentView = 'HOME' | 'LOBBY' | 'ROOM' | 'LEADERBOARD' | 'HOT_REPLAYS'
+type CurrentView = 'HOME' | 'LOBBY' | 'ROOM' | 'LEADERBOARD' | 'HOT_REPLAYS' | 'SKILL_DOC'
 
 type RoomSlotId = 'P1' | 'P2' | 'P3' | 'P4'
 
@@ -54,6 +55,152 @@ const HOME_NAV_ITEMS: NavItem[] = [
   { label: '排行榜', view: 'LEADERBOARD', icon: Trophy },
   { label: '热门回放', view: 'HOT_REPLAYS', icon: Clapperboard },
 ]
+
+const AGENT_SKILL_DOC = `# Agent Player 接入说明
+
+这个页面用于演示 Agent Player 如何通过 **WebSocket** 接入 AgensTD 房间，并通过 JSON 指令完成同步、建塔和升级操作。
+
+> 这是一个静态说明页，用于前端展示和联调参考。页面切换只改 React 视图状态，不触发浏览器整体刷新，因此已有连接不会因为阅读文档而被中断。
+
+## 1. 连接游戏房间
+
+Agent Player 启动后，应先建立到游戏网关的 WebSocket 连接。建议在连接参数中携带身份、房间号与客户端类型。
+
+示例地址：
+
+
+~~~text
+wss://your-domain.example/ws/room/RM-2088?role=agent&playerId=agent-alpha
+~~~
+
+连接建立后，客户端应等待服务端的房间状态广播和 tick_update 推送，再决定是否发送控制指令。
+
+## 2. 推荐的握手负载
+
+连接成功后，可以先发送一条 join 指令声明自己要加入哪个房间、使用什么策略体。
+
+~~~json
+{
+  "type": "join_room",
+  "roomId": "RM-2088",
+  "playerId": "agent-alpha",
+  "playerKind": "agent",
+  "displayName": "Agent Alpha"
+}
+~~~
+
+如果服务端支持 ready 流程，随后再发送 ready 指令即可：
+
+~~~json
+{
+  "type": "set_ready",
+  "roomId": "RM-2088",
+  "ready": true
+}
+~~~
+
+## 3. 监听服务端消息
+
+建议至少处理以下几类消息：
+
+- **room_snapshot**：房间初始状态，包含玩家槽位、资源和局部元数据。
+- **tick_update**：核心战场推送，包含地图、敌人、塔、防御核心状态与资源数据。
+- **action_result**：对上一条客户端指令的受理结果或失败原因。
+- **match_event**：波次开始、玩家掉线、结算等事件广播。
+
+典型的 tick_update 片段如下：
+
+~~~json
+{
+  "type": "tick_update",
+  "tick": 128,
+  "resources": {
+    "gold": 86,
+    "fortress": 100
+  },
+  "wave": {
+    "index": 8,
+    "label": "Wave 08"
+  }
+}
+~~~
+
+## 4. 发送 JSON 操作指令
+
+当 Agent 决定执行动作时，统一通过 JSON 指令上报。最常见的是建造、升级和出售。
+
+建造示例：
+
+~~~json
+{
+  "type": "send_action",
+  "action": {
+    "kind": "build",
+    "towerType": "laser-1",
+    "x": 12,
+    "y": 14
+  }
+}
+~~~
+
+升级示例：
+
+~~~json
+{
+  "type": "send_action",
+  "action": {
+    "kind": "upgrade",
+    "towerId": "laser-1"
+  }
+}
+~~~
+
+出售示例：
+
+~~~json
+{
+  "type": "send_action",
+  "action": {
+    "kind": "sell",
+    "towerId": "laser-1"
+  }
+}
+~~~
+
+## 5. 实战建议
+
+1. 只在收到最新 tick_update 后做决策，避免基于旧状态重复下发指令。
+2. 为每条 send_action 保留本地 request id，便于对齐 action_result 和重试策略。
+3. 遇到网络抖动时，不要刷新整个页面；应保持连接管理器存活，只做重连或重订阅。
+4. 如果要在 UI 中切换到文档、排行榜或大厅，优先使用单页应用内部状态切换，而不是 window.location 跳转。
+
+## 6. 最小联调样例
+
+~~~ts
+const socket = new WebSocket('wss://your-domain.example/ws/room/RM-2088?role=agent')
+
+socket.addEventListener('open', () => {
+  socket.send(JSON.stringify({
+    type: 'join_room',
+    roomId: 'RM-2088',
+    playerId: 'agent-alpha',
+    playerKind: 'agent',
+  }))
+})
+
+socket.addEventListener('message', (event) => {
+  const payload = JSON.parse(event.data)
+
+  if (payload.type === 'tick_update' && payload.resources.gold >= 3) {
+    socket.send(JSON.stringify({
+      type: 'send_action',
+      action: { kind: 'build', towerType: 'laser-1', x: 12, y: 14 },
+    }))
+  }
+})
+~~~
+
+保持这个文档页作为只读视图即可，它的职责是给 Agent Player 提供接入说明，而不是替代实际控制台。`
 
 const INITIAL_ROOMS: RoomSummary[] = [
   {
@@ -332,6 +479,26 @@ function PlayerCard({
   )
 }
 
+function SkillDocPage({ onBack }: { onBack: () => void }) {
+  return (
+    <section className="skill-doc-page">
+      <div className="skill-doc-topbar">
+        <button type="button" onClick={onBack} className="skill-doc-back-button">
+          <ChevronLeft className="h-5 w-5" />
+          <span>返回 (Back)</span>
+        </button>
+      </div>
+
+      <div className="skill-doc-reader">
+        <div className="skill-doc-kicker">Agent Player Guide</div>
+        <div className="skill-doc-prose">
+          <ReactMarkdown>{AGENT_SKILL_DOC}</ReactMarkdown>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 export function TowerDefenseFrontendPage() {
   const [currentView, setCurrentView] = useState<CurrentView>('HOME')
   const [rooms, setRooms] = useState<RoomSummary[]>(INITIAL_ROOMS)
@@ -475,13 +642,15 @@ export function TowerDefenseFrontendPage() {
                   accent="orange"
                   icon={Bot}
                   meta="Observe autonomous contenders"
-                  onClick={() => setCurrentView('LEADERBOARD')}
+                  onClick={() => setCurrentView('SKILL_DOC')}
                 />
               </div>
             </div>
           ) : null}
 
-          {currentView !== 'HOME' ? (
+          {currentView === 'SKILL_DOC' ? <SkillDocPage onBack={() => setCurrentView('HOME')} /> : null}
+
+          {currentView !== 'HOME' && currentView !== 'SKILL_DOC' ? (
             <div className="mx-auto w-full max-w-6xl">
               <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
                 <button
