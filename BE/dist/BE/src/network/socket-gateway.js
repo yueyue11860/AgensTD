@@ -2,7 +2,6 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SocketGateway = void 0;
 const socket_io_1 = require("socket.io");
-const state_projection_1 = require("../core/state-projection");
 const action_submission_1 = require("./action-submission");
 const gateway_auth_1 = require("./gateway-auth");
 function readHandshakeValue(socket, key) {
@@ -13,17 +12,18 @@ function readHandshakeValue(socket, key) {
     return undefined;
 }
 class SocketGateway {
+    telemetry;
     actionLimiter;
     io;
     config;
     room;
-    broadcastEveryTicks;
-    lastBroadcastState = null;
-    constructor(httpServer, room, config, actionLimiter) {
+    projectedTickStream;
+    constructor(httpServer, room, config, projectedTickStream, telemetry, actionLimiter) {
+        this.telemetry = telemetry;
         this.actionLimiter = actionLimiter;
         this.config = config;
         this.room = room;
-        this.broadcastEveryTicks = Math.max(1, Math.round(config.broadcastIntervalMs / Math.max(1, config.tickRateMs)));
+        this.projectedTickStream = projectedTickStream;
         this.io = new socket_io_1.Server(httpServer, {
             cors: {
                 origin: config.corsOrigin === '*' ? true : config.corsOrigin,
@@ -42,19 +42,27 @@ class SocketGateway {
         this.io.on('connection', (socket) => {
             this.handleConnection(socket);
         });
-        this.room.engine.onTick((state) => {
-            if (state.status !== 'finished' && state.tick % this.broadcastEveryTicks !== 0) {
+        this.projectedTickStream.subscribeTick((event) => {
+            if (!event.shouldSocketBroadcast || !event.broadcast) {
                 return;
             }
-            const uiUpdate = (0, state_projection_1.projectFrontendUiStateUpdate)(state, this.config, this.lastBroadcastState);
-            const patch = (0, state_projection_1.projectFrontendGameStatePatch)(state, this.config, this.lastBroadcastState);
-            this.lastBroadcastState = mergeFrontendUiStateUpdate(mergeFrontendGameStatePatch(this.lastBroadcastState, patch), uiUpdate);
-            this.io.emit('tick_update', {
+            const recipientCount = this.io.sockets.sockets.size;
+            if (recipientCount === 0) {
+                return;
+            }
+            const tickEnvelope = {
                 mode: 'patch',
-                patch,
-            });
-            if (Object.keys(uiUpdate).length > 0) {
-                this.io.emit('ui_state_update', uiUpdate);
+                patch: event.broadcast.patch,
+            };
+            this.io.emit('tick_update', tickEnvelope);
+            this.recordOutbound('socket.tick_update.patch', tickEnvelope, recipientCount);
+            if (Object.keys(event.broadcast.uiUpdate).length > 0) {
+                this.io.emit('ui_state_update', event.broadcast.uiUpdate);
+                this.recordOutbound('socket.ui_state_update', event.broadcast.uiUpdate, recipientCount);
+            }
+            if (event.broadcast.noticeUpdate) {
+                this.io.emit('notice_update', event.broadcast.noticeUpdate);
+                this.recordOutbound('socket.notice_update', event.broadcast.noticeUpdate, recipientCount);
             }
         });
     }
@@ -70,16 +78,17 @@ class SocketGateway {
             return;
         }
         this.room.engine.registerPlayer(identity);
+        this.telemetry.setGauge('socket.connections', this.io.sockets.sockets.size);
         socket.emit('room_joined', {
             roomId: this.room.id,
             slot: assignedSlot,
         });
-        const fullState = (0, state_projection_1.projectFrontendGameState)(this.room.engine.getStateSnapshot(), this.config);
-        this.lastBroadcastState = fullState;
-        socket.emit('tick_update', {
+        const fullEnvelope = {
             mode: 'full',
-            gameState: fullState,
-        });
+            gameState: this.projectedTickStream.getCurrentFullState(),
+        };
+        socket.emit('tick_update', fullEnvelope);
+        this.recordOutbound('socket.tick_update.full', fullEnvelope, 1);
         socket.on('send_action', (payload) => {
             const submission = (0, action_submission_1.submitAction)({
                 engine: this.room.engine,
@@ -104,6 +113,7 @@ class SocketGateway {
         socket.on('disconnect', () => {
             this.room.leavePlayer(identity.playerId);
             this.room.engine.markPlayerDisconnected(identity.playerId);
+            this.telemetry.setGauge('socket.connections', this.io.sockets.sockets.size);
         });
     }
     resolvePlayerIdentity(socket) {
@@ -117,50 +127,11 @@ class SocketGateway {
             playerKind,
         };
     }
+    recordOutbound(metricName, payload, recipientCount) {
+        const payloadBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+        this.telemetry.incrementCounter(`${metricName}.messages`, 1);
+        this.telemetry.incrementCounter(`${metricName}.bytes`, payloadBytes * recipientCount);
+        this.telemetry.setGauge(`${metricName}.lastPayloadBytes`, payloadBytes);
+    }
 }
 exports.SocketGateway = SocketGateway;
-function mergeFrontendGameStatePatch(previousState, patch) {
-    if (!previousState) {
-        return null;
-    }
-    return {
-        ...previousState,
-        ...patch,
-        towers: patch.towers ?? applyEntityDelta(previousState.towers, patch.towerDelta),
-        enemies: patch.enemies ?? applyEntityDelta(previousState.enemies, patch.enemyDelta),
-        map: patch.map ?? previousState.map,
-        notices: patch.notices ?? previousState.notices,
-    };
-}
-function mergeFrontendUiStateUpdate(previousState, update) {
-    if (!previousState) {
-        return null;
-    }
-    return {
-        ...previousState,
-        buildPalette: update.buildPalette ?? previousState.buildPalette,
-        actionBar: update.actionBar ?? previousState.actionBar,
-    };
-}
-function applyEntityDelta(currentEntities, delta) {
-    if (!delta) {
-        return currentEntities;
-    }
-    const removeIds = new Set(delta.remove);
-    const upsertById = new Map(delta.upsert.map((entity) => [entity.id, entity]));
-    const nextEntities = [];
-    for (const entity of currentEntities) {
-        if (removeIds.has(entity.id)) {
-            continue;
-        }
-        nextEntities.push(upsertById.get(entity.id) ?? entity);
-        upsertById.delete(entity.id);
-    }
-    for (const entity of delta.upsert) {
-        if (upsertById.has(entity.id)) {
-            nextEntities.push(entity);
-            upsertById.delete(entity.id);
-        }
-    }
-    return nextEntities;
-}

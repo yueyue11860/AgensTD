@@ -1,10 +1,79 @@
 import { useEffect, useMemo, useState } from 'react'
-import { DoorOpen, OctagonX, Play, ShieldAlert, Wifi, WifiOff } from 'lucide-react'
+import { DoorOpen, OctagonX, Play, ShieldAlert, Skull, Wifi, WifiOff } from 'lucide-react'
 import { useGameEngine } from '../hooks/use-game-engine'
 import { cx } from '../lib/cx'
 import type { GameCell, GameState, TowerState } from '../types/game-state'
 
 const BOARD_DIMENSION = 29
+
+const REFERENCE_GATE_LABELS = new Map<string, string>([
+  ['13:15', 'p1'],
+  ['15:15', 'p2'],
+  ['15:13', 'p3'],
+  ['13:13', 'p4'],
+])
+
+function isReferenceCoreCell(x: number, y: number) {
+  return x >= 13 && x <= 15 && y >= 13 && y <= 15
+}
+
+function makeCoordKey(x: number, y: number) {
+  return `${x}:${y}`
+}
+
+function addHorizontalLine(target: Set<string>, y: number, startX: number, endX: number) {
+  const from = Math.min(startX, endX)
+  const to = Math.max(startX, endX)
+
+  for (let x = from; x <= to; x += 1) {
+    target.add(makeCoordKey(x, y))
+  }
+}
+
+function addVerticalLine(target: Set<string>, x: number, startY: number, endY: number) {
+  const from = Math.min(startY, endY)
+  const to = Math.max(startY, endY)
+
+  for (let y = from; y <= to; y += 1) {
+    target.add(makeCoordKey(x, y))
+  }
+}
+
+function createReferenceRouteCells() {
+  const cells = new Set<string>()
+
+  addHorizontalLine(cells, 3, 3, 25)
+  addHorizontalLine(cells, 25, 3, 25)
+  addVerticalLine(cells, 3, 3, 25)
+  addVerticalLine(cells, 25, 3, 25)
+
+  addHorizontalLine(cells, 7, 7, 21)
+  addHorizontalLine(cells, 21, 7, 21)
+  addVerticalLine(cells, 7, 7, 21)
+  addVerticalLine(cells, 21, 7, 21)
+
+  addVerticalLine(cells, 13, 15, 18)
+  addHorizontalLine(cells, 18, 7, 13)
+  addHorizontalLine(cells, 15, 15, 18)
+  addVerticalLine(cells, 18, 15, 21)
+  addVerticalLine(cells, 15, 10, 13)
+  addHorizontalLine(cells, 10, 15, 21)
+  addHorizontalLine(cells, 13, 10, 13)
+  addVerticalLine(cells, 10, 7, 13)
+
+  addHorizontalLine(cells, 14, 3, 7)
+  addVerticalLine(cells, 14, 21, 25)
+  addHorizontalLine(cells, 14, 21, 25)
+  addVerticalLine(cells, 14, 3, 7)
+
+  for (const key of REFERENCE_GATE_LABELS.keys()) {
+    cells.add(key)
+  }
+
+  return cells
+}
+
+const REFERENCE_ROUTE_CELLS = createReferenceRouteCells()
 
 interface GamingPageProps {
   overloadTicks?: number
@@ -15,15 +84,17 @@ function createFallbackBoardState(): Pick<GameState, 'tick' | 'map' | 'towers' |
 
   for (let y = 0; y < BOARD_DIMENSION; y += 1) {
     for (let x = 0; x < BOARD_DIMENSION; x += 1) {
-      const isRing = x === 0 || y === 0 || x === BOARD_DIMENSION - 1 || y === BOARD_DIMENSION - 1
-      const isGate = x === 3 && y === 14
-      const isLane = y === 14 || (x === 7 && y > 6 && y < 20) || (x === 21 && y > 8 && y < 22)
-      const isHub = x >= 13 && x <= 15 && y >= 13 && y <= 15
+      const key = makeCoordKey(x, y)
+      const label = REFERENCE_GATE_LABELS.get(key)
+      const isGate = Boolean(label)
+      const isCore = isReferenceCoreCell(x, y)
+      const isLane = REFERENCE_ROUTE_CELLS.has(key)
 
       cells.push({
         x,
         y,
-        kind: isHub ? 'core' : isGate ? 'gate' : isLane ? 'path' : isRing ? 'blocked' : 'build',
+        kind: isGate ? 'gate' : isCore ? 'core' : isLane ? 'path' : 'build',
+        label,
       })
     }
   }
@@ -36,14 +107,14 @@ function createFallbackBoardState(): Pick<GameState, 'tick' | 'map' | 'towers' |
       cells,
     },
     towers: [
-      { id: 'laser-1', type: 'laser', name: '激光塔', level: 1, status: 'active', cell: { x: 13, y: 12 }, footprint: { width: 1, height: 1 }, damage: 12 },
+      { id: 'laser-1', type: 'laser', name: '激光塔', level: 1, status: 'active', cell: { x: 12, y: 12 }, footprint: { width: 1, height: 1 }, damage: 12 },
       { id: 'laser-2', type: 'laser', name: '激光塔', level: 1, status: 'active', cell: { x: 15, y: 12 }, footprint: { width: 1, height: 1 }, damage: 12 },
-      { id: 'cannon-1', type: 'cannon', name: '电塔', level: 1, status: 'idle', cell: { x: 13, y: 15 }, footprint: { width: 1, height: 1 }, damage: 20 },
+      { id: 'cannon-1', type: 'cannon', name: '电塔', level: 1, status: 'idle', cell: { x: 12, y: 15 }, footprint: { width: 1, height: 1 }, damage: 20 },
       { id: 'cannon-2', type: 'cannon', name: '电塔', level: 1, status: 'idle', cell: { x: 15, y: 15 }, footprint: { width: 1, height: 1 }, damage: 20 },
     ],
     enemies: [
-      { id: 'enemy-a', type: 'runner', name: 'Runner', position: { x: 22, y: 21 }, hp: 30, maxHp: 30, threat: 'medium', count: 1 },
-      { id: 'enemy-b', type: 'runner', name: 'Runner', position: { x: 22, y: 22 }, hp: 30, maxHp: 30, threat: 'medium', count: 1 },
+      { id: 'enemy-a', type: 'runner', name: 'Runner', position: { x: 21, y: 20 }, hp: 30, maxHp: 30, threat: 'medium', count: 1 },
+      { id: 'enemy-b', type: 'runner', name: 'Runner', position: { x: 21, y: 21 }, hp: 30, maxHp: 30, threat: 'medium', count: 1 },
     ],
     resources: {
       gold: 86,
@@ -111,13 +182,15 @@ function GamingBoard({
   selectedBuildType: string | null
   onCellClick: (cell: GameCell, tower: TowerState | null) => void
 }) {
+  const boardWidth = gameState.map.width
+  const boardHeight = gameState.map.height
   const cellMap = new Map(gameState.map.cells.map((cell) => [`${cell.x}:${cell.y}`, cell]))
   const towerMap = new Map(gameState.towers.map((tower) => [`${tower.cell.x}:${tower.cell.y}`, tower]))
   const enemyMap = new Map(gameState.enemies.map((enemy) => [`${enemy.position.x}:${enemy.position.y}`, enemy]))
 
-  const boardCells = Array.from({ length: BOARD_DIMENSION * BOARD_DIMENSION }, (_, index) => {
-    const x = index % BOARD_DIMENSION
-    const y = Math.floor(index / BOARD_DIMENSION)
+  const boardCells = Array.from({ length: boardWidth * boardHeight }, (_, index) => {
+    const x = index % boardWidth
+    const y = Math.floor(index / boardWidth)
     const key = `${x}:${y}`
     const cell = cellMap.get(key) ?? { x, y, kind: 'build' as const }
     const tower = towerMap.get(key) ?? null
@@ -127,12 +200,19 @@ function GamingBoard({
 
   return (
     <div className="gaming-board-frame">
-      <div className="gaming-board-grid" style={{ gridTemplateColumns: `repeat(${BOARD_DIMENSION}, minmax(0, 1fr))` }}>
+      <div
+        className="gaming-board-grid"
+        style={{
+          gridTemplateColumns: `repeat(${boardWidth}, minmax(0, 1fr))`,
+          gridTemplateRows: `repeat(${boardHeight}, minmax(0, 1fr))`,
+        }}
+      >
         {boardCells.map(({ key, cell, tower, enemy }) => (
           <button
             key={key}
             type="button"
             onClick={() => onCellClick(cell, tower)}
+            aria-label={cell.kind === 'gate' ? `${cell.label ?? '入口'} 刷怪口` : undefined}
             className={cx(
               'gaming-cell',
               cell.kind === 'path' && 'gaming-cell-path',
@@ -144,6 +224,11 @@ function GamingBoard({
               selectedBuildType && cell.kind === 'build' && !tower && 'gaming-cell-armable',
             )}
           >
+            {!tower && !enemy && cell.kind === 'gate' ? (
+              <span className="gaming-cell-gate-icon" title={cell.label ?? '入口'}>
+                <Skull className="h-3.5 w-3.5" strokeWidth={2.1} />
+              </span>
+            ) : null}
             {tower ? <span className="gaming-tower-dot" /> : null}
             {enemy ? <span className="gaming-enemy-count">{enemy.count ?? 1}</span> : null}
           </button>

@@ -2,28 +2,32 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ReplayRecorder = void 0;
 const competition_projection_1 = require("./competition-projection");
-const state_projection_1 = require("./state-projection");
 class ReplayRecorder {
     config;
     store;
+    telemetry;
     maxFrames;
     maxActions;
     replay = null;
     isPersisting = false;
     hasLoggedPersistenceFailure = false;
-    constructor(engine, config, store = null, maxFrames = config.replayMaxFrames, maxActions = config.replayMaxActions) {
+    constructor(engine, projectedTickStream, config, store = null, telemetry = null, maxFrames = config.replayMaxFrames, maxActions = config.replayMaxActions) {
         this.config = config;
         this.store = store;
+        this.telemetry = telemetry;
         this.maxFrames = maxFrames;
         this.maxActions = maxActions;
-        engine.onTick((state) => {
+        projectedTickStream.subscribeTick(({ state, fullState }) => {
             this.recordFrame({
                 tick: state.tick,
                 recordedAt: new Date().toISOString(),
-                gameState: (0, state_projection_1.projectFrontendGameState)(state, this.config),
+                gameState: fullState,
             });
             if (state.tick > 0 && state.tick % this.config.persistenceFlushEveryTicks === 0) {
-                void this.flush(state).catch((error) => {
+                const flushPromise = this.telemetry
+                    ? this.telemetry.measureAsync('replay.flush', async () => this.flush(state))
+                    : this.flush(state);
+                void flushPromise.catch((error) => {
                     this.logPersistenceFailure('periodic flush', error);
                 });
             }
@@ -46,6 +50,10 @@ class ReplayRecorder {
         }
         const replay = this.getCurrentReplay();
         if (!replay) {
+            return;
+        }
+        if (this.telemetry) {
+            await this.telemetry.measureAsync('replay.flushLatest', async () => this.flushReplay(replay));
             return;
         }
         await this.flushReplay(replay);

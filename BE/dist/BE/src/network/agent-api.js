@@ -3,7 +3,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.createAgentApiRouter = createAgentApiRouter;
 const express_1 = require("express");
 const competition_projection_1 = require("../core/competition-projection");
-const state_projection_1 = require("../core/state-projection");
 const gateway_auth_1 = require("./gateway-auth");
 function resolveAgentPrincipal(request, config) {
     const principal = (0, gateway_auth_1.authenticateGatewayToken)(config, (0, gateway_auth_1.extractHttpToken)(request));
@@ -19,8 +18,9 @@ function logCompetitionStoreFailure(operation, error) {
     const details = error instanceof Error ? error.message : String(error);
     console.error(`Competition store ${operation} failed for agent API; falling back to memory: ${details}`);
 }
-function createAgentApiRouter(engine, config, replayRecorder, competitionStore) {
+function createAgentApiRouter(projectedTickStream, config, replayRecorder, competitionStore, telemetry) {
     const router = (0, express_1.Router)();
+    const sseConnections = new Set();
     router.get('/stream', (request, response) => {
         const principal = resolveAgentPrincipal(request, config);
         if (!principal) {
@@ -33,30 +33,42 @@ function createAgentApiRouter(engine, config, replayRecorder, competitionStore) 
             Connection: 'keep-alive',
             'X-Accel-Buffering': 'no',
         });
-        response.write(`event: ready\n`);
-        response.write(`data: ${JSON.stringify({ ok: true, playerId: principal.playerId, playerKind: principal.playerKind })}\n\n`);
-        const initialState = (0, state_projection_1.projectFrontendGameState)(engine.getStateSnapshot(), config);
-        let lastStreamState = initialState;
-        response.write(`event: tick_update\n`);
-        response.write(`data: ${JSON.stringify({ mode: 'full', gameState: initialState })}\n\n`);
-        const unsubscribe = engine.onTick((state) => {
-            const uiUpdate = (0, state_projection_1.projectFrontendUiStateUpdate)(state, config, lastStreamState);
-            const patch = (0, state_projection_1.projectFrontendGameStatePatch)(state, config, lastStreamState);
-            lastStreamState = mergeFrontendUiStateUpdate(mergeFrontendGameStatePatch(lastStreamState, patch), uiUpdate);
-            response.write(`event: tick_update\n`);
-            response.write(`data: ${JSON.stringify({ mode: 'patch', patch })}\n\n`);
-            if (Object.keys(uiUpdate).length > 0) {
-                response.write(`event: ui_state_update\n`);
-                response.write(`data: ${JSON.stringify(uiUpdate)}\n\n`);
+        writeSseEvent(telemetry, 'agent.sse.ready', response, 'ready', {
+            ok: true,
+            playerId: principal.playerId,
+            playerKind: principal.playerKind,
+        });
+        sseConnections.add(response);
+        telemetry.setGauge('agent.sse.connections', sseConnections.size);
+        writeSseEvent(telemetry, 'agent.sse.tick_update.full', response, 'tick_update', {
+            mode: 'full',
+            gameState: projectedTickStream.getCurrentFullState(),
+        });
+        const unsubscribe = projectedTickStream.subscribeBroadcast((event) => {
+            if (!event.broadcast) {
+                return;
+            }
+            writeSseEvent(telemetry, 'agent.sse.tick_update.patch', response, 'tick_update', {
+                mode: 'patch',
+                patch: event.broadcast.patch,
+            });
+            if (Object.keys(event.broadcast.uiUpdate).length > 0) {
+                writeSseEvent(telemetry, 'agent.sse.ui_state_update', response, 'ui_state_update', event.broadcast.uiUpdate);
+            }
+            if (event.broadcast.noticeUpdate) {
+                writeSseEvent(telemetry, 'agent.sse.notice_update', response, 'notice_update', event.broadcast.noticeUpdate);
             }
         });
         const heartbeat = setInterval(() => {
-            response.write(`event: heartbeat\n`);
-            response.write(`data: ${JSON.stringify({ now: new Date().toISOString() })}\n\n`);
+            writeSseEvent(telemetry, 'agent.sse.heartbeat', response, 'heartbeat', {
+                now: new Date().toISOString(),
+            });
         }, 15000);
         request.on('close', () => {
             clearInterval(heartbeat);
             unsubscribe();
+            sseConnections.delete(response);
+            telemetry.setGauge('agent.sse.connections', sseConnections.size);
             response.end();
         });
     });
@@ -129,48 +141,11 @@ function createAgentApiRouter(engine, config, replayRecorder, competitionStore) 
     });
     return router;
 }
-function mergeFrontendGameStatePatch(previousState, patch) {
-    if (!previousState) {
-        return null;
-    }
-    return {
-        ...previousState,
-        ...patch,
-        towers: patch.towers ?? applyEntityDelta(previousState.towers, patch.towerDelta),
-        enemies: patch.enemies ?? applyEntityDelta(previousState.enemies, patch.enemyDelta),
-        map: patch.map ?? previousState.map,
-        notices: patch.notices ?? previousState.notices,
-    };
-}
-function mergeFrontendUiStateUpdate(previousState, update) {
-    if (!previousState) {
-        return null;
-    }
-    return {
-        ...previousState,
-        buildPalette: update.buildPalette ?? previousState.buildPalette,
-        actionBar: update.actionBar ?? previousState.actionBar,
-    };
-}
-function applyEntityDelta(currentEntities, delta) {
-    if (!delta) {
-        return currentEntities;
-    }
-    const removeIds = new Set(delta.remove);
-    const upsertById = new Map(delta.upsert.map((entity) => [entity.id, entity]));
-    const nextEntities = [];
-    for (const entity of currentEntities) {
-        if (removeIds.has(entity.id)) {
-            continue;
-        }
-        nextEntities.push(upsertById.get(entity.id) ?? entity);
-        upsertById.delete(entity.id);
-    }
-    for (const entity of delta.upsert) {
-        if (upsertById.has(entity.id)) {
-            nextEntities.push(entity);
-            upsertById.delete(entity.id);
-        }
-    }
-    return nextEntities;
+function writeSseEvent(telemetry, metricName, response, eventName, payload) {
+    response.write(`event: ${eventName}\n`);
+    response.write(`data: ${JSON.stringify(payload)}\n\n`);
+    const payloadBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+    telemetry.incrementCounter(`${metricName}.messages`, 1);
+    telemetry.incrementCounter(`${metricName}.bytes`, payloadBytes);
+    telemetry.setGauge(`${metricName}.lastPayloadBytes`, payloadBytes);
 }

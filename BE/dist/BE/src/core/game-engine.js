@@ -6,6 +6,7 @@ const enemy_factory_1 = require("./enemy-factory");
 const tower_builder_1 = require("./tower-builder");
 const grid_map_1 = require("./grid-map");
 const WaveManager_1 = require("./WaveManager");
+const node_perf_hooks_1 = require("node:perf_hooks");
 const arena_layout_1 = require("../config/arena-layout");
 const SLOT_ORDER = ['P1', 'P2', 'P3', 'P4'];
 function clonePosition(position) {
@@ -68,7 +69,7 @@ class GameEngine {
     config;
     roomId;
     actionQueue = new action_queue_1.ActionQueue();
-    tickListeners = new Set();
+    tickListeners = new Map();
     actionListeners = new Set();
     enemyFactory = new enemy_factory_1.EnemyFactory();
     state;
@@ -82,6 +83,7 @@ class GameEngine {
     maxCapacity;
     overloadTicks = 0;
     spawnRotation = 0;
+    performanceTelemetry = null;
     constructor(config, options = {}) {
         this.config = config;
         this.roomId = options.roomId ?? 'default';
@@ -225,16 +227,25 @@ class GameEngine {
             action: action.action,
         });
     }
-    onTick(listener) {
-        this.tickListeners.add(listener);
+    attachPerformanceTelemetry(performanceTelemetry) {
+        this.performanceTelemetry = performanceTelemetry;
+        this.performanceTelemetry.setGauge('engine.tick.listeners', this.tickListeners.size);
+        this.performanceTelemetry.setGauge('engine.action.listeners', this.actionListeners.size);
+    }
+    onTick(listener, options) {
+        this.tickListeners.set(listener, options?.label ?? `tick-listener-${this.tickListeners.size + 1}`);
+        this.performanceTelemetry?.setGauge('engine.tick.listeners', this.tickListeners.size);
         return () => {
             this.tickListeners.delete(listener);
+            this.performanceTelemetry?.setGauge('engine.tick.listeners', this.tickListeners.size);
         };
     }
     onActionQueued(listener) {
         this.actionListeners.add(listener);
+        this.performanceTelemetry?.setGauge('engine.action.listeners', this.actionListeners.size);
         return () => {
             this.actionListeners.delete(listener);
+            this.performanceTelemetry?.setGauge('engine.action.listeners', this.actionListeners.size);
         };
     }
     getStateSnapshot() {
@@ -242,41 +253,53 @@ class GameEngine {
         return this.cloneStateSnapshot();
     }
     tick() {
-        this.state.tick += 1;
-        this.processQueuedActions();
-        if (this.state.status === 'finished') {
+        const tickStartedAt = node_perf_hooks_1.performance.now();
+        try {
+            this.state.tick += 1;
+            this.processQueuedActions();
+            if (this.state.status === 'finished') {
+                this.updateWaveState();
+                this.syncRuntimeState();
+                this.state.pendingActions = this.actionQueue.size();
+                this.emitTick(this.cloneStateSnapshot());
+                return;
+            }
+            this.resolveTowerAttacks();
+            this.collectDefeatedEnemies();
+            this.updateEnemyPositions(this.config.tickRateMs / 1000);
+            this.collectDefeatedEnemies();
+            this.waveManager.update();
             this.updateWaveState();
+            this.evaluateOverloadState();
             this.syncRuntimeState();
             this.state.pendingActions = this.actionQueue.size();
-            const snapshot = this.cloneStateSnapshot();
-            for (const listener of this.tickListeners) {
+            if (this.state.tick % 10 === 0) {
+                this.appendLog('info', 'Tick settled', {
+                    tick: this.state.tick,
+                    players: this.state.players.length,
+                    towers: this.towers.length,
+                    enemies: this.enemies.length,
+                    pendingActions: this.state.pendingActions,
+                    overloadTicks: this.overloadTicks,
+                    maxCapacity: this.maxCapacity,
+                });
+            }
+            this.emitTick(this.cloneStateSnapshot());
+        }
+        finally {
+            this.performanceTelemetry?.recordDuration('engine.tick.total', node_perf_hooks_1.performance.now() - tickStartedAt);
+            this.performanceTelemetry?.maybeReport({ tick: this.state.tick });
+        }
+    }
+    emitTick(snapshot) {
+        for (const [listener, label] of this.tickListeners.entries()) {
+            const listenerStartedAt = node_perf_hooks_1.performance.now();
+            try {
                 listener(snapshot);
             }
-            return;
-        }
-        this.resolveTowerAttacks();
-        this.collectDefeatedEnemies();
-        this.updateEnemyPositions(this.config.tickRateMs / 1000);
-        this.collectDefeatedEnemies();
-        this.waveManager.update();
-        this.updateWaveState();
-        this.evaluateOverloadState();
-        this.syncRuntimeState();
-        this.state.pendingActions = this.actionQueue.size();
-        if (this.state.tick % 10 === 0) {
-            this.appendLog('info', 'Tick settled', {
-                tick: this.state.tick,
-                players: this.state.players.length,
-                towers: this.towers.length,
-                enemies: this.enemies.length,
-                pendingActions: this.state.pendingActions,
-                overloadTicks: this.overloadTicks,
-                maxCapacity: this.maxCapacity,
-            });
-        }
-        const snapshot = this.cloneStateSnapshot();
-        for (const listener of this.tickListeners) {
-            listener(snapshot);
+            finally {
+                this.performanceTelemetry?.recordDuration(`engine.listener.${label}`, node_perf_hooks_1.performance.now() - listenerStartedAt);
+            }
         }
     }
     processQueuedActions() {

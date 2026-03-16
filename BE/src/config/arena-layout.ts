@@ -3,74 +3,77 @@ import type { Position } from '../domain/game-state'
 
 export type ArenaSlotId = 'P1' | 'P2' | 'P3' | 'P4'
 
-export const ARENA_GRID_SIZE = 30
+export const ARENA_GRID_SIZE = 29
+
+const ARENA_CORE_CENTER: Position = { x: 14, y: 14 }
+const ARENA_CORE_RADIUS = 1
 
 export const LOOP_REENTRY_OFFSET = 5
 
 export const WAYPOINTS_MAP: Record<ArenaSlotId, Position[]> = {
   P1: [
-    { x: 14, y: 16 },
-    { x: 14, y: 19 },
-    { x: 8, y: 19 },
-    { x: 8, y: 22 },
-    { x: 22, y: 22 },
-    { x: 22, y: 8 },
-    { x: 8, y: 8 },
-    { x: 8, y: 15 },
-    { x: 4, y: 15 },
-    { x: 4, y: 4 },
-    { x: 26, y: 4 },
-    { x: 26, y: 26 },
-    { x: 4, y: 26 },
-    { x: 4, y: 15 },
+    { x: 13, y: 15 },
+    { x: 13, y: 18 },
+    { x: 7, y: 18 },
+    { x: 7, y: 21 },
+    { x: 21, y: 21 },
+    { x: 21, y: 7 },
+    { x: 7, y: 7 },
+    { x: 7, y: 14 },
+    { x: 3, y: 14 },
+    { x: 3, y: 3 },
+    { x: 25, y: 3 },
+    { x: 25, y: 25 },
+    { x: 3, y: 25 },
+    { x: 3, y: 14 },
   ],
   P2: [
-    { x: 16, y: 16 },
-    { x: 19, y: 16 },
-    { x: 19, y: 22 },
-    { x: 22, y: 22 },
-    { x: 22, y: 8 },
-    { x: 8, y: 8 },
-    { x: 8, y: 22 },
-    { x: 15, y: 22 },
-    { x: 15, y: 26 },
-    { x: 4, y: 26 },
-    { x: 4, y: 4 },
-    { x: 26, y: 4 },
-    { x: 26, y: 26 },
-    { x: 15, y: 26 },
+    { x: 15, y: 15 },
+    { x: 18, y: 15 },
+    { x: 18, y: 21 },
+    { x: 21, y: 21 },
+    { x: 21, y: 7 },
+    { x: 7, y: 7 },
+    { x: 7, y: 21 },
+    { x: 14, y: 21 },
+    { x: 14, y: 25 },
+    { x: 3, y: 25 },
+    { x: 3, y: 3 },
+    { x: 25, y: 3 },
+    { x: 25, y: 25 },
+    { x: 14, y: 25 },
   ],
   P3: [
-    { x: 16, y: 14 },
-    { x: 16, y: 11 },
-    { x: 22, y: 11 },
-    { x: 22, y: 8 },
-    { x: 8, y: 8 },
-    { x: 8, y: 22 },
-    { x: 22, y: 22 },
-    { x: 22, y: 15 },
-    { x: 26, y: 15 },
-    { x: 26, y: 26 },
-    { x: 4, y: 26 },
-    { x: 4, y: 4 },
-    { x: 26, y: 4 },
-    { x: 26, y: 15 },
+    { x: 15, y: 13 },
+    { x: 15, y: 10 },
+    { x: 21, y: 10 },
+    { x: 21, y: 7 },
+    { x: 7, y: 7 },
+    { x: 7, y: 21 },
+    { x: 21, y: 21 },
+    { x: 21, y: 14 },
+    { x: 25, y: 14 },
+    { x: 25, y: 25 },
+    { x: 3, y: 25 },
+    { x: 3, y: 3 },
+    { x: 25, y: 3 },
+    { x: 25, y: 14 },
   ],
   P4: [
-    { x: 14, y: 14 },
-    { x: 11, y: 14 },
-    { x: 11, y: 8 },
-    { x: 8, y: 8 },
-    { x: 8, y: 22 },
-    { x: 22, y: 22 },
-    { x: 22, y: 8 },
-    { x: 15, y: 8 },
-    { x: 15, y: 4 },
-    { x: 26, y: 4 },
-    { x: 26, y: 26 },
-    { x: 4, y: 26 },
-    { x: 4, y: 4 },
-    { x: 15, y: 4 },
+    { x: 13, y: 13 },
+    { x: 10, y: 13 },
+    { x: 10, y: 7 },
+    { x: 7, y: 7 },
+    { x: 7, y: 21 },
+    { x: 21, y: 21 },
+    { x: 21, y: 7 },
+    { x: 14, y: 7 },
+    { x: 14, y: 3 },
+    { x: 25, y: 3 },
+    { x: 25, y: 25 },
+    { x: 3, y: 25 },
+    { x: 3, y: 3 },
+    { x: 14, y: 3 },
   ],
 }
 
@@ -78,6 +81,10 @@ const ARENA_SLOT_ORDER: readonly ArenaSlotId[] = ['P1', 'P2', 'P3', 'P4']
 
 function clonePosition(position: Position): Position {
   return { x: position.x, y: position.y }
+}
+
+function isArenaCoreCell(x: number, y: number) {
+  return Math.abs(x - ARENA_CORE_CENTER.x) <= ARENA_CORE_RADIUS && Math.abs(y - ARENA_CORE_CENTER.y) <= ARENA_CORE_RADIUS
 }
 
 function positionKey(x: number, y: number) {
@@ -120,7 +127,7 @@ export function getArenaPrimarySpawnPoint(): Position {
 }
 
 export function getArenaPrimaryBasePoint(): Position {
-  return clonePosition(WAYPOINTS_MAP.P1[WAYPOINTS_MAP.P1.length - 1])
+  return clonePosition(ARENA_CORE_CENTER)
 }
 
 export function createArenaGridMatrix(width: number, height: number) {
@@ -151,16 +158,16 @@ export function createArenaGridMatrix(width: number, height: number) {
 
 export function createArenaMapCells(width: number, height: number): GridMapCell[][] {
   const grid = createArenaGridMatrix(width, height)
-  const primaryBasePoint = getArenaPrimaryBasePoint()
   const gateByKey = new Map<string, string>()
 
   for (const slot of ARENA_SLOT_ORDER) {
     const spawn = WAYPOINTS_MAP[slot][0]
-    gateByKey.set(positionKey(spawn.x, spawn.y), `${slot} 入口`)
+    gateByKey.set(positionKey(spawn.x, spawn.y), slot.toLowerCase())
   }
 
   return grid.map((row, y) => row.map((value, x) => {
     const gateLabel = gateByKey.get(positionKey(x, y))
+    const isCore = isArenaCoreCell(x, y)
 
     let kind: GridMapCell['kind'] = 'build'
     let label: string | undefined
@@ -169,9 +176,8 @@ export function createArenaMapCells(width: number, height: number): GridMapCell[
       kind = 'gate'
       label = gateLabel
     }
-    else if (x === primaryBasePoint.x && y === primaryBasePoint.y) {
+    else if (isCore) {
       kind = 'core'
-      label = '循环锚点'
     }
     else if (value === 0) {
       kind = 'path'

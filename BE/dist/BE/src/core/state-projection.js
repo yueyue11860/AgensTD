@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.projectFrontendUiState = projectFrontendUiState;
 exports.projectFrontendGameState = projectFrontendGameState;
 exports.projectFrontendGameStatePatch = projectFrontendGameStatePatch;
+exports.projectFrontendNoticeUpdate = projectFrontendNoticeUpdate;
 exports.projectFrontendUiStateUpdate = projectFrontendUiStateUpdate;
 const enemy_catalog_1 = require("../domain/enemy-catalog");
 const tower_catalog_1 = require("../domain/tower-catalog");
@@ -235,11 +236,6 @@ function buildFrontendActionBar() {
 }
 function projectFrontendRuntimeState(state, config) {
     const primaryPlayer = state.players[0] ?? null;
-    const resultNotice = state.result
-        ? state.result.outcome === 'victory'
-            ? `战局结束：胜利。${state.result.reason ?? '已清空全部波次。'}`
-            : `战局结束：失败。${state.result.reason ?? '场上怪物持续超载。'}`
-        : null;
     return {
         tick: state.tick,
         status: state.status,
@@ -316,15 +312,22 @@ function projectFrontendRuntimeState(state, config) {
             index: state.wave.index,
             label: `${state.wave.label} · 剩余刷怪 ${state.wave.remainingSpawns}`,
         },
-        notices: state.players.length === 0
-            ? ['等待玩家或 Agent 连接网关。']
-            : [
-                `当前 ${state.playerCount} 人房间，刷怪容量 ${state.enemies.length}/${state.maxCapacity}，超载计数 ${state.overloadTicks}/100。`,
-                ...(resultNotice ? [resultNotice] : []),
-            ],
         score: primaryPlayer?.score ?? 0,
         updatedAt: new Date().toISOString(),
     };
+}
+function buildFrontendNotices(state) {
+    const resultNotice = state.result
+        ? state.result.outcome === 'victory'
+            ? `战局结束：胜利。${state.result.reason ?? '已清空全部波次。'}`
+            : `战局结束：失败。${state.result.reason ?? '场上怪物持续超载。'}`
+        : null;
+    return state.players.length === 0
+        ? ['等待玩家或 Agent 连接网关。']
+        : [
+            `当前 ${state.playerCount} 人房间，刷怪容量 ${state.enemies.length}/${state.maxCapacity}，超载计数 ${state.overloadTicks}/100。`,
+            ...(resultNotice ? [resultNotice] : []),
+        ];
 }
 function projectFrontendUiState(state, config) {
     return {
@@ -344,6 +347,7 @@ function projectFrontendGameState(state, config) {
         },
         ...uiState,
         ...runtimeState,
+        notices: buildFrontendNotices(state),
     };
 }
 function projectFrontendGameStatePatch(state, config, previousState) {
@@ -371,9 +375,6 @@ function projectFrontendGameStatePatch(state, config, previousState) {
             patch.enemyDelta = enemyDelta;
         }
     }
-    if (!previousState || !areStringArraysEquivalent(previousState.notices, runtimeState.notices)) {
-        patch.notices = runtimeState.notices;
-    }
     const projectedMap = {
         width: state.map.width,
         height: state.map.height,
@@ -383,6 +384,13 @@ function projectFrontendGameStatePatch(state, config, previousState) {
         patch.map = projectedMap;
     }
     return patch;
+}
+function projectFrontendNoticeUpdate(state, previousState) {
+    const notices = buildFrontendNotices(state);
+    if (previousState && areStringArraysEquivalent(previousState.notices, notices)) {
+        return null;
+    }
+    return { notices };
 }
 function projectFrontendUiStateUpdate(state, config, previousState) {
     const nextUiState = projectFrontendUiState(state, config);

@@ -803,64 +803,71 @@ body.crisis-overload-active {
 }
 
 .gaming-board-frame {
-  width: min(92vmin, 1180px);
+  width: min(94vmin, 1120px);
   aspect-ratio: 1;
-  padding: 0.8rem;
+  padding: 0.5rem;
   border-radius: 18px;
-  border: 1px solid rgba(103, 232, 249, 0.12);
-  background: linear-gradient(180deg, rgba(4, 10, 20, 0.92), rgba(5, 11, 23, 0.98));
-  box-shadow: inset 0 0 0 1px rgba(103, 232, 249, 0.06), 0 30px 80px rgba(2, 8, 23, 0.46);
+  border: 1px solid rgba(63, 94, 143, 0.34);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(21, 35, 62, 0.26), transparent 60%),
+    linear-gradient(180deg, rgba(12, 21, 38, 0.96), rgba(8, 15, 29, 0.98));
+  box-shadow: inset 0 0 0 1px rgba(103, 140, 198, 0.08), 0 22px 56px rgba(2, 8, 23, 0.42);
 }
 
 .gaming-board-grid {
   display: grid;
   width: 100%;
   height: 100%;
-  gap: 0.22rem;
+  gap: 0;
+  background: rgba(18, 34, 58, 0.08);
 }
 
 .gaming-cell {
   position: relative;
-  border-radius: 0.34rem;
-  border: 1px solid rgba(96, 165, 250, 0.08);
-  background: linear-gradient(180deg, rgba(17, 34, 63, 0.92), rgba(10, 20, 40, 0.98));
-  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.28);
-  transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: linear-gradient(180deg, rgba(30, 45, 72, 0.995), rgba(24, 36, 58, 1));
+  box-shadow: inset 0 0 0 1px rgba(15, 30, 52, 0.06);
+  transition: filter 120ms ease, box-shadow 120ms ease;
 }
 
 .gaming-cell:hover {
-  transform: scale(1.06);
+  filter: brightness(1.015);
+  box-shadow: inset 0 0 0 1px rgba(74, 144, 226, 0.12);
   z-index: 2;
 }
 
 .gaming-cell-path {
-  background: linear-gradient(180deg, rgba(12, 29, 56, 0.96), rgba(10, 20, 40, 1));
+  background: linear-gradient(180deg, rgba(10, 24, 43, 0.995), rgba(8, 20, 37, 1));
+  box-shadow: inset 0 0 0 1px rgba(14, 40, 70, 0.04);
 }
 
 .gaming-cell-gate {
-  background: linear-gradient(180deg, rgba(20, 84, 39, 0.45), rgba(10, 38, 22, 0.92));
-  box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.3);
+  background: linear-gradient(180deg, rgba(41, 27, 18, 0.98), rgba(28, 18, 12, 1));
+  box-shadow: inset 0 0 0 1px rgba(249, 115, 22, 0.1);
 }
 
 .gaming-cell-core {
-  background: linear-gradient(180deg, rgba(180, 83, 9, 0.38), rgba(88, 28, 12, 0.92));
-  box-shadow: inset 0 0 0 1px rgba(251, 146, 60, 0.32);
+  background: linear-gradient(180deg, rgba(64, 20, 24, 0.98), rgba(43, 12, 17, 1));
+  box-shadow: inset 0 0 0 1px rgba(153, 27, 27, 0.14);
 }
 
 .gaming-cell-blocked {
-  opacity: 0.45;
+  background: linear-gradient(180deg, rgba(25, 38, 61, 0.99), rgba(19, 30, 48, 1));
 }
 
 .gaming-cell-tower {
-  box-shadow: inset 0 0 0 1px rgba(249, 115, 22, 0.42), 0 0 16px rgba(249, 115, 22, 0.16);
+  box-shadow: inset 0 0 0 2px rgba(249, 115, 22, 0.5), 0 0 10px rgba(249, 115, 22, 0.08);
 }
 
 .gaming-cell-enemy {
-  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.42), 0 0 14px rgba(56, 189, 248, 0.14);
+  box-shadow: inset 0 0 0 2px rgba(14, 165, 233, 0.46), 0 0 10px rgba(14, 165, 233, 0.08);
 }
 
 .gaming-cell-armable {
-  border-color: rgba(14, 165, 233, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.08);
 }
 
 .gaming-tower-dot {
@@ -871,7 +878,7 @@ body.crisis-overload-active {
   transform: translate(-50%, -50%);
   border-radius: 999px;
   background: #f97316;
-  box-shadow: 0 0 10px rgba(249, 115, 22, 0.55);
+  box-shadow: 0 0 10px rgba(249, 115, 22, 0.56);
 }
 
 .gaming-enemy-count {
@@ -881,6 +888,30 @@ body.crisis-overload-active {
   color: #38bdf8;
   font-size: 0.55rem;
   font-weight: 700;
+  text-shadow: 0 0 8px rgba(56, 189, 248, 0.28);
+}
+
+.gaming-cell-label {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  color: #fb923c;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: lowercase;
+  text-shadow: 0 0 8px rgba(251, 146, 60, 0.18);
+}
+
+.gaming-cell-gate-icon {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transform: translate(-50%, -50%);
+  color: #fb923c;
+  filter: drop-shadow(0 0 8px rgba(251, 146, 60, 0.22));
+  pointer-events: none;
 }
 
 .gaming-bottom-dock {
