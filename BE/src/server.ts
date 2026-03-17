@@ -15,6 +15,7 @@ import { ActionRateLimiter } from './network/action-rate-limiter'
 import { createAgentApiRouter } from './network/agent-api'
 import { createRestApiRouter } from './network/rest-api'
 import { SocketGateway } from './network/socket-gateway'
+import { ProgressStore } from './data/progress-store'
 
 const config = createServerConfig()
 const app = express()
@@ -66,9 +67,10 @@ const competitionStore = new SupabaseCompetitionStore(config)
 const projectedTickStream = new ProjectedTickStream(engine, config, performanceTelemetry)
 const replayRecorder = new ReplayRecorder(engine, projectedTickStream, config, competitionStore, performanceTelemetry)
 const actionLimiter = new ActionRateLimiter(config.actionRateLimitWindowMs, config.actionRateLimitMax)
-const gateway = new SocketGateway(httpServer, room, config, projectedTickStream, performanceTelemetry, actionLimiter)
+const progressStore = new ProgressStore()
+const gateway = new SocketGateway(httpServer, room, config, projectedTickStream, performanceTelemetry, actionLimiter, progressStore)
 
-app.use('/api', createRestApiRouter(engine, config, actionLimiter, replayRecorder, competitionStore))
+app.use('/api', createRestApiRouter(engine, config, actionLimiter, replayRecorder, competitionStore, progressStore))
 app.use('/api/agent', createAgentApiRouter(projectedTickStream, config, replayRecorder, competitionStore, performanceTelemetry))
 
 if (hasFrontendBuild) {

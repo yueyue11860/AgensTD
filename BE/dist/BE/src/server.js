@@ -20,6 +20,7 @@ const action_rate_limiter_1 = require("./network/action-rate-limiter");
 const agent_api_1 = require("./network/agent-api");
 const rest_api_1 = require("./network/rest-api");
 const socket_gateway_1 = require("./network/socket-gateway");
+const progress_store_1 = require("./data/progress-store");
 const config = (0, server_config_1.createServerConfig)();
 const app = (0, express_1.default)();
 const frontendDistDir = path_1.default.resolve(process.cwd(), '../FE/dist');
@@ -62,8 +63,9 @@ const competitionStore = new supabase_competition_store_1.SupabaseCompetitionSto
 const projectedTickStream = new projected_tick_stream_1.ProjectedTickStream(engine, config, performanceTelemetry);
 const replayRecorder = new replay_recorder_1.ReplayRecorder(engine, projectedTickStream, config, competitionStore, performanceTelemetry);
 const actionLimiter = new action_rate_limiter_1.ActionRateLimiter(config.actionRateLimitWindowMs, config.actionRateLimitMax);
-const gateway = new socket_gateway_1.SocketGateway(httpServer, room, config, projectedTickStream, performanceTelemetry, actionLimiter);
-app.use('/api', (0, rest_api_1.createRestApiRouter)(engine, config, actionLimiter, replayRecorder, competitionStore));
+const progressStore = new progress_store_1.ProgressStore();
+const gateway = new socket_gateway_1.SocketGateway(httpServer, room, config, projectedTickStream, performanceTelemetry, actionLimiter, progressStore);
+app.use('/api', (0, rest_api_1.createRestApiRouter)(engine, config, actionLimiter, replayRecorder, competitionStore, progressStore));
 app.use('/api/agent', (0, agent_api_1.createAgentApiRouter)(projectedTickStream, config, replayRecorder, competitionStore, performanceTelemetry));
 if (hasFrontendBuild) {
     app.use((request, response, next) => {

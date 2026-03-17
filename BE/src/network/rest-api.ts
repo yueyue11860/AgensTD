@@ -9,6 +9,9 @@ import { submitAction } from './action-submission'
 import { ActionRateLimiter } from './action-rate-limiter'
 import { authenticateGatewayToken, extractHttpToken } from './gateway-auth'
 import type { SupabaseCompetitionStore } from '../data/supabase-competition-store'
+import type { ProgressStore } from '../data/progress-store'
+import type { PlayerType } from '../domain/progress'
+import { checkUnlock } from '../core/unlock-logic'
 
 function resolvePrincipal(request: Request, config: ServerConfig) {
   return authenticateGatewayToken(config, extractHttpToken(request))
@@ -38,6 +41,7 @@ export function createRestApiRouter(
   limiter: ActionRateLimiter,
   replayRecorder: ReplayRecorder,
   competitionStore: SupabaseCompetitionStore | null,
+  progressStore: ProgressStore,
 ) {
   const router = Router()
 
@@ -165,6 +169,40 @@ export function createRestApiRouter(
     })
   })
 
+  // ── POST /replays — 仅存储胜利录像 ─────────────────────────────────────────
+  // 收到失败数据包时，直接丢弃并返回 200 OK，不占用数据库空间。
+  router.post('/replays', (request, response) => {
+    const principal = resolvePrincipal(request, config)
+    if (!principal) {
+      rejectUnauthorized(response)
+      return
+    }
+
+    const body: unknown = request.body
+    if (
+      typeof body !== 'object'
+      || body === null
+      || !(body as Record<string, unknown>).isVictory
+    ) {
+      // 非胜利数据直接丢弃，返回 200 OK
+      response.status(200).json({ ok: true, stored: false, reason: 'defeat_discarded' })
+      return
+    }
+
+    const payload = body as Record<string, unknown>
+    const level = typeof payload.level === 'number' ? payload.level : null
+
+    if (level === null || !Number.isFinite(level)) {
+      response.status(400).json({ ok: false, code: 'MISSING_LEVEL', message: 'level (number) is required' })
+      return
+    }
+
+    const playerType: PlayerType = principal.playerKind === 'human' ? 'HUMAN' : 'AGENT'
+    const progress = progressStore.recordLevelClear(principal.playerId, level, playerType)
+
+    response.status(201).json({ ok: true, stored: true, progress })
+  })
+
   router.get('/replays/current', async (request, response) => {
     const principal = resolvePrincipal(request, config)
     if (!principal) {
@@ -212,6 +250,58 @@ export function createRestApiRouter(
     }
 
     response.json({ ok: true, replay: persistedReplay })
+  })
+
+  // ── GET /leaderboard/level5 — Level 5 大师排行榜 ───────────────────────────
+  // 只返回 level5ClearCount > 0 的玩家，按通关次数降序，包含名次与硅基/碳基标识。
+  router.get('/leaderboard/level5', (request, response) => {
+    const principal = resolvePrincipal(request, config)
+    if (!principal) {
+      rejectUnauthorized(response)
+      return
+    }
+
+    const leaderboard = progressStore.getLevel5Leaderboard()
+    response.json({ ok: true, leaderboard })
+  })
+
+  // ── GET /progress/:playerId — 查询玩家进度 ────────────────────────────────────
+  router.get('/progress/:playerId', (request, response) => {
+    const principal = resolvePrincipal(request, config)
+    if (!principal) {
+      rejectUnauthorized(response)
+      return
+    }
+
+    const { playerId } = request.params
+    const existing = progressStore.getProgress(playerId)
+    if (!existing) {
+      response.status(404).json({ ok: false, code: 'PROGRESS_NOT_FOUND', message: `No progress record for player ${playerId}` })
+      return
+    }
+
+    response.json({ ok: true, progress: existing })
+  })
+
+  // ── GET /progress/:playerId/unlock/:level — 检查关卡解锁状态 ─────────────────
+  router.get('/progress/:playerId/unlock/:level', (request, response) => {
+    const principal = resolvePrincipal(request, config)
+    if (!principal) {
+      rejectUnauthorized(response)
+      return
+    }
+
+    const targetLevel = Number(request.params.level)
+    if (!Number.isFinite(targetLevel)) {
+      response.status(400).json({ ok: false, code: 'INVALID_LEVEL', message: 'level must be a valid number' })
+      return
+    }
+
+    const playerType: PlayerType = principal.playerKind === 'human' ? 'HUMAN' : 'AGENT'
+    const progress = progressStore.getOrCreate(request.params.playerId, playerType)
+    const result = checkUnlock(progress, targetLevel)
+
+    response.json({ ok: true, targetLevel, ...result })
   })
 
   return router

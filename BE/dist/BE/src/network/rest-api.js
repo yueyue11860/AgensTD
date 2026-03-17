@@ -6,6 +6,7 @@ const competition_projection_1 = require("../core/competition-projection");
 const state_projection_1 = require("../core/state-projection");
 const action_submission_1 = require("./action-submission");
 const gateway_auth_1 = require("./gateway-auth");
+const unlock_logic_1 = require("../core/unlock-logic");
 function resolvePrincipal(request, config) {
     return (0, gateway_auth_1.authenticateGatewayToken)(config, (0, gateway_auth_1.extractHttpToken)(request));
 }
@@ -23,7 +24,7 @@ function logCompetitionStoreFailure(operation, error) {
     const details = error instanceof Error ? error.message : String(error);
     console.error(`Competition store ${operation} failed; falling back to memory: ${details}`);
 }
-function createRestApiRouter(engine, config, limiter, replayRecorder, competitionStore) {
+function createRestApiRouter(engine, config, limiter, replayRecorder, competitionStore, progressStore) {
     const router = (0, express_1.Router)();
     router.get('/state', (request, response) => {
         const principal = resolvePrincipal(request, config);
@@ -131,6 +132,32 @@ function createRestApiRouter(engine, config, limiter, replayRecorder, competitio
             replays: summaries,
         });
     });
+    // ── POST /replays — 仅存储胜利录像 ─────────────────────────────────────────
+    // 收到失败数据包时，直接丢弃并返回 200 OK，不占用数据库空间。
+    router.post('/replays', (request, response) => {
+        const principal = resolvePrincipal(request, config);
+        if (!principal) {
+            rejectUnauthorized(response);
+            return;
+        }
+        const body = request.body;
+        if (typeof body !== 'object'
+            || body === null
+            || !body.isVictory) {
+            // 非胜利数据直接丢弃，返回 200 OK
+            response.status(200).json({ ok: true, stored: false, reason: 'defeat_discarded' });
+            return;
+        }
+        const payload = body;
+        const level = typeof payload.level === 'number' ? payload.level : null;
+        if (level === null || !Number.isFinite(level)) {
+            response.status(400).json({ ok: false, code: 'MISSING_LEVEL', message: 'level (number) is required' });
+            return;
+        }
+        const playerType = principal.playerKind === 'human' ? 'HUMAN' : 'AGENT';
+        const progress = progressStore.recordLevelClear(principal.playerId, level, playerType);
+        response.status(201).json({ ok: true, stored: true, progress });
+    });
     router.get('/replays/current', async (request, response) => {
         const principal = resolvePrincipal(request, config);
         if (!principal) {
@@ -170,6 +197,49 @@ function createRestApiRouter(engine, config, limiter, replayRecorder, competitio
             return;
         }
         response.json({ ok: true, replay: persistedReplay });
+    });
+    // ── GET /leaderboard/level5 — Level 5 大师排行榜 ───────────────────────────
+    // 只返回 level5ClearCount > 0 的玩家，按通关次数降序，包含名次与硅基/碳基标识。
+    router.get('/leaderboard/level5', (request, response) => {
+        const principal = resolvePrincipal(request, config);
+        if (!principal) {
+            rejectUnauthorized(response);
+            return;
+        }
+        const leaderboard = progressStore.getLevel5Leaderboard();
+        response.json({ ok: true, leaderboard });
+    });
+    // ── GET /progress/:playerId — 查询玩家进度 ────────────────────────────────────
+    router.get('/progress/:playerId', (request, response) => {
+        const principal = resolvePrincipal(request, config);
+        if (!principal) {
+            rejectUnauthorized(response);
+            return;
+        }
+        const { playerId } = request.params;
+        const existing = progressStore.getProgress(playerId);
+        if (!existing) {
+            response.status(404).json({ ok: false, code: 'PROGRESS_NOT_FOUND', message: `No progress record for player ${playerId}` });
+            return;
+        }
+        response.json({ ok: true, progress: existing });
+    });
+    // ── GET /progress/:playerId/unlock/:level — 检查关卡解锁状态 ─────────────────
+    router.get('/progress/:playerId/unlock/:level', (request, response) => {
+        const principal = resolvePrincipal(request, config);
+        if (!principal) {
+            rejectUnauthorized(response);
+            return;
+        }
+        const targetLevel = Number(request.params.level);
+        if (!Number.isFinite(targetLevel)) {
+            response.status(400).json({ ok: false, code: 'INVALID_LEVEL', message: 'level must be a valid number' });
+            return;
+        }
+        const playerType = principal.playerKind === 'human' ? 'HUMAN' : 'AGENT';
+        const progress = progressStore.getOrCreate(request.params.playerId, playerType);
+        const result = (0, unlock_logic_1.checkUnlock)(progress, targetLevel);
+        response.json({ ok: true, targetLevel, ...result });
     });
     return router;
 }

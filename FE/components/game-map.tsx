@@ -26,13 +26,13 @@ interface GridCellProps {
 }
 
 const cellTone: Record<GameCell['kind'], string> = {
-  path: 'border-slate-700/80 bg-slate-900/80',
-  build: 'border-slate-700/70 bg-slate-800/80 hover:border-cold-blue/50 hover:bg-slate-800',
-  blocked: 'border-slate-800/80 bg-black/40',
-  relay: 'border-cold-blue/40 bg-cold-blue/10',
-  gate: 'border-warning-orange/45 bg-warning-orange/10',
-  core: 'border-acid-green/45 bg-acid-green/10',
-  hazard: 'border-alert-red/45 bg-alert-red/10',
+  path: 'border-transparent bg-[#170505] shadow-[inset_0_0_12px_4px_rgba(220,38,38,0.4)]',
+  build: 'border-[rgba(255,255,255,0.04)] bg-[#1e1b16] hover:shadow-[inset_0_0_0_1px_rgba(34,211,238,0.75)]',
+  blocked: 'border-[rgba(255,255,255,0.02)] bg-[#0c0c0c]',
+  relay: 'border-[rgba(62,231,210,0.25)] bg-[rgba(62,231,210,0.04)]',
+  gate: 'border-[rgba(255,143,63,0.35)] bg-[rgba(255,100,20,0.08)]',
+  core: 'border-[rgba(80,200,80,0.3)] bg-[rgba(40,80,40,0.1)]',
+  hazard: 'border-[rgba(220,38,38,0.35)] bg-[rgba(60,8,8,0.2)]',
 }
 
 const towerTone: Record<TowerState['status'], string> = {
@@ -60,23 +60,29 @@ const GridCell = memo(function GridCell({
   isSelectedTower,
   onCellClick,
 }: GridCellProps) {
+  const isAbyssEye = Math.abs(x - 14) <= 1 && Math.abs(y - 14) <= 1
+
   return (
     <button
       type="button"
       onClick={() => onCellClick(cell, tower)}
       className={cx(
         'relative aspect-square overflow-hidden rounded border text-left transition-all',
-        cellTone[cell.kind],
+        isAbyssEye ? 'animate-pulse border-transparent' : cellTone[cell.kind],
         isSelectedCell && 'ring-2 ring-cold-blue',
         isSelectedTower && 'ring-2 ring-acid-green',
         tower && !isSelectedTower && 'ring-1 ring-inset ring-white/20',
         tower && !isTowerAnchor && 'opacity-80',
       )}
+      style={isAbyssEye ? {
+        background: '#1a0828',
+        boxShadow: 'inset 0 0 16px 6px rgba(139, 0, 60, 0.65), 0 0 14px rgba(100, 0, 180, 0.5)',
+      } : undefined}
       title={tower ? `${tower.name} Lv.${tower.level}` : `${cell.kind} (${x}, ${y})`}
     >
-      {cell.kind === 'gate' ? <GitFork className="absolute left-1 top-1 h-3 w-3 text-warning-orange" /> : null}
-      {cell.kind === 'core' ? <Shield className="absolute left-1 top-1 h-3 w-3 text-acid-green" /> : null}
-      {cell.kind === 'hazard' ? <AlertTriangle className="absolute left-1 top-1 h-3 w-3 text-alert-red" /> : null}
+      {!isAbyssEye && cell.kind === 'gate' ? <GitFork className="absolute left-1 top-1 h-3 w-3 text-warning-orange" /> : null}
+      {!isAbyssEye && cell.kind === 'core' ? <Shield className="absolute left-1 top-1 h-3 w-3 text-acid-green" /> : null}
+      {!isAbyssEye && cell.kind === 'hazard' ? <AlertTriangle className="absolute left-1 top-1 h-3 w-3 text-alert-red" /> : null}
 
       {tower && isTowerAnchor ? (
         <div className={cx('absolute inset-1 flex flex-col items-center justify-center rounded border text-center', towerTone[tower.status])}>
@@ -157,7 +163,14 @@ const GameMapGrid = memo(function GameMapGrid({
   }, [map.height, map.width])
 
   return (
-    <div className="mt-4 overflow-auto rounded-2xl border border-white/10 bg-slate-950/60 p-3">
+    <div
+      className="mt-4 overflow-auto rounded-xl p-3"
+      style={{
+        background: 'radial-gradient(ellipse at center, #2d2828 0%, #1e1a1a 50%, #111010 100%)',
+        border: '1px solid rgba(80, 45, 45, 0.3)',
+        boxShadow: '0 0 40px rgba(0, 0, 0, 0.8)',
+      }}
+    >
       <div
         className="grid gap-1"
         style={{
@@ -198,7 +211,14 @@ const GameMapGrid = memo(function GameMapGrid({
 export const GameMap = memo(function GameMap({ tick, map, towers, enemies, selectedCell, selectedTowerId, onCellClick }: GameMapProps) {
 
   return (
-    <section className="rounded-3xl border border-white/10 bg-black/20 p-4 backdrop-blur-md">
+      <section
+        className="rounded-3xl p-4 backdrop-blur-md"
+        style={{
+          background: 'radial-gradient(ellipse at 50% 20%, #231e1e 0%, #141010 55%, #0a0808 100%)',
+          border: '1px solid rgba(60, 35, 35, 0.35)',
+          boxShadow: '0 4px 60px rgba(0, 0, 0, 0.9)',
+        }}
+      >
       <div className="flex flex-col gap-2 border-b border-white/10 pb-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-[11px] uppercase tracking-[0.26em] text-cold-blue">战场画布</p>

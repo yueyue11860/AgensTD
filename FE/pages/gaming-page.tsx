@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { OctagonX, ShieldAlert, Skull } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useGameEngine } from '../hooks/use-game-engine'
 import { cx } from '../lib/cx'
 import type { ActionDescriptor, GameAction, GameCell, GameState, TowerBlueprint, TowerState } from '../types/game-state'
@@ -116,10 +116,7 @@ function createFallbackBoardState(): Pick<GameState, 'tick' | 'map' | 'towers' |
       { id: 'cannon-1', type: 'cannon', name: '炮塔', level: 1, status: 'idle', cell: { x: 12, y: 15 }, footprint: { width: 1, height: 1 }, damage: 20 },
       { id: 'arrow-1', type: 'arrow', name: '箭塔', level: 1, status: 'idle', cell: { x: 15, y: 15 }, footprint: { width: 1, height: 1 }, damage: 10, attackRate: 1.8 },
     ],
-    enemies: [
-      { id: 'enemy-a', type: 'runner', name: 'Runner', position: { x: 21, y: 20 }, hp: 30, maxHp: 30, threat: 'medium', count: 1 },
-      { id: 'enemy-b', type: 'runner', name: 'Runner', position: { x: 21, y: 21 }, hp: 30, maxHp: 30, threat: 'medium', count: 1 },
-    ],
+    enemies: [],
     resources: {
       gold: 86,
       mana: 0,
@@ -271,33 +268,38 @@ function GamingBoard({
           gridTemplateRows: `repeat(${boardHeight}, minmax(0, 1fr))`,
         }}
       >
-        {boardCells.map(({ key, cell, tower, enemy }) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => onCellClick(cell, tower)}
-            aria-label={cell.kind === 'gate' ? `${cell.label ?? '入口'} 刷怪口` : undefined}
-            className={cx(
-              'gaming-cell',
-              cell.kind === 'path' && 'gaming-cell-path',
-              cell.kind === 'core' && 'gaming-cell-core',
-              cell.kind === 'blocked' && 'gaming-cell-blocked',
-              cell.kind === 'gate' && 'gaming-cell-gate',
-              tower && 'gaming-cell-tower',
-              enemy && 'gaming-cell-enemy',
-              tower?.id === selectedTowerId && 'gaming-cell-selected',
-              selectedBuildType && cell.kind === 'build' && !tower && 'gaming-cell-armable',
-            )}
-          >
-            {!tower && !enemy && cell.kind === 'gate' ? (
-              <span className="gaming-cell-gate-icon" title={cell.label ?? '入口'}>
-                <Skull className="h-3.5 w-3.5" strokeWidth={2.1} />
-              </span>
-            ) : null}
-            {tower ? <span className="gaming-tower-dot" /> : null}
-            {enemy ? <span className="gaming-enemy-count">{enemy.count ?? 1}</span> : null}
-          </button>
-        ))}
+        {boardCells.map(({ key, cell, tower, enemy }) => {
+          const isAbyssEye = Math.abs(cell.x - 14) <= 1 && Math.abs(cell.y - 14) <= 1
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => onCellClick(cell, tower)}
+              aria-label={cell.kind === 'gate' ? `${cell.label ?? '入口'} 刷怪口` : undefined}
+              className={cx(
+                'gaming-cell',
+                isAbyssEye ? 'gaming-cell-abyss-eye' : [
+                  cell.kind === 'path' && 'gaming-cell-path',
+                  cell.kind === 'core' && 'gaming-cell-core',
+                  cell.kind === 'blocked' && 'gaming-cell-blocked',
+                  cell.kind === 'gate' && 'gaming-cell-gate',
+                ],
+                tower && 'gaming-cell-tower',
+                enemy && 'gaming-cell-enemy',
+                tower?.id === selectedTowerId && 'gaming-cell-selected',
+                !isAbyssEye && selectedBuildType && cell.kind === 'build' && !tower && 'gaming-cell-armable',
+              )}
+            >
+              {!isAbyssEye && !tower && !enemy && cell.kind === 'gate' ? (
+                <span className="gaming-cell-gate-icon" title={cell.label ?? '入口'}>
+                  <Skull className="h-3.5 w-3.5" strokeWidth={2.1} />
+                </span>
+              ) : null}
+              {tower ? <span className="gaming-tower-dot" /> : null}
+              {enemy ? <span className="gaming-enemy-count">{enemy.count ?? 1}</span> : null}
+            </button>
+          )
+        })}
       </div>
     </div>
   )
@@ -305,6 +307,8 @@ function GamingBoard({
 
 export function GamingPage({ overloadTicks = 0 }: GamingPageProps) {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const roomId = searchParams.get('roomId') ?? null
   const { gameState, sendAction, error, socketUrl } = useGameEngine()
   const liveState = useMemo(() => gameState ?? createFallbackBoardState(), [gameState])
   const buildCatalog = useMemo(() => createBaseBuildCatalog(liveState.buildPalette), [liveState.buildPalette])
@@ -383,7 +387,7 @@ export function GamingPage({ overloadTicks = 0 }: GamingPageProps) {
 
   function leaveGame() {
     document.body.classList.remove('crisis-overload-active')
-    navigate('/room')
+    navigate(roomId ? `/room/${encodeURIComponent(roomId)}` : '/room')
   }
 
   return (
@@ -480,7 +484,7 @@ export function GamingPage({ overloadTicks = 0 }: GamingPageProps) {
           <div className="gaming-confirm-panel" onClick={(event) => event.stopPropagation()}>
             <p className="gaming-confirm-eyebrow">Exit Match</p>
             <h2 className="mt-3 text-2xl font-semibold tracking-[0.08em] text-white">确认退出游戏？</h2>
-            <p className="mt-3 text-sm leading-7 text-slate-300">确认后将离开当前对局，并返回房间列表页面。</p>
+            <p className="mt-3 text-sm leading-7 text-slate-300">确认后将离开当前对局，并返回{roomId ? '等待房间' : '房间列表'}页面。</p>
 
             <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
               <button type="button" onClick={closeLeaveConfirm} className="gaming-confirm-button gaming-confirm-button-muted">

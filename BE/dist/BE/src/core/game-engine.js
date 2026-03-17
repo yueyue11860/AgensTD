@@ -76,6 +76,7 @@ class GameEngine {
     gridMap;
     enemies = [];
     towers = [];
+    // 非 readonly：ignite() 时会用新波次配置重建 WaveManager
     waveManager;
     laneRoutes;
     activeSlots;
@@ -95,27 +96,7 @@ class GameEngine {
         const spawnPoint = options.spawnPoint ?? fallbackMap.spawnPoint;
         const basePoint = options.basePoint ?? fallbackMap.basePoint;
         this.gridMap = new grid_map_1.GridMap(options.mapCells ?? fallbackMap.cells, spawnPoint, basePoint);
-        this.waveManager = new WaveManager_1.WaveManager(config.waveConfigs, {
-            onSpawn: (enemyType) => {
-                if (this.state.status === 'finished') {
-                    return;
-                }
-                const currentWave = this.waveManager.getCurrentWave();
-                const route = this.getNextSpawnRoute();
-                this.spawnEnemyByKind(enemyType, currentWave?.waveNumber ?? null, currentWave ? `第 ${currentWave.waveNumber} 波` : 'WaveManager', {
-                    spawn: clonePosition(route.spawn),
-                    path: clonePath(route.path),
-                    pathIndex: 0,
-                    loopStartIndex: route.loopStartIndex,
-                });
-            },
-            isMapClear: () => this.enemies.length === 0,
-            onVictory: () => {
-                this.finishMatch('victory', 'All waves cleared');
-            },
-        }, {
-            spawnMultiplier: options.spawnMultiplier ?? this.playerCount,
-        });
+        this.waveManager = this.createWaveManager(config.waveConfigs, options.spawnMultiplier ?? this.playerCount);
         this.state = {
             matchId: config.matchId,
             tick: 0,
@@ -182,9 +163,7 @@ class GameEngine {
             lastActionAt: null,
         };
         this.state.players.push(player);
-        if (this.state.status === 'waiting') {
-            this.state.status = 'running';
-        }
+        // 不在这里自动切换到 'running'；由 ignite() 在关卡选择后触发
         this.appendLog('info', 'Player registered', { playerId: player.id, kind: player.kind });
     }
     markPlayerDisconnected(playerId) {
@@ -259,6 +238,14 @@ class GameEngine {
             this.processQueuedActions();
             if (this.state.status === 'finished') {
                 this.updateWaveState();
+                this.syncRuntimeState();
+                this.state.pendingActions = this.actionQueue.size();
+                this.emitTick(this.cloneStateSnapshot());
+                return;
+            }
+            // 等待关卡选择：持续向前端广播状态（建塔等操作已在 processQueuedActions 中处理），
+            // 但不推进 WaveManager 刷怪逻辑。
+            if (this.state.status === 'waiting') {
                 this.syncRuntimeState();
                 this.state.pendingActions = this.actionQueue.size();
                 this.emitTick(this.cloneStateSnapshot());
@@ -696,6 +683,59 @@ class GameEngine {
     }
     cloneStateSnapshot() {
         return structuredClone(this.state);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+    // 关卡点火（由 Room/SocketGateway 在玩家选择难度后调用）
+    // ─────────────────────────────────────────────────────────────────────────
+    /**
+     * 使用指定波次配置重建 WaveManager 并将引擎切换至 'running'。
+     *
+     * @param waves        来自 LevelConfig 的波次列表
+     * @param startingGold 覆盖初始金币（用于 L0 教学关等特殊配置）
+     */
+    ignite(waves, startingGold) {
+        if (this.state.status !== 'waiting') {
+            // 防止重复点火
+            return;
+        }
+        this.waveManager = this.createWaveManager(waves, this.playerCount);
+        if (startingGold !== undefined) {
+            for (const player of this.state.players) {
+                player.gold = startingGold;
+            }
+        }
+        this.state.status = 'running';
+        this.appendLog('info', 'Engine ignited', {
+            waveCount: waves.length,
+            startingGold,
+            playerCount: this.playerCount,
+        });
+    }
+    /**
+     * 构建 WaveManager 实例（供构造函数和 ignite() 共用）。
+     * 回调闭包引用 `this`，因此新旧 WaveManager 切换后回调依然有效。
+     */
+    createWaveManager(waves, spawnMultiplier) {
+        const callbacks = {
+            onSpawn: (enemyType) => {
+                if (this.state.status === 'finished') {
+                    return;
+                }
+                const currentWave = this.waveManager.getCurrentWave();
+                const route = this.getNextSpawnRoute();
+                this.spawnEnemyByKind(enemyType, currentWave?.waveNumber ?? null, currentWave ? `第 ${currentWave.waveNumber} 波` : 'WaveManager', {
+                    spawn: clonePosition(route.spawn),
+                    path: clonePath(route.path),
+                    pathIndex: 0,
+                    loopStartIndex: route.loopStartIndex,
+                });
+            },
+            isMapClear: () => this.enemies.length === 0,
+            onVictory: () => {
+                this.finishMatch('victory', 'All waves cleared');
+            },
+        };
+        return new WaveManager_1.WaveManager(waves, callbacks, { spawnMultiplier });
     }
 }
 exports.GameEngine = GameEngine;

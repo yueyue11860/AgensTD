@@ -9,6 +9,9 @@ import {
 import type { Position } from '../domain/game-state'
 import type { GridMapCell } from './grid-map'
 import { GameEngine, type EngineLaneRoute, type EngineSlotId } from './game-engine'
+import type { WaveConfig } from '../../../shared/contracts/game'
+
+export type RoomPhase = 'lobby' | 'countdown' | 'waiting_for_level' | 'playing'
 
 export const ROOM_SLOT_ORDER = ['P1', 'P2', 'P3', 'P4'] as const satisfies readonly EngineSlotId[]
 
@@ -86,6 +89,15 @@ export class Room {
 
   private readonly slotAssignments = new Map<EngineSlotId, string>()
 
+  // 房间生命周期状态机
+  private phase: RoomPhase = 'lobby'
+
+  // 第一个加入的玩家为房主
+  private hostPlayerId: string | null = null
+
+  // 倒计时定时器句柄（idle 时务必清除）
+  private countdownTimer: NodeJS.Timeout | null = null
+
   constructor(id: string, config: ServerConfig) {
     this.id = id
     this.layout = createFixedRoomLayout(config.mapWidth, config.mapHeight)
@@ -119,6 +131,12 @@ export class Room {
     }
 
     this.slotAssignments.set(openSlot, playerId)
+
+    // 第一个进入的玩家为房主
+    if (!this.hostPlayerId) {
+      this.hostPlayerId = playerId
+    }
+
     this.syncEngineRoomRules()
     return openSlot
   }
@@ -130,6 +148,12 @@ export class Room {
     }
 
     this.slotAssignments.delete(slot)
+
+    // 房主离开时，将房主权移交给第一个剩余玩家
+    if (this.hostPlayerId === playerId) {
+      this.hostPlayerId = this.getFirstAssignedPlayerId()
+    }
+
     this.syncEngineRoomRules()
     return true
   }
@@ -157,10 +181,75 @@ export class Room {
     return this.slotAssignments.size === 0
   }
 
+  getPhase(): RoomPhase {
+    return this.phase
+  }
+
+  getHostPlayerId(): string | null {
+    return this.hostPlayerId
+  }
+
+  /** 返回当前房间内全部玩家 ID 列表 */
+  getConnectedPlayerIds(): string[] {
+    return [...this.slotAssignments.values()]
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // 生命周期状态机
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * 房主按下开始，进入倒计时阶段。
+   * - 合法前置：phase === 'lobby'  且 requestorPlayerId === hostPlayerId
+   * - `onComplete` 在 3 秒后自动触发，应由 SocketGateway 向全房广播状态变化
+   * @returns 'ok' | 'wrong_phase' | 'forbidden'
+   */
+  beginCountdown(
+    requestorPlayerId: string,
+    onComplete: () => void,
+  ): 'ok' | 'wrong_phase' | 'forbidden' {
+    if (this.phase !== 'lobby') {
+      return 'wrong_phase'
+    }
+
+    if (requestorPlayerId !== this.hostPlayerId) {
+      return 'forbidden'
+    }
+
+    this.phase = 'countdown'
+    this.countdownTimer = setTimeout(() => {
+      this.countdownTimer = null
+      this.phase = 'waiting_for_level'
+      onComplete()
+    }, 3000)
+
+    return 'ok'
+  }
+
+  /**
+   * 校验通过后点火引擎：加载关卡波次配置并启动刷怪。
+   * 应由 SocketGateway 在所有校验通过后调用。
+   */
+  igniteWithLevel(waves: WaveConfig[], startingGold?: number): void {
+    this.phase = 'playing'
+    this.engine.ignite(waves, startingGold)
+  }
+
   private syncEngineRoomRules() {
     const activeSlots = this.getActiveSlots()
     this.engine.setActiveSlots(activeSlots)
     this.engine.setPlayerCount(this.getPlayerCount())
+  }
+
+  private getFirstAssignedPlayerId(): string | null {
+    for (const slot of ROOM_SLOT_ORDER) {
+      const playerId = this.slotAssignments.get(slot)
+      if (playerId) {
+        return playerId
+      }
+    }
+
+    return null
   }
 }
 

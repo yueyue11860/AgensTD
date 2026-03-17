@@ -8,6 +8,10 @@ import type { ServerConfig } from '../config/server-config'
 import { submitAction } from './action-submission'
 import { ActionRateLimiter } from './action-rate-limiter'
 import { authenticateGatewayToken, extractSocketToken, type GatewayPrincipal } from './gateway-auth'
+import type { ProgressStore } from '../data/progress-store'
+import type { PlayerType } from '../domain/progress'
+import { checkUnlock } from '../core/unlock-logic'
+import { LEVEL_CONFIGS } from '../config/level-config'
 
 function readHandshakeValue(socket: Socket, key: string) {
   const queryValue = socket.handshake.query[key]
@@ -34,6 +38,7 @@ export class SocketGateway {
     projectedTickStream: ProjectedTickStream,
     private readonly telemetry: PerformanceTelemetry,
     private readonly actionLimiter: ActionRateLimiter,
+    private readonly progressStore: ProgressStore,
   ) {
     this.config = config
     this.room = room
@@ -139,6 +144,117 @@ export class SocketGateway {
         action: submission.action,
         rateLimitRemaining: submission.rateLimitRemaining,
       })
+    })
+
+    // ── start_game: 房主按下开始——倒计时3秒────────────────────────────────
+    socket.on('start_game', () => {
+      const result = this.room.beginCountdown(identity.playerId, () => {
+        // 3 秒后自动切入「等待选择难度」模式，向全房广播
+        this.io.emit('room_phase_changed', { phase: 'waiting_for_level' })
+      })
+
+      if (result === 'forbidden') {
+        socket.emit('engine_error', {
+          code: 'FORBIDDEN',
+          message: '只有房主可以启动游戏',
+        })
+        return
+      }
+
+      if (result === 'wrong_phase') {
+        socket.emit('engine_error', {
+          code: 'WRONG_PHASE',
+          message: '当前房间状态不允许启动该操作',
+        })
+        return
+      }
+
+      // 广播倒计旷开始
+      this.io.emit('room_phase_changed', { phase: 'countdown', durationMs: 3000 })
+    })
+
+    // ── select_level: 房主注入难度——校验全部通过后点火引擎─────────────
+    socket.on('select_level', (payload: unknown) => {
+      // 1. phase 校验
+      if (this.room.getPhase() !== 'waiting_for_level') {
+        socket.emit('engine_error', {
+          code: 'WRONG_PHASE',
+          message: '当前状态不接受难度选择，请等倒计旷完成',
+        })
+        return
+      }
+
+      // 2. 房主权限校验
+      if (identity.playerId !== this.room.getHostPlayerId()) {
+        socket.emit('engine_error', {
+          code: 'FORBIDDEN',
+          message: '只有房主有权选择难度',
+        })
+        return
+      }
+
+      // 3. 解析 payload
+      if (
+        typeof payload !== 'object'
+        || payload === null
+        || typeof (payload as Record<string, unknown>).levelId !== 'number'
+      ) {
+        socket.emit('engine_error', {
+          code: 'BAD_PAYLOAD',
+          message: '缺少必要参数 levelId',
+        })
+        return
+      }
+
+      const levelId = (payload as Record<string, unknown>).levelId as number
+
+      // 4. 进度/解锁校验
+      const playerType: PlayerType = identity.playerKind === 'human' ? 'HUMAN' : 'AGENT'
+      const progress = this.progressStore.getOrCreate(identity.playerId, playerType)
+      const unlockResult = checkUnlock(progress, levelId)
+
+      if (!unlockResult.allowed) {
+        socket.emit('engine_error', {
+          code: 'LEVEL_LOCKED',
+          message: unlockResult.reason,
+        })
+        return
+      }
+
+      // 5. 隱藏关人数校验
+      if (levelId === 6 && this.room.getPlayerCount() < 2) {
+        socket.emit('engine_error', {
+          code: 'COOP_REQUIRED',
+          message: '零域裁决需至少两名物理终端协同',
+        })
+        return
+      }
+
+      // 6. 获取关卡配置
+      const levelConfig = LEVEL_CONFIGS[levelId]
+      if (!levelConfig) {
+        socket.emit('engine_error', {
+          code: 'INVALID_LEVEL',
+          message: `Level ${levelId} 不存在`,
+        })
+        return
+      }
+
+      // 7. 点火引擎
+      this.room.igniteWithLevel(levelConfig.waves, levelConfig.startingGold)
+
+      // 8. 广播 LEVEL_SELECTED + 状态变化
+      const levelSelectedPayload = {
+        levelId: levelConfig.levelId,
+        label: levelConfig.label,
+        description: levelConfig.description,
+        targetClearRate: levelConfig.targetClearRate,
+        waveCount: levelConfig.waves.length,
+        minPlayers: levelConfig.minPlayers,
+      }
+
+      this.io.emit('level_selected', levelSelectedPayload)
+      this.io.emit('room_phase_changed', { phase: 'playing', levelId })
     })
 
     socket.on('disconnect', () => {
