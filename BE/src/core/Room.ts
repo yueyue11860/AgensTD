@@ -15,6 +15,29 @@ export type RoomPhase = 'lobby' | 'countdown' | 'waiting_for_level' | 'playing'
 
 export const ROOM_SLOT_ORDER = ['P1', 'P2', 'P3', 'P4'] as const satisfies readonly EngineSlotId[]
 
+export interface RoomCreateOptions {
+  displayName?: string
+  hasPassword?: boolean
+}
+
+export interface RoomSlotSnapshot {
+  slotId: EngineSlotId
+  playerId: string | null
+  playerName: string | null
+  connected: boolean
+  isHost: boolean
+}
+
+export interface RoomSummarySnapshot {
+  id: string
+  name: string
+  hasPassword: boolean
+  players: number
+  maxPlayers: number
+  phase: RoomPhase
+  slots: RoomSlotSnapshot[]
+}
+
 export interface RoomLayout {
   width: number
   height: number
@@ -92,14 +115,20 @@ export class Room {
   // 房间生命周期状态机
   private phase: RoomPhase = 'lobby'
 
+  private readonly displayName: string
+
+  private readonly hasPassword: boolean
+
   // 第一个加入的玩家为房主
   private hostPlayerId: string | null = null
 
   // 倒计时定时器句柄（idle 时务必清除）
   private countdownTimer: NodeJS.Timeout | null = null
 
-  constructor(id: string, config: ServerConfig) {
+  constructor(id: string, config: ServerConfig, options?: RoomCreateOptions) {
     this.id = id
+    this.displayName = options?.displayName?.trim() || id
+    this.hasPassword = options?.hasPassword ?? false
     this.layout = createFixedRoomLayout(config.mapWidth, config.mapHeight)
     this.engine = new GameEngine(
       {
@@ -194,6 +223,33 @@ export class Room {
     return [...this.slotAssignments.values()]
   }
 
+  getSummary(): RoomSummarySnapshot {
+    const players = this.engine.getStateSnapshot().players
+
+    return {
+      id: this.id,
+      name: this.displayName,
+      hasPassword: this.hasPassword,
+      players: this.slotAssignments.size,
+      maxPlayers: ROOM_SLOT_ORDER.length,
+      phase: this.phase,
+      slots: ROOM_SLOT_ORDER.map((slotId) => {
+        const playerId = this.slotAssignments.get(slotId) ?? null
+        const player = playerId
+          ? players.find((candidate) => candidate.id === playerId) ?? null
+          : null
+
+        return {
+          slotId,
+          playerId,
+          playerName: player?.name ?? null,
+          connected: player?.connectionStatus === 'connected',
+          isHost: playerId !== null && playerId === this.hostPlayerId,
+        }
+      }),
+    }
+  }
+
   // ───────────────────────────────────────────────────────────────────────────
   // 生命周期状态机
   // ───────────────────────────────────────────────────────────────────────────
@@ -235,6 +291,13 @@ export class Room {
     this.engine.ignite(waves, startingGold)
   }
 
+  destroy() {
+    if (this.countdownTimer) {
+      clearTimeout(this.countdownTimer)
+      this.countdownTimer = null
+    }
+  }
+
   private syncEngineRoomRules() {
     const activeSlots = this.getActiveSlots()
     this.engine.setActiveSlots(activeSlots)
@@ -258,12 +321,12 @@ export class RoomManager {
 
   constructor(private readonly config: ServerConfig) {}
 
-  createRoom(roomId: string) {
+  createRoom(roomId: string, options?: RoomCreateOptions) {
     if (this.rooms.has(roomId)) {
       throw new Error(`Room ${roomId} already exists`)
     }
 
-    const room = new Room(roomId, this.config)
+    const room = new Room(roomId, this.config, options)
     this.rooms.set(roomId, room)
     return room
   }
@@ -272,15 +335,19 @@ export class RoomManager {
     return this.rooms.get(roomId) ?? null
   }
 
-  getOrCreateRoom(roomId: string) {
-    return this.getRoom(roomId) ?? this.createRoom(roomId)
+  getOrCreateRoom(roomId: string, options?: RoomCreateOptions) {
+    return this.getRoom(roomId) ?? this.createRoom(roomId, options)
   }
 
-  listRooms() {
-    return [...this.rooms.values()]
+  listRooms(options?: { includeEmpty?: boolean }) {
+    const includeEmpty = options?.includeEmpty ?? true
+    const rooms = [...this.rooms.values()]
+    return includeEmpty ? rooms : rooms.filter((room) => !room.isEmpty())
   }
 
   removeRoom(roomId: string) {
+    const room = this.rooms.get(roomId)
+    room?.destroy()
     return this.rooms.delete(roomId)
   }
 

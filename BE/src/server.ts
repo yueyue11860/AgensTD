@@ -68,7 +68,7 @@ const actionLimiter = new ActionRateLimiter(config.actionRateLimitWindowMs, conf
 const progressStore = new ProgressStore()
 const gateway = new SocketGateway(httpServer, roomManager, config, performanceTelemetry, actionLimiter, progressStore)
 
-app.use('/api', createRestApiRouter(engine, config, actionLimiter, replayRecorder, competitionStore, progressStore))
+app.use('/api', createRestApiRouter(engine, roomManager, config, actionLimiter, replayRecorder, competitionStore, progressStore))
 app.use('/api/agent', createAgentApiRouter(projectedTickStream, config, replayRecorder, competitionStore, performanceTelemetry))
 
 if (hasFrontendBuild) {

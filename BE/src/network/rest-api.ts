@@ -3,6 +3,7 @@ import { buildLiveLeaderboards, buildReplaySummary } from '../core/competition-p
 import { projectFrontendGameState } from '../core/state-projection'
 import type { ReplayRecorder } from '../core/replay-recorder'
 import { GameEngine } from '../core/game-engine'
+import { RoomManager, type RoomSummarySnapshot } from '../core/Room'
 import type { ServerConfig } from '../config/server-config'
 import type { ReplaySummary } from '../domain/competition'
 import { submitAction } from './action-submission'
@@ -35,8 +36,49 @@ function logCompetitionStoreFailure(operation: string, error: unknown) {
   console.error(`Competition store ${operation} failed; falling back to memory: ${details}`)
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function normalizeRoomStatus(room: RoomSummarySnapshot) {
+  if (room.phase === 'playing') {
+    return 'IN_MATCH' as const
+  }
+
+  if (room.phase === 'countdown' || room.phase === 'waiting_for_level') {
+    return 'DRAFTING' as const
+  }
+
+  return 'OPEN' as const
+}
+
+function serializeRoomSummary(room: RoomSummarySnapshot) {
+  return {
+    id: room.id,
+    name: room.name,
+    hasPassword: room.hasPassword,
+    players: room.players,
+    maxPlayers: room.maxPlayers,
+    status: normalizeRoomStatus(room),
+    pingMs: null,
+    slots: room.slots,
+  }
+}
+
+function generateRoomId(roomManager: RoomManager) {
+  for (let attempt = 0; attempt < 1000; attempt += 1) {
+    const roomId = `RM-${Math.floor(1000 + Math.random() * 9000)}`
+    if (!roomManager.getRoom(roomId)) {
+      return roomId
+    }
+  }
+
+  throw new Error('Failed to allocate room id')
+}
+
 export function createRestApiRouter(
   engine: GameEngine,
+  roomManager: RoomManager,
   config: ServerConfig,
   limiter: ActionRateLimiter,
   replayRecorder: ReplayRecorder,
@@ -44,6 +86,42 @@ export function createRestApiRouter(
   progressStore: ProgressStore,
 ) {
   const router = Router()
+
+  router.get('/rooms', (request, response) => {
+    const principal = resolvePrincipal(request, config)
+    if (!principal) {
+      rejectUnauthorized(response)
+      return
+    }
+
+    const rooms = roomManager
+      .listRooms({ includeEmpty: false })
+      .map((room) => serializeRoomSummary(room.getSummary()))
+
+    response.json({ ok: true, rooms })
+  })
+
+  router.post('/rooms', (request, response) => {
+    const principal = resolvePrincipal(request, config)
+    if (!principal) {
+      rejectUnauthorized(response)
+      return
+    }
+
+    const payload = isRecord(request.body) ? request.body : {}
+    const requestedName = typeof payload.name === 'string' ? payload.name.trim().slice(0, 12) : ''
+    const password = typeof payload.password === 'string' ? payload.password : ''
+    const roomId = generateRoomId(roomManager)
+    const room = roomManager.createRoom(roomId, {
+      displayName: requestedName || roomId,
+      hasPassword: password.length > 0,
+    })
+
+    response.status(201).json({
+      ok: true,
+      room: serializeRoomSummary(room.getSummary()),
+    })
+  })
 
   router.get('/state', (request, response) => {
     const principal = resolvePrincipal(request, config)

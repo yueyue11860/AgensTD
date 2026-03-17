@@ -479,6 +479,7 @@ export class SocketGateway {
       runtime.playerConnections.delete(identity.playerId)
       runtime.room.leavePlayer(identity.playerId)
       runtime.room.engine.markPlayerDisconnected(identity.playerId)
+      this.cleanupRoomIfEmpty(roomId)
     } else {
       runtime.playerConnections.set(identity.playerId, activeConnectionCount - 1)
     }
@@ -486,6 +487,18 @@ export class SocketGateway {
     socket.leave(roomId)
     delete socket.data.roomId
     delete socket.data.identity
+  }
+
+  private cleanupRoomIfEmpty(roomId: string) {
+    const runtime = this.roomRuntimes.get(roomId)
+    if (!runtime || !runtime.room.isEmpty()) {
+      return
+    }
+
+    runtime.unsubscribeProjection()
+    runtime.loop.stop()
+    this.roomRuntimes.delete(roomId)
+    this.roomManager.removeRoom(roomId)
   }
 
   private getJoinedContext(socket: Socket) {

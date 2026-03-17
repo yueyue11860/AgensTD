@@ -280,19 +280,31 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
   const [selectedLevelInfo, setSelectedLevelInfo] = useState<SelectedLevelInfo | null>(null)
   const [mySlot, setMySlot] = useState<string | null>(null)
   const actionLogRef = useRef<ActionLogEntry[]>([])
+  const identityPlayerId = options.identity?.playerId
+  const identityPlayerName = options.identity?.playerName
+  const identityPlayerKind = options.identity?.playerKind
 
   const socketUrl = useMemo(() => resolveSocketUrl(), [])
   const gatewayToken = useMemo(() => options.token ?? resolveGatewayToken(), [options.token])
+  const querySignature = useMemo(() => {
+    const entries = Object.entries(omitReservedIdentityFields(options.query))
+      .filter(([, value]) => value !== undefined)
+      .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+
+    return JSON.stringify(entries)
+  }, [options.query])
   const connectionQuery = useMemo(() => {
+    const safeQueryEntries = JSON.parse(querySignature) as Array<[string, string | number | boolean]>
+
     return {
-      ...omitReservedIdentityFields(options.query),
+      ...Object.fromEntries(safeQueryEntries),
       ...(gatewayToken ? { token: gatewayToken } : {}),
       ...(options.roomId ? { roomId: options.roomId } : {}),
-      ...(options.identity?.playerId ? { playerId: options.identity.playerId } : {}),
-      ...(options.identity?.playerName ? { playerName: options.identity.playerName } : {}),
-      ...(options.identity?.playerKind ? { playerKind: options.identity.playerKind } : {}),
+      ...(identityPlayerId ? { playerId: identityPlayerId } : {}),
+      ...(identityPlayerName ? { playerName: identityPlayerName } : {}),
+      ...(identityPlayerKind ? { playerKind: identityPlayerKind } : {}),
     }
-  }, [gatewayToken, options.identity, options.query, options.roomId])
+  }, [gatewayToken, identityPlayerId, identityPlayerKind, identityPlayerName, options.roomId, querySignature])
 
   const flushQueuedState = useEffectEvent(() => {
     const nextState = queuedStateRef.current
@@ -333,6 +345,13 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
       flushQueuedState()
     })
   })
+
+  useEffect(() => {
+    setRoomPhase(null)
+    setCountdownSeconds(null)
+    setSelectedLevelInfo(null)
+    setMySlot(null)
+  }, [options.roomId])
 
   useEffect(() => {
     committedStateRef.current = gameState
@@ -440,38 +459,54 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
       path: options.path,
       autoConnect: true,
       withCredentials: true,
+      transports: ['websocket'],
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 2000,
+      reconnectionDelayMax: 15000,
+      randomizationFactor: 0.5,
+      timeout: 8000,
       auth: gatewayToken ? { token: gatewayToken } : undefined,
       query: connectionQuery,
     })
 
     socketRef.current = socket
 
-    socket.on('connect', () => {
+    const handleConnect = () => {
       setConnectionState('connected')
       setError(null)
 
       if (options.roomId) {
         socket.emit('JOIN_ROOM', {
           roomId: options.roomId,
-          playerId: options.identity?.playerId,
-          playerName: options.identity?.playerName,
-          playerKind: options.identity?.playerKind,
+          playerId: identityPlayerId,
+          playerName: identityPlayerName,
+          playerKind: identityPlayerKind,
         })
       }
-    })
+    }
 
-    socket.on('disconnect', (reason) => {
+    const handleDisconnect = (reason: Socket.DisconnectReason) => {
       setConnectionState(reason === 'io client disconnect' ? 'disconnected' : 'reconnecting')
-    })
+    }
 
-    socket.on('connect_error', (connectError) => {
+    const handleConnectError = (connectError: Error) => {
       setConnectionState('error')
       setError(connectError.message)
-    })
+    }
 
-    socket.on('engine_error', (engineError: { message?: string } | string) => {
+    const handleEngineError = (engineError: { message?: string } | string) => {
       setError(typeof engineError === 'string' ? engineError : engineError.message ?? '游戏引擎返回未知错误')
-    })
+    }
+
+    const handleReconnectAttempt = () => {
+      setConnectionState('reconnecting')
+    }
+
+    socket.on('connect', handleConnect)
+    socket.on('disconnect', handleDisconnect)
+    socket.on('connect_error', handleConnectError)
+    socket.on('engine_error', handleEngineError)
 
     socket.on('TICK_UPDATE', handleTickUpdate)
     socket.on('UI_STATE_UPDATE', handleUiStateUpdate)
@@ -481,9 +516,7 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
     socket.on('START_MATCH_ACCEPTED', handleStartMatchAccepted)
     socket.on('COUNTDOWN_TICK', handleCountdownTick)
     socket.on('LEVEL_SELECTED', handleLevelSelected)
-    socket.io.on('reconnect_attempt', () => {
-      setConnectionState('reconnecting')
-    })
+    socket.io.on('reconnect_attempt', handleReconnectAttempt)
 
     return () => {
       if (frameRequestRef.current !== null) {
@@ -492,6 +525,10 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
       }
 
       queuedStateRef.current = null
+      socket.off('connect', handleConnect)
+      socket.off('disconnect', handleDisconnect)
+      socket.off('connect_error', handleConnectError)
+      socket.off('engine_error', handleEngineError)
       socket.off('TICK_UPDATE', handleTickUpdate)
       socket.off('UI_STATE_UPDATE', handleUiStateUpdate)
       socket.off('NOTICE_UPDATE', handleNoticeUpdate)
@@ -500,10 +537,11 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
       socket.off('START_MATCH_ACCEPTED', handleStartMatchAccepted)
       socket.off('COUNTDOWN_TICK', handleCountdownTick)
       socket.off('LEVEL_SELECTED', handleLevelSelected)
+      socket.io.off('reconnect_attempt', handleReconnectAttempt)
       socket.disconnect()
       socketRef.current = null
     }
-  }, [connectionQuery, gatewayToken, options.autoConnect, options.identity?.playerId, options.identity?.playerKind, options.identity?.playerName, options.path, options.roomId, socketUrl])
+  }, [connectionQuery, gatewayToken, identityPlayerId, identityPlayerKind, identityPlayerName, options.autoConnect, options.path, options.roomId, socketUrl])
 
   const sendAction = useCallback((action: GameAction) => {
     const socket = socketRef.current

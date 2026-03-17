@@ -683,6 +683,13 @@ export function GamingPage() {
     const socket = io(socketUrl, {
       autoConnect: true,
       withCredentials: true,
+      transports: ['websocket'],
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 2000,
+      reconnectionDelayMax: 15000,
+      randomizationFactor: 0.5,
+      timeout: 8000,
       auth: gatewayToken ? { token: gatewayToken } : undefined,
       query: {
         roomId,
@@ -844,7 +851,9 @@ export function GamingPage() {
 
   function leaveGame() {
     document.body.classList.remove('crisis-overload-active')
-    navigate(`/room/${encodeURIComponent(roomId)}`)
+    navigate(`/room/${encodeURIComponent(roomId)}`, {
+      state: { suppressAutoResume: true },
+    })
   }
 
   return (

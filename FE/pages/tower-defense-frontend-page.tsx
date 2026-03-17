@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
+  ChevronDown,
   ChevronLeft,
+  ChevronUp,
   Clapperboard,
   Crown,
   DoorOpen,
@@ -21,34 +23,24 @@ import ReactMarkdown from 'react-markdown'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useCompetitionData } from '../hooks/use-competition-data'
 import { useGameEngine } from '../hooks/use-game-engine'
+import { useRoomLobbyData, type RoomPlayerSlot, type RoomSummary } from '../hooks/use-room-lobby-data'
 import { cx } from '../lib/cx'
+import { resolvePlayerId, resolvePlayerKind } from '../lib/runtime-config'
 
 type CurrentView = 'HOME' | 'LOBBY' | 'ROOM' | 'LEADERBOARD' | 'HOT_REPLAYS' | 'SKILL_DOC'
-
-type RoomSlotId = 'P1' | 'P2' | 'P3' | 'P4'
-
-interface RoomPlayerSlot {
-  slotId: RoomSlotId
-  playerName: string | null
-  ready: boolean
-  isHost?: boolean
-}
-
-interface RoomSummary {
-  id: string
-  name: string
-  hasPassword: boolean
-  players: number
-  maxPlayers: number
-  status: 'OPEN' | 'IN_MATCH' | 'DRAFTING'
-  ping: number
-  slots: RoomPlayerSlot[]
-}
 
 interface NavItem {
   label: string
   view: Exclude<CurrentView, 'ROOM'>
   icon: LucideIcon
+}
+
+interface RoomNavigationState {
+  suppressAutoResume?: boolean
+}
+
+function isRoomNavigationState(value: unknown): value is RoomNavigationState {
+  return Boolean(value) && typeof value === 'object' && 'suppressAutoResume' in (value as Record<string, unknown>)
 }
 
 const HOME_NAV_ITEMS: NavItem[] = [
@@ -203,97 +195,7 @@ socket.addEventListener('message', (event) => {
 
 保持这个文档页作为只读视图即可，它的职责是给 Agent Player 提供接入说明，而不是替代实际控制台。`
 
-const INITIAL_ROOMS: RoomSummary[] = [
-  {
-    id: 'RM-2088',
-    name: '夜幕之城',
-    hasPassword: false,
-    players: 2,
-    maxPlayers: 4,
-    status: 'OPEN',
-    ping: 12,
-    slots: [
-      { slotId: 'P1', playerName: 'YUE', ready: true, isHost: true },
-      { slotId: 'P2', playerName: 'Nova', ready: false },
-      { slotId: 'P3', playerName: null, ready: false },
-      { slotId: 'P4', playerName: null, ready: false },
-    ],
-  },
-  {
-    id: 'RM-2094',
-    name: '算力深渊',
-    hasPassword: true,
-    players: 4,
-    maxPlayers: 4,
-    status: 'IN_MATCH',
-    ping: 26,
-    slots: [
-      { slotId: 'P1', playerName: 'Kite', ready: true, isHost: true },
-      { slotId: 'P2', playerName: 'Cipher', ready: true },
-      { slotId: 'P3', playerName: 'Echo', ready: true },
-      { slotId: 'P4', playerName: 'Vex', ready: true },
-    ],
-  },
-  {
-    id: 'RM-2110',
-    name: '霓虹防线',
-    hasPassword: false,
-    players: 1,
-    maxPlayers: 4,
-    status: 'OPEN',
-    ping: 18,
-    slots: [
-      { slotId: 'P1', playerName: 'Atlas', ready: true, isHost: true },
-      { slotId: 'P2', playerName: null, ready: false },
-      { slotId: 'P3', playerName: null, ready: false },
-      { slotId: 'P4', playerName: null, ready: false },
-    ],
-  },
-  {
-    id: 'RM-2111',
-    name: '硅基一号测试点',
-    hasPassword: true,
-    players: 3,
-    maxPlayers: 4,
-    status: 'OPEN',
-    ping: 9,
-    slots: [
-      { slotId: 'P1', playerName: 'Rex', ready: true, isHost: true },
-      { slotId: 'P2', playerName: 'Skye', ready: true },
-      { slotId: 'P3', playerName: 'Mira', ready: false },
-      { slotId: 'P4', playerName: null, ready: false },
-    ],
-  },
-  {
-    id: 'RM-2115',
-    name: '零度阵列',
-    hasPassword: false,
-    players: 2,
-    maxPlayers: 4,
-    status: 'OPEN',
-    ping: 15,
-    slots: [
-      { slotId: 'P1', playerName: 'Unit-7', ready: true, isHost: true },
-      { slotId: 'P2', playerName: 'Axon', ready: false },
-      { slotId: 'P3', playerName: null, ready: false },
-      { slotId: 'P4', playerName: null, ready: false },
-    ],
-  },
-]
-
-const ROOMS_STORAGE_KEY = 'agenstd_rooms'
-
-function loadRoomsFromStorage(): RoomSummary[] {
-  try {
-    const stored = sessionStorage.getItem(ROOMS_STORAGE_KEY)
-    if (stored) {
-      return JSON.parse(stored) as RoomSummary[]
-    }
-  } catch {
-    // ignore parse / storage errors
-  }
-  return INITIAL_ROOMS
-}
+const ROOMS_PER_PAGE = 10
 
 const STATIC_VIEW_ROUTES: Record<Exclude<CurrentView, 'ROOM'>, string> = {
   HOME: '/home',
@@ -382,6 +284,10 @@ function formatRoomStatus(status: RoomSummary['status']) {
     default:
       return '交战中'
   }
+}
+
+function formatPing(pingMs: number | null) {
+  return typeof pingMs === 'number' ? `${String(pingMs).padStart(2, '0')}ms` : '--'
 }
 
 function CreateRoomModal({
@@ -612,23 +518,19 @@ function RoomSlotCard({
   onDoubleClick?: () => void
 }) {
   const occupied = !!slot?.playerName
-  const ready = !!(slot?.ready)
-  const canMove = !occupied && !!onDoubleClick
+  const connected = !!slot?.connected
   return (
     <div
       className={cx(
         'room-slot-card',
-        occupied && ready && 'room-slot-card-ready',
-        occupied && !ready && 'room-slot-card-pending',
-        canMove && 'room-slot-card-movable',
+        occupied && connected && 'room-slot-card-ready',
+        occupied && !connected && 'room-slot-card-pending',
       )}
-      onDoubleClick={canMove ? onDoubleClick : undefined}
-      title={canMove ? '双击切换到此防线' : undefined}
     >
-      <div className="flex flex-col items-center gap-3 py-2">
+      <div className="room-slot-card-body flex flex-col items-center gap-3 py-2">
         <div className={cx(
-          'flex h-14 w-14 items-center justify-center rounded-full border text-2xl transition-all duration-300',
-          occupied && ready
+          'room-slot-avatar flex h-14 w-14 items-center justify-center rounded-full border text-2xl transition-all duration-300',
+          occupied && connected
             ? 'border-cyan-400/40 bg-cyan-400/10 shadow-[0_0_16px_rgba(34,211,238,0.22)]'
             : occupied
             ? 'border-red-500/40 bg-red-500/10'
@@ -637,28 +539,28 @@ function RoomSlotCard({
           👤
         </div>
 
-        <div className="min-h-[3rem] text-center">
-          <p className="font-semibold tracking-wider text-white">
+        <div className="room-slot-copy min-h-[3rem] text-center">
+          <p className="room-slot-name font-semibold tracking-wider text-white">
             {slot?.playerName ?? '待接入...'}
           </p>
           {slot?.isHost ? (
-            <span className="text-xs tracking-wider text-orange-300/70">Host</span>
+            <span className="room-slot-host text-xs tracking-wider text-orange-300/70">Host</span>
           ) : null}
         </div>
 
         <div className={cx(
-          'flex items-center gap-1.5 font-mono text-xs tracking-wider',
-          occupied && ready ? 'text-cyan-400' : occupied ? 'text-red-400' : 'text-slate-600',
+          'room-slot-status flex items-center gap-1.5 font-mono text-xs tracking-wider',
+          occupied && connected ? 'text-cyan-400' : occupied ? 'text-red-400' : 'text-slate-600',
         )}>
           <span className={cx(
             'h-1.5 w-1.5 rounded-full',
-            occupied && ready
+            occupied && connected
               ? 'bg-cyan-400 shadow-[0_0_6px_rgba(34,211,238,0.9)]'
               : occupied
               ? 'bg-red-500 animate-pulse'
               : 'bg-slate-600',
           )} />
-          {occupied ? (ready ? '算力就绪' : '算力部署中...') : (canMove ? '双击切换至此' : '待接入...')}
+          {occupied ? (connected ? '链路在线' : '链路断开') : '待接入...'}
         </div>
       </div>
     </div>
@@ -669,10 +571,15 @@ export function TowerDefenseFrontendPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { roomId: routeRoomId } = useParams<{ roomId?: string }>()
+  const suppressAutoResumeRef = useRef(false)
+  const previousRoomPhaseRef = useRef<ReturnType<typeof useGameEngine>['roomPhase']>(null)
   const currentView = resolveCurrentView(location.pathname)
-  const [rooms, setRooms] = useState<RoomSummary[]>(() => loadRoomsFromStorage())
-  const [selectedRoomId, setSelectedRoomId] = useState<string>(INITIAL_ROOMS[0]?.id ?? '')
+  const playerId = useRef(resolvePlayerId() ?? 'human-dev').current
+  const playerKind = useRef(resolvePlayerKind()).current
+  const { rooms, isLoadingRooms, roomsError, refreshRooms, createRoom } = useRoomLobbyData()
+  const [selectedRoomId, setSelectedRoomId] = useState<string>('')
   const [searchQuery, setSearchQuery] = useState('')
+  const [roomPage, setRoomPage] = useState(1)
   const [isCreateRoomOpen, setIsCreateRoomOpen] = useState(false)
   const [newRoomName, setNewRoomName] = useState('')
   const [newRoomPassword, setNewRoomPassword] = useState('')
@@ -687,10 +594,17 @@ export function TowerDefenseFrontendPage() {
     lastTickAt,
     roomPhase,
     countdownSeconds,
+    mySlot: joinedSlot,
+    isHost,
     sendSocketEvent,
     reconnect,
   } = useGameEngine({
     roomId: currentView === 'ROOM' ? activeRoomId : undefined,
+    identity: {
+      playerId,
+      playerName: playerId,
+      playerKind,
+    },
   })
 
   const {
@@ -714,23 +628,43 @@ export function TowerDefenseFrontendPage() {
         || room.id.toLowerCase().includes(searchQuery.toLowerCase()),
       )
     : rooms
+  const totalRoomPages = Math.max(1, Math.ceil(filteredRooms.length / ROOMS_PER_PAGE))
+  const normalizedRoomPage = Math.min(roomPage, totalRoomPages)
+  const paginatedRooms = filteredRooms.slice(
+    (normalizedRoomPage - 1) * ROOMS_PER_PAGE,
+    normalizedRoomPage * ROOMS_PER_PAGE,
+  )
 
-  const mySlot = selectedRoom?.slots.find((s) => s.isHost) ?? null
-  const allReady = selectedRoom
-    ? selectedRoom.slots.every((s) => !s.playerName || s.ready)
+  const mySlot = joinedSlot ? selectedRoom?.slots.find((s) => s.slotId === joinedSlot) ?? null : null
+  const allConnected = selectedRoom
+    ? selectedRoom.slots.every((slot) => !slot.playerName || slot.connected)
     : false
+  const canStartMatch = Boolean(selectedRoom && isHost && isConnected && selectedRoom.status === 'OPEN' && allConnected)
+
+  useEffect(() => {
+    const rootElement = document.getElementById('root')
+
+    if (currentView !== 'ROOM') {
+      document.documentElement.classList.remove('room-route-active')
+      document.body.classList.remove('room-route-active')
+      rootElement?.classList.remove('room-route-active')
+      return
+    }
+
+    document.documentElement.classList.add('room-route-active')
+    document.body.classList.add('room-route-active')
+    rootElement?.classList.add('room-route-active')
+
+    return () => {
+      document.documentElement.classList.remove('room-route-active')
+      document.body.classList.remove('room-route-active')
+      rootElement?.classList.remove('room-route-active')
+    }
+  }, [currentView])
 
   function navigateToView(view: Exclude<CurrentView, 'ROOM'>) {
     navigate(STATIC_VIEW_ROUTES[view])
   }
-
-  useEffect(() => {
-    try {
-      sessionStorage.setItem(ROOMS_STORAGE_KEY, JSON.stringify(rooms))
-    } catch {
-      // ignore storage errors
-    }
-  }, [rooms])
 
   useEffect(() => {
     if (currentView !== 'ROOM') {
@@ -740,6 +674,10 @@ export function TowerDefenseFrontendPage() {
     const room = rooms.find((candidate) => candidate.id === activeRoomId)
 
     if (!room) {
+      if (isLoadingRooms || connectionState === 'connecting' || (isConnected && roomPhase !== null)) {
+        return
+      }
+
       navigate(STATIC_VIEW_ROUTES.LOBBY, { replace: true })
       return
     }
@@ -747,7 +685,38 @@ export function TowerDefenseFrontendPage() {
     if (selectedRoomId !== room.id) {
       setSelectedRoomId(room.id)
     }
-  }, [activeRoomId, currentView, navigate, rooms, selectedRoomId])
+  }, [activeRoomId, connectionState, currentView, isConnected, isLoadingRooms, navigate, roomPhase, rooms, selectedRoomId])
+
+  useEffect(() => {
+    if (currentView !== 'LOBBY') {
+      return
+    }
+
+    if (rooms.length === 0) {
+      if (selectedRoomId !== '') {
+        setSelectedRoomId('')
+      }
+      return
+    }
+
+    if (!rooms.some((room) => room.id === selectedRoomId)) {
+      setSelectedRoomId(rooms[0].id)
+    }
+  }, [currentView, rooms, selectedRoomId])
+
+  useEffect(() => {
+    if (currentView !== 'LOBBY') {
+      return
+    }
+
+    setRoomPage(1)
+  }, [currentView, searchQuery])
+
+  useEffect(() => {
+    if (roomPage > totalRoomPages) {
+      setRoomPage(totalRoomPages)
+    }
+  }, [roomPage, totalRoomPages])
 
   useEffect(() => {
     if (typeof countdownSeconds !== 'number') {
@@ -759,21 +728,44 @@ export function TowerDefenseFrontendPage() {
   }, [countdownSeconds])
 
   useEffect(() => {
+    suppressAutoResumeRef.current = isRoomNavigationState(location.state) && location.state.suppressAutoResume === true
+  }, [location.key, location.state])
+
+  useEffect(() => {
+    if (roomPhase === 'lobby' || roomPhase === 'countdown') {
+      suppressAutoResumeRef.current = false
+    }
+  }, [roomPhase])
+
+  useEffect(() => {
+    previousRoomPhaseRef.current = null
+  }, [activeRoomId])
+
+  useEffect(() => {
     if (currentView !== 'ROOM') {
+      previousRoomPhaseRef.current = roomPhase
       return
     }
 
-    if (roomPhase !== 'waiting_for_level' && roomPhase !== 'playing') {
+    const previousRoomPhase = previousRoomPhaseRef.current
+    const shouldEnterGaming = previousRoomPhase === 'countdown'
+      && (roomPhase === 'waiting_for_level' || roomPhase === 'playing')
+
+    previousRoomPhaseRef.current = roomPhase
+
+    if (!shouldEnterGaming) {
       return
     }
 
-    if (countdownValue === 0 || roomPhase === 'waiting_for_level' || roomPhase === 'playing') {
-      const gamingPath = activeRoomId
-        ? `/gaming?roomId=${encodeURIComponent(activeRoomId)}`
-        : '/gaming'
-      navigate(gamingPath)
-      setCountdownValue(null)
+    if (suppressAutoResumeRef.current) {
+      return
     }
+
+    const gamingPath = activeRoomId
+      ? `/gaming?roomId=${encodeURIComponent(activeRoomId)}`
+      : '/gaming'
+    navigate(gamingPath)
+    setCountdownValue(null)
   }, [activeRoomId, countdownValue, currentView, navigate, roomPhase])
 
   function joinRoom(roomId: string) {
@@ -781,76 +773,32 @@ export function TowerDefenseFrontendPage() {
     navigate(getRoomDetailPath(roomId))
   }
 
-  function handleCreateRoom() {
+  async function handleCreateRoom() {
     const normalizedName = newRoomName.trim() || `房间${rooms.length + 1}`
-    const roomId = `RM-${Math.floor(2200 + Math.random() * 7000)}`
-    const createdRoom: RoomSummary = {
-      id: roomId,
-      name: normalizedName.slice(0, 12),
-      hasPassword: newRoomPassword.length > 0,
-      players: 1,
-      maxPlayers: 4,
-      status: 'OPEN',
-      ping: 9,
-      slots: [
-        { slotId: 'P1', playerName: 'You', ready: true, isHost: true },
-        { slotId: 'P2', playerName: null, ready: false },
-        { slotId: 'P3', playerName: null, ready: false },
-        { slotId: 'P4', playerName: null, ready: false },
-      ],
-    }
 
-    setRooms((current) => [createdRoom, ...current])
-    setSelectedRoomId(roomId)
-    setNewRoomName('')
-    setNewRoomPassword('')
-    setIsCreateRoomOpen(false)
-    navigate(getRoomDetailPath(roomId))
+    try {
+      const createdRoom = await createRoom({
+        name: normalizedName,
+        password: newRoomPassword,
+      })
+
+      setSelectedRoomId(createdRoom.id)
+      setNewRoomName('')
+      setNewRoomPassword('')
+      setIsCreateRoomOpen(false)
+      navigate(getRoomDetailPath(createdRoom.id))
+    }
+    catch {
+      // 错误通过 roomsError 呈现，这里避免重复 toast
+    }
   }
 
   function onStartGame() {
+    if (!isHost) {
+      return
+    }
+
     void sendSocketEvent('START_MATCH')
-  }
-
-  function toggleMyReady() {
-    if (!activeRoomId) return
-    setRooms((current) =>
-      current.map((room) =>
-        room.id !== activeRoomId
-          ? room
-          : {
-              ...room,
-              slots: room.slots.map((slot) =>
-                slot.isHost ? { ...slot, ready: !slot.ready } : slot,
-              ),
-            },
-      ),
-    )
-  }
-
-  function moveToSlot(targetSlotId: RoomSlotId) {
-    if (!activeRoomId) return
-    setRooms((current) =>
-      current.map((room) => {
-        if (room.id !== activeRoomId) return room
-        const hostSlot = room.slots.find((s) => s.isHost)
-        if (!hostSlot) return room
-        const target = room.slots.find((s) => s.slotId === targetSlotId)
-        if (!target || target.playerName) return room
-        return {
-          ...room,
-          slots: room.slots.map((s) => {
-            if (s.slotId === hostSlot.slotId) {
-              return { slotId: s.slotId, playerName: null, ready: false }
-            }
-            if (s.slotId === targetSlotId) {
-              return { ...hostSlot, slotId: targetSlotId }
-            }
-            return s
-          }),
-        }
-      }),
-    )
   }
 
   if (currentView === 'HOME') {
@@ -885,18 +833,18 @@ export function TowerDefenseFrontendPage() {
   }
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-background text-foreground">
+    <main className={cx('relative min-h-screen overflow-hidden bg-background text-foreground', currentView === 'ROOM' && 'room-route-page')}>
       <div className="cyber-background" />
       <div className="cyber-grid" />
       <div className="cyber-noise" />
 
-      <div className="relative mx-auto flex min-h-screen w-full max-w-[1600px] flex-col px-5 py-6 lg:px-8 lg:py-8">
-        <section className="flex-1 py-8 lg:py-10">
+      <div className={cx('relative mx-auto flex min-h-screen w-full max-w-[1600px] flex-col px-5 py-6 lg:px-8 lg:py-8', currentView === 'ROOM' && 'room-route-shell')}>
+        <section className={cx('flex-1 py-8 lg:py-10', currentView === 'ROOM' && 'room-route-content')}>
           {currentView === 'SKILL_DOC' ? <SkillDocPage onBack={() => navigateToView('HOME')} /> : null}
 
           {currentView !== 'SKILL_DOC' ? (
-            <div className="mx-auto w-full max-w-6xl">
-              <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+            <div className={cx('mx-auto w-full max-w-6xl', currentView === 'ROOM' && 'room-route-workspace')}>
+              <div className={cx('mb-6 flex flex-wrap items-center justify-between gap-4', currentView === 'ROOM' && 'room-route-nav')}>
                 <button
                   type="button"
                   onClick={() => navigateToView('HOME')}
@@ -929,12 +877,12 @@ export function TowerDefenseFrontendPage() {
                   <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(45,212,191,0.06),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(251,146,60,0.05),transparent_25%)]" />
                   <div className="relative">
                     {/* Toolbar */}
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.07] px-6 py-4">
-                      <div className="flex flex-1 items-center gap-2 font-mono text-xs text-cyan-400/70">
-                        <span className="shrink-0 text-cyan-400">&gt;</span>
-                        <span className="shrink-0 tracking-wider">检索目标：</span>
+                    <div className="cyber-room-toolbar flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.07] px-6 py-4">
+                      <div className="flex flex-1 items-center gap-2 font-mono text-xs text-cyan-200/90">
+                        <span className="shrink-0 text-cyan-300">&gt;</span>
+                        <span className="shrink-0 tracking-wider text-cyan-200/90">检索目标：</span>
                         <div className="relative min-w-0 flex-1">
-                          <Search className="pointer-events-none absolute left-3 top-1/2 h-3 w-3 -translate-y-1/2 text-cyan-400/50" />
+                          <Search className="pointer-events-none absolute left-3 top-1/2 h-3 w-3 -translate-y-1/2 text-cyan-300/75" />
                           <input
                             value={searchQuery}
                             onChange={(event) => setSearchQuery(event.target.value)}
@@ -943,11 +891,23 @@ export function TowerDefenseFrontendPage() {
                           />
                         </div>
                       </div>
-                      <button type="button" onClick={() => setIsCreateRoomOpen(true)} className="cyber-primary-button shrink-0">
-                        <Plus className="h-4 w-4" />
-                        <span>新建战区</span>
-                      </button>
+                      <div className="flex shrink-0 items-center gap-3">
+                        <button type="button" onClick={refreshRooms} className="cyber-nav-chip">
+                          <RefreshCcw className="h-4 w-4" />
+                          <span>刷新房间</span>
+                        </button>
+                        <button type="button" onClick={() => setIsCreateRoomOpen(true)} className="cyber-primary-button shrink-0">
+                          <Plus className="h-4 w-4" />
+                          <span>新建战区</span>
+                        </button>
+                      </div>
                     </div>
+
+                    {roomsError ? (
+                      <div className="border-b border-orange-300/20 bg-orange-400/8 px-6 py-3 font-mono text-xs tracking-[0.2em] text-orange-100">
+                        {roomsError}
+                      </div>
+                    ) : null}
 
                     {/* Table header */}
                     <div className="cyber-dg-header">
@@ -962,7 +922,7 @@ export function TowerDefenseFrontendPage() {
 
                     {/* Table body */}
                     <div className="cyber-dg-body">
-                      {filteredRooms.map((room) => {
+                      {paginatedRooms.map((room) => {
                         const isInMatch = room.status === 'IN_MATCH'
                         return (
                           <div
@@ -981,7 +941,7 @@ export function TowerDefenseFrontendPage() {
                               {room.players}&thinsp;/&thinsp;{room.maxPlayers}
                             </div>
                             <div className="text-center tabular-nums text-cyan-200/70">
-                              {String(room.ping).padStart(2, '0')}ms
+                              {formatPing(room.pingMs)}
                             </div>
                             <div className="text-center">
                               {room.hasPassword ? <span className="text-orange-300/80">🔒</span> : null}
@@ -1011,26 +971,53 @@ export function TowerDefenseFrontendPage() {
                         )
                       })}
 
-                      {filteredRooms.length === 0 ? (
+                      {isLoadingRooms ? (
                         <div className="py-10 text-center font-mono text-xs tracking-[0.3em] text-slate-600 uppercase">
-                          &gt;_ 未找到匹配的节点
+                          &gt;_ 正在同步房间列表
+                        </div>
+                      ) : null}
+
+                      {!isLoadingRooms && filteredRooms.length === 0 ? (
+                        <div className="py-10 text-center font-mono text-xs tracking-[0.3em] text-slate-600 uppercase">
+                          {searchQuery.trim() ? '>_ 未找到匹配的节点' : '>_ 当前没有可用房间'}
                         </div>
                       ) : null}
                     </div>
 
                     {/* Footer hint */}
-                    <div className="border-t border-white/[0.05] px-6 py-2.5 text-right font-mono text-xs text-slate-700 tracking-wider">
-                      * 双击行可直接覆盖接入
+                    <div className="cyber-room-footer border-t border-white/[0.05] px-6 py-2.5 font-mono text-xs text-slate-700 tracking-wider">
+                      <div className="cyber-room-pagination">
+                        <button
+                          type="button"
+                          onClick={() => setRoomPage((current) => Math.max(1, current - 1))}
+                          disabled={normalizedRoomPage <= 1}
+                          className="cyber-room-page-button"
+                          title="上一页"
+                        >
+                          <ChevronUp className="h-3.5 w-3.5" />
+                          <span>上一页</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRoomPage((current) => Math.min(totalRoomPages, current + 1))}
+                          disabled={normalizedRoomPage >= totalRoomPages}
+                          className="cyber-room-page-button"
+                          title="下一页"
+                        >
+                          <ChevronDown className="h-3.5 w-3.5" />
+                          <span>下一页</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </section>
               ) : null}
 
               {currentView === 'ROOM' && selectedRoom ? (
-                <section className="cyber-panel overflow-hidden !p-0">
+                <section className="cyber-panel overflow-hidden !p-0 room-route-panel">
 
                   {/* ── Header ── */}
-                  <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/[0.07] px-6 py-4">
+                  <div className="room-route-header flex flex-wrap items-center justify-between gap-4 border-b border-white/[0.07] px-6 py-4">
                     <button type="button" onClick={() => navigateToView('LOBBY')} className="cyber-nav-chip">
                       <ChevronLeft className="h-4 w-4" />
                       <span>返回大厅</span>
@@ -1050,18 +1037,24 @@ export function TowerDefenseFrontendPage() {
                     <div className="flex items-center gap-2 font-mono text-sm">
                       <span className={cx(
                         'h-2 w-2 rounded-full',
-                        allReady
+                        allConnected
                           ? 'bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.9)]'
                           : 'bg-red-500 animate-pulse',
                       )} />
-                      <span className={cx('tracking-wider', allReady ? 'text-cyan-300' : 'text-red-400')}>
-                        {allReady ? '算力全线就绪' : '等待算力注入...'}
+                      <span className={cx('tracking-wider', allConnected ? 'text-cyan-300' : 'text-red-400')}>
+                        {allConnected ? '房间链路稳定' : '存在掉线节点'}
                       </span>
                     </div>
+
+                    {engineError ? (
+                      <div className="border-b border-red-500/20 bg-red-500/8 px-6 py-3 font-mono text-xs tracking-[0.2em] text-red-200">
+                        {engineError}
+                      </div>
+                    ) : null}
                   </div>
 
                   {/* ── 四象限矩阵 ── */}
-                  <div className="relative px-8 py-10">
+                  <div className="room-matrix-stage relative px-8 py-10">
 
                     {/* SVG 连接线 */}
                     <svg className="pointer-events-none absolute inset-0 h-full w-full" preserveAspectRatio="none" aria-hidden>
@@ -1071,58 +1064,54 @@ export function TowerDefenseFrontendPage() {
                       <line x1="74%" y1="70%" x2="50%" y2="50%" stroke="rgba(62,231,210,0.13)" strokeWidth="1" strokeDasharray="5 4" />
                     </svg>
 
-                    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-x-6 gap-y-3">
+                    <div className="room-matrix-grid grid grid-cols-[1fr_auto_1fr] items-center gap-x-6 gap-y-3">
 
                       {/* 行 0: 上方标签 */}
-                      <p className="text-center font-mono text-[0.68rem] uppercase tracking-[0.32em] text-cyan-400/50">P4 | 左上防线</p>
+                      <p className="room-matrix-label text-center font-mono text-[0.68rem] uppercase tracking-[0.32em] text-cyan-400/50">P4 | 左上防线</p>
                       <div />
-                      <p className="text-center font-mono text-[0.68rem] uppercase tracking-[0.32em] text-cyan-400/50">P3 | 右上防线</p>
+                      <p className="room-matrix-label text-center font-mono text-[0.68rem] uppercase tracking-[0.32em] text-cyan-400/50">P3 | 右上防线</p>
 
                       {/* 行 1: 上方卡片 */}
                       <RoomSlotCard
                         slot={selectedRoom.slots.find((s) => s.slotId === 'P4') ?? null}
-                        onDoubleClick={mySlot ? () => moveToSlot('P4') : undefined}
                       />
                       <div />
                       <RoomSlotCard
                         slot={selectedRoom.slots.find((s) => s.slotId === 'P3') ?? null}
-                        onDoubleClick={mySlot ? () => moveToSlot('P3') : undefined}
                       />
 
                       {/* 行 2: 中心按钮 */}
                       <div />
                       <button
                         type="button"
-                        onClick={toggleMyReady}
-                        className={cx('room-deploy-btn', mySlot?.ready && 'room-deploy-btn-cancel')}
+                        disabled
+                        className={cx('room-deploy-btn room-matrix-center-button', mySlot?.connected && 'room-deploy-btn-cancel')}
                       >
-                        {mySlot?.ready ? '[ 取消部署 ]' : '[ 部署 ]'}
+                        {mySlot?.connected ? '[ 链路在线 ]' : '[ 等待接入 ]'}
                       </button>
                       <div />
 
                       {/* 行 3: 下方卡片 */}
                       <RoomSlotCard
                         slot={selectedRoom.slots.find((s) => s.slotId === 'P1') ?? null}
-                        onDoubleClick={mySlot ? () => moveToSlot('P1') : undefined}
                       />
                       <div />
                       <RoomSlotCard
                         slot={selectedRoom.slots.find((s) => s.slotId === 'P2') ?? null}
-                        onDoubleClick={mySlot ? () => moveToSlot('P2') : undefined}
                       />
 
                       {/* 行 4: 下方标签 */}
-                      <p className="text-center font-mono text-[0.68rem] uppercase tracking-[0.32em] text-cyan-400/50">P1 | 左下防线</p>
+                      <p className="room-matrix-label text-center font-mono text-[0.68rem] uppercase tracking-[0.32em] text-cyan-400/50">P1 | 左下防线</p>
                       <div />
-                      <p className="text-center font-mono text-[0.68rem] uppercase tracking-[0.32em] text-cyan-400/50">P2 | 右下防线</p>
+                      <p className="room-matrix-label text-center font-mono text-[0.68rem] uppercase tracking-[0.32em] text-cyan-400/50">P2 | 右下防线</p>
 
                     </div>
                   </div>
 
                   {/* ── Footer ── */}
-                  <div className="flex flex-wrap items-center justify-between gap-4 border-t border-white/[0.07] px-6 py-4">
+                  <div className="room-route-footer flex flex-wrap items-center justify-between gap-4 border-t border-white/[0.07] px-6 py-4">
                     <div className="flex flex-wrap items-center gap-6 font-mono text-xs">
-                      <span className="text-slate-500">延迟: <span className="text-cyan-300">{selectedRoom.ping}ms</span></span>
+                      <span className="text-slate-500">延迟: <span className="text-cyan-300">{formatPing(selectedRoom.pingMs)}</span></span>
                       <span className="text-slate-500">承载量: <span className="text-cyan-300">{selectedRoom.players}/4</span></span>
                       <span className="text-slate-500">接口: <span className={isConnected ? 'text-green-400' : 'text-orange-300'}>{isConnected ? 'CONNECTED' : connectionState.toUpperCase()}</span></span>
                     </div>
@@ -1130,14 +1119,14 @@ export function TowerDefenseFrontendPage() {
                     <button
                       type="button"
                       onClick={onStartGame}
-                      disabled={!allReady}
+                      disabled={!canStartMatch}
                       className={cx(
                         'cyber-start-button !py-3 !text-sm',
-                        !allReady && 'opacity-30 pointer-events-none',
+                        !canStartMatch && 'opacity-30 pointer-events-none',
                       )}
                     >
                       <Rocket className="h-4 w-4" />
-                      <span>启动战局 (START)</span>
+                      <span>{isHost ? '启动战局 (START)' : '仅房主可启动'}</span>
                     </button>
                   </div>
 
