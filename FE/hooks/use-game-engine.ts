@@ -3,6 +3,26 @@ import { io, type Socket } from 'socket.io-client'
 import { resolveGatewayToken, resolveSocketUrl } from '../lib/runtime-config'
 import type { ConnectionState, GameAction, GameNoticeUpdate, GameState, GameStatePatch, GameUiStateUpdate, TickEnvelope } from '../types/game-state'
 
+// ────────────────────────────── Room 生命周期相关类型 ─────────────────────────────
+
+export type RoomPhase = 'lobby' | 'countdown' | 'waiting_for_level' | 'playing'
+
+export interface SelectedLevelInfo {
+  levelId: number
+  label: string
+  description: string
+  waveCount: number
+  targetClearRate: number
+  minPlayers: number
+}
+
+export interface ActionLogEntry {
+  /** 操作报文本 */
+  action: GameAction
+  /** 收到时间戳（ms epoch） */
+  ts: number
+}
+
 interface OptionalIdentityOverrides {
   playerId?: string
   playerName?: string
@@ -26,7 +46,19 @@ interface UseGameEngineResult {
   isConnected: boolean
   lastTickAt: number | null
   lastActionAt: number | null
+  /** 当前房间生命周期，connect 之前为 null */
+  roomPhase: RoomPhase | null
+  /** 已选择的关卡信息，通过 level_selected 事件更新 */
+  selectedLevelInfo: SelectedLevelInfo | null
+  /** 当前玩家分配到的房间槽位，'P1' 为房主 */
+  mySlot: string | null
+  /** 是否为房主（mySlot === 'P1'） */
+  isHost: boolean
   sendAction: (action: GameAction) => boolean
+  /** 发送任意原始 socket 事件（用于 start_game、select_level 等） */
+  sendSocketEvent: (event: string, payload?: unknown) => boolean
+  /** 获取本局收集的操作指令快照 */
+  getActionSnapshot: () => ActionLogEntry[]
   reconnect: () => void
 }
 
@@ -238,6 +270,10 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
   const [error, setError] = useState<string | null>(null)
   const [lastTickAt, setLastTickAt] = useState<number | null>(null)
   const [lastActionAt, setLastActionAt] = useState<number | null>(null)
+  const [roomPhase, setRoomPhase] = useState<RoomPhase | null>(null)
+  const [selectedLevelInfo, setSelectedLevelInfo] = useState<SelectedLevelInfo | null>(null)
+  const [mySlot, setMySlot] = useState<string | null>(null)
+  const actionLogRef = useRef<ActionLogEntry[]>([])
 
   const socketUrl = useMemo(() => resolveSocketUrl(), [])
   const gatewayToken = useMemo(() => options.token ?? resolveGatewayToken(), [options.token])
@@ -326,6 +362,28 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
     queueStateUpdate((currentState) => mergeGameNoticeUpdate(currentState, payload) ?? currentState)
   })
 
+  const handleRoomJoined = useEffectEvent((payload: unknown) => {
+    if (payload && typeof payload === 'object' && typeof (payload as Record<string, unknown>).slot === 'string') {
+      setMySlot((payload as Record<string, unknown>).slot as string)
+    }
+  })
+
+  const handleRoomPhaseChanged = useEffectEvent((payload: unknown) => {
+    if (payload && typeof payload === 'object' && typeof (payload as Record<string, unknown>).phase === 'string') {
+      setRoomPhase((payload as Record<string, unknown>).phase as RoomPhase)
+    }
+  })
+
+  const handleLevelSelected = useEffectEvent((payload: unknown) => {
+    if (
+      payload
+      && typeof payload === 'object'
+      && typeof (payload as Record<string, unknown>).levelId === 'number'
+    ) {
+      setSelectedLevelInfo(payload as SelectedLevelInfo)
+    }
+  })
+
   useEffect(() => {
     if (typeof window === 'undefined' || options.autoConnect === false || !socketUrl) {
       return
@@ -362,6 +420,9 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
     socket.on('tick_update', handleTickUpdate)
     socket.on('ui_state_update', handleUiStateUpdate)
     socket.on('notice_update', handleNoticeUpdate)
+    socket.on('room_joined', handleRoomJoined)
+    socket.on('room_phase_changed', handleRoomPhaseChanged)
+    socket.on('level_selected', handleLevelSelected)
     socket.io.on('reconnect_attempt', () => {
       setConnectionState('reconnecting')
     })
@@ -376,6 +437,9 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
       socket.off('tick_update', handleTickUpdate)
       socket.off('ui_state_update', handleUiStateUpdate)
       socket.off('notice_update', handleNoticeUpdate)
+      socket.off('room_joined', handleRoomJoined)
+      socket.off('room_phase_changed', handleRoomPhaseChanged)
+      socket.off('level_selected', handleLevelSelected)
       socket.disconnect()
       socketRef.current = null
     }
@@ -389,6 +453,7 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
     }
 
     socket.emit('send_action', action)
+    actionLogRef.current.push({ action, ts: Date.now() })
     setLastActionAt(Date.now())
     setError(null)
     return true
@@ -404,6 +469,20 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
     socket.connect()
   }, [])
 
+  const sendSocketEvent = useCallback((event: string, payload?: unknown) => {
+    const socket = socketRef.current
+    if (!socket || !socket.connected) {
+      return false
+    }
+
+    socket.emit(event, payload)
+    return true
+  }, [])
+
+  const getActionSnapshot = useCallback(() => {
+    return [...actionLogRef.current]
+  }, [])
+
   return {
     socketUrl,
     gameState,
@@ -412,7 +491,13 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
     isConnected: connectionState === 'connected',
     lastTickAt,
     lastActionAt,
+    roomPhase,
+    selectedLevelInfo,
+    mySlot,
+    isHost: mySlot === 'P1',
     sendAction,
+    sendSocketEvent,
+    getActionSnapshot,
     reconnect,
   }
 }

@@ -3,6 +3,9 @@ import { OctagonX, ShieldAlert, Skull } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useGameEngine } from '../hooks/use-game-engine'
 import { cx } from '../lib/cx'
+import { resolvePlayerKind } from '../lib/runtime-config'
+import { MissionBriefingModal } from '../components/mission-briefing-modal'
+import { GameOverOverlay } from '../components/game-over-overlay'
 import type { ActionDescriptor, GameAction, GameCell, GameState, TowerBlueprint, TowerState } from '../types/game-state'
 
 const BOARD_DIMENSION = 29
@@ -309,12 +312,17 @@ export function GamingPage({ overloadTicks = 0 }: GamingPageProps) {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const roomId = searchParams.get('roomId') ?? null
-  const { gameState, sendAction, error, socketUrl } = useGameEngine()
+  const { gameState, sendAction, error, socketUrl, roomPhase, selectedLevelInfo, isHost, sendSocketEvent, getActionSnapshot } = useGameEngine()
+  const playerKind = resolvePlayerKind()
   const liveState = useMemo(() => gameState ?? createFallbackBoardState(), [gameState])
   const buildCatalog = useMemo(() => createBaseBuildCatalog(liveState.buildPalette), [liveState.buildPalette])
   const [selectedBuildType, setSelectedBuildType] = useState<string | null>(buildCatalog[0]?.type ?? null)
   const [selectedTowerId, setSelectedTowerId] = useState<string | null>(null)
   const [isLeaveConfirmOpen, setIsLeaveConfirmOpen] = useState(false)
+  // 游戏结束覆层状态
+  const [gameOverOutcome, setGameOverOutcome] = useState<'victory' | 'defeat' | null>(null)
+  const showMissionBriefing = roomPhase === 'waiting_for_level'
+  const showGameOver = gameOverOutcome !== null
   const selectedBlueprint = buildCatalog.find((item) => item.type === selectedBuildType) ?? buildCatalog[0] ?? null
   const selectedTower = liveState.towers.find((tower) => tower.id === selectedTowerId) ?? null
   const selectedTowerActions = useMemo(() => (selectedTower ? createTowerActions(selectedTower) : []), [selectedTower])
@@ -335,6 +343,13 @@ export function GamingPage({ overloadTicks = 0 }: GamingPageProps) {
       setSelectedTowerId(null)
     }
   }, [liveState.towers, selectedTowerId])
+
+  // 监听游戏结束
+  useEffect(() => {
+    if (gameState?.status === 'finished' && gameState.result && !gameOverOutcome) {
+      setGameOverOutcome(gameState.result.outcome)
+    }
+  }, [gameState?.status, gameState?.result, gameOverOutcome])
 
   useEffect(() => {
     if (!isLeaveConfirmOpen) {
@@ -388,6 +403,16 @@ export function GamingPage({ overloadTicks = 0 }: GamingPageProps) {
   function leaveGame() {
     document.body.classList.remove('crisis-overload-active')
     navigate(roomId ? `/room/${encodeURIComponent(roomId)}` : '/room')
+  }
+
+  function handleSelectLevel(levelId: number) {
+    sendSocketEvent('select_level', { levelId })
+  }
+
+  function handleLeaveAfterGameOver() {
+    // 不上传录像（失败），直接游走并清除覆层
+    setGameOverOutcome(null)
+    leaveGame()
   }
 
   return (
@@ -496,6 +521,26 @@ export function GamingPage({ overloadTicks = 0 }: GamingPageProps) {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {/* ── WAITING_FOR_LEVEL 关卡选择把 ──────────────────────────────────────── */}
+      {showMissionBriefing ? (
+        <MissionBriefingModal
+          isHost={isHost}
+          playerKind={playerKind}
+          onSelectLevel={handleSelectLevel}
+          engineError={error}
+        />
+      ) : null}
+
+      {/* ── 游戏结束全屏 ───────────────────────────────────────────────── */}
+      {showGameOver && gameOverOutcome ? (
+        <GameOverOverlay
+          outcome={gameOverOutcome}
+          currentLevelId={selectedLevelInfo?.levelId ?? null}
+          actionLog={getActionSnapshot()}
+          onLeave={handleLeaveAfterGameOver}
+        />
       ) : null}
     </main>
   )

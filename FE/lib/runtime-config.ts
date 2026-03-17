@@ -94,3 +94,34 @@ export function resolveSupabaseUrl() {
 export function resolveSupabaseAnonKey() {
   return readConfiguredValue('VITE_SUPABASE_ANON_KEY', 'SUPABASE_ANON_KEY')
 }
+
+/**
+ * 解析当前玩家 ID。
+ * 优先读取环境变量 VITE_PLAYER_ID；
+ * 开发模式下回退到 'human-dev'（与 BE 默认 authTokens 对齐）。
+ */
+export function resolvePlayerId(): string | null {
+  const configured = readConfiguredValue('VITE_PLAYER_ID', 'PLAYER_ID')
+  if (configured) {
+    return configured
+  }
+
+  if (import.meta.env.DEV) {
+    return 'human-dev'
+  }
+
+  return null
+}
+
+/**
+ * 解析当前玩家类型（'human' | 'agent'）。
+ * 优先读取 VITE_PLAYER_KIND；开发环境默认 'human'。
+ */
+export function resolvePlayerKind(): 'human' | 'agent' {
+  const configured = readConfiguredValue('VITE_PLAYER_KIND', 'PLAYER_KIND')
+  if (configured === 'agent') {
+    return 'agent'
+  }
+
+  return 'human'
+}
