@@ -1,19 +1,17 @@
 import { useEffect, useState } from 'react'
 import {
-  Bot,
   ChevronLeft,
   Clapperboard,
   Crown,
   DoorOpen,
   House,
   Lock,
-  Play,
   Plus,
   RefreshCcw,
   Rocket,
+  Search,
   ShieldPlus,
   Trophy,
-  Users,
   UserPlus,
   Wifi,
   WifiOff,
@@ -55,7 +53,6 @@ interface NavItem {
 
 const HOME_NAV_ITEMS: NavItem[] = [
   { label: '首页', view: 'HOME', icon: House },
-  { label: '房间列表', view: 'LOBBY', icon: DoorOpen },
   { label: '排行榜', view: 'LEADERBOARD', icon: Trophy },
   { label: '热门回放', view: 'HOT_REPLAYS', icon: Clapperboard },
 ]
@@ -214,7 +211,7 @@ const INITIAL_ROOMS: RoomSummary[] = [
     players: 2,
     maxPlayers: 4,
     status: 'OPEN',
-    ping: 18,
+    ping: 12,
     slots: [
       { slotId: 'P1', playerName: 'YUE', ready: true, isHost: true },
       { slotId: 'P2', playerName: 'Nova', ready: false },
@@ -224,17 +221,17 @@ const INITIAL_ROOMS: RoomSummary[] = [
   },
   {
     id: 'RM-2094',
-    name: 'Arc Rush',
+    name: '算力深渊',
     hasPassword: true,
-    players: 3,
+    players: 4,
     maxPlayers: 4,
-    status: 'DRAFTING',
+    status: 'IN_MATCH',
     ping: 26,
     slots: [
       { slotId: 'P1', playerName: 'Kite', ready: true, isHost: true },
       { slotId: 'P2', playerName: 'Cipher', ready: true },
-      { slotId: 'P3', playerName: 'Echo', ready: false },
-      { slotId: 'P4', playerName: null, ready: false },
+      { slotId: 'P3', playerName: 'Echo', ready: true },
+      { slotId: 'P4', playerName: 'Vex', ready: true },
     ],
   },
   {
@@ -244,7 +241,7 @@ const INITIAL_ROOMS: RoomSummary[] = [
     players: 1,
     maxPlayers: 4,
     status: 'OPEN',
-    ping: 12,
+    ping: 18,
     slots: [
       { slotId: 'P1', playerName: 'Atlas', ready: true, isHost: true },
       { slotId: 'P2', playerName: null, ready: false },
@@ -253,18 +250,33 @@ const INITIAL_ROOMS: RoomSummary[] = [
     ],
   },
   {
-    id: 'RM-2124',
-    name: 'Vanta',
+    id: 'RM-2111',
+    name: '硅基一号测试点',
     hasPassword: true,
-    players: 4,
+    players: 3,
     maxPlayers: 4,
-    status: 'IN_MATCH',
-    ping: 31,
+    status: 'OPEN',
+    ping: 9,
     slots: [
       { slotId: 'P1', playerName: 'Rex', ready: true, isHost: true },
       { slotId: 'P2', playerName: 'Skye', ready: true },
-      { slotId: 'P3', playerName: 'Mira', ready: true },
-      { slotId: 'P4', playerName: 'Unit-7', ready: true },
+      { slotId: 'P3', playerName: 'Mira', ready: false },
+      { slotId: 'P4', playerName: null, ready: false },
+    ],
+  },
+  {
+    id: 'RM-2115',
+    name: '零度阵列',
+    hasPassword: false,
+    players: 2,
+    maxPlayers: 4,
+    status: 'OPEN',
+    ping: 15,
+    slots: [
+      { slotId: 'P1', playerName: 'Unit-7', ready: true, isHost: true },
+      { slotId: 'P2', playerName: 'Axon', ready: false },
+      { slotId: 'P3', playerName: null, ready: false },
+      { slotId: 'P4', playerName: null, ready: false },
     ],
   },
 ]
@@ -350,11 +362,11 @@ function formatDate(value: string | null | undefined) {
 function formatRoomStatus(status: RoomSummary['status']) {
   switch (status) {
     case 'OPEN':
-      return '开放加入'
+      return '部署中'
     case 'DRAFTING':
-      return '阵容配置中'
+      return '配置中'
     default:
-      return '对局进行中'
+      return '交战中'
   }
 }
 
@@ -375,59 +387,73 @@ function CreateRoomModal({
   onChangePassword: (value: string) => void
   onCreate: () => void
 }) {
+  useEffect(() => {
+    if (!open) return
+    function handleKey(event: KeyboardEvent) {
+      if (event.key === 'Escape') onClose()
+      if (event.key === 'Enter') onCreate()
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [open, onClose, onCreate])
+
   if (!open) {
     return null
   }
 
   return (
-    <div className="cyber-modal-backdrop">
-      <div className="cyber-modal-panel">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.38em] text-cyan-200/80">Create Room</p>
-            <h3 className="mt-3 text-3xl font-semibold tracking-[0.08em] text-white">创建新房间</h3>
-            <p className="mt-3 text-sm leading-7 text-slate-300">设置房间名与密码后，即可创建一个新的对战准备室。</p>
+    <div className="term-modal-backdrop" onClick={onClose}>
+      <div className="term-modal" onClick={(e) => e.stopPropagation()}>
+
+        {/* 头部 */}
+        <div className="term-modal-head">
+          <span className="term-modal-title">&gt;_ INITIALIZE_NEW_NODE</span>
+        </div>
+        <div className="term-divider" />
+
+        {/* 表单 */}
+        <div className="term-modal-body">
+          <div className="term-field">
+            <span className="term-field-label">战区代号 <span className="term-field-meta">(MAX_12_CHAR)</span> :</span>
+            <div className="term-input-row">
+              <span className="term-block-cursor" aria-hidden>█</span>
+              <input
+                autoFocus
+                value={roomName}
+                onChange={(event) => onChangeRoomName(event.target.value.slice(0, 12))}
+                maxLength={12}
+                placeholder="输入战区名称..."
+                className="term-input"
+              />
+            </div>
           </div>
-          <button type="button" onClick={onClose} className="cyber-nav-chip">
-            <ChevronLeft className="h-4 w-4 rotate-180" />
-            <span>关闭</span>
-          </button>
+
+          <div className="term-field">
+            <span className="term-field-label">安全密匙 <span className="term-field-meta">(OPTIONAL_SEC_KEY)</span> :</span>
+            <div className="term-input-row">
+              <span className="term-block-cursor term-block-cursor-red" aria-hidden>█</span>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={password}
+                onChange={(event) => onChangePassword(event.target.value)}
+                placeholder="留空则对全网开放..."
+                className="term-input"
+              />
+            </div>
+          </div>
         </div>
 
-        <div className="mt-8 space-y-5">
-          <label className="block">
-            <span className="cyber-stat-label">房间名</span>
-            <input
-              value={roomName}
-              onChange={(event) => onChangeRoomName(event.target.value.slice(0, 12))}
-              maxLength={12}
-              placeholder="输入房间名"
-              className="cyber-input mt-3"
-            />
-            <span className="mt-2 block text-xs text-slate-500">最多 12 个字符</span>
-          </label>
-
-          <label className="block">
-            <span className="cyber-stat-label">密码</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => onChangePassword(event.target.value)}
-              placeholder="可选房间密码"
-              className="cyber-input mt-3"
-            />
-          </label>
+        {/* 底部 */}
+        <div className="term-divider" />
+        <div className="term-modal-foot">
+          <span className="term-sys-msg">&gt; SYS_MSG: 节点算力已就绪...</span>
+          <div className="term-modal-actions">
+            <button type="button" onClick={onClose} className="term-btn term-btn-cancel">[ 终止进程 (ESC) ]</button>
+            <button type="button" onClick={onCreate} className="term-btn term-btn-confirm">[ 部署节点 (ENT) ]</button>
+          </div>
         </div>
 
-        <div className="mt-8 flex flex-wrap justify-end gap-3">
-          <button type="button" onClick={onClose} className="cyber-nav-chip">
-            <span>取消</span>
-          </button>
-          <button type="button" onClick={onCreate} className="cyber-primary-button">
-            <Plus className="h-4 w-4" />
-            <span>创建房间</span>
-          </button>
-        </div>
       </div>
     </div>
   )
@@ -444,18 +470,18 @@ function CountdownOverlay({ value }: { value: number }) {
 
 function HomeNav({ currentView, onNavigate }: { currentView: CurrentView; onNavigate: (view: Exclude<CurrentView, 'ROOM'>) => void }) {
   return (
-    <nav className="mt-10 flex flex-wrap items-center justify-center gap-4">
-      {HOME_NAV_ITEMS.map(({ label, view, icon: Icon }) => (
+    <nav className="split-nav" aria-label="Primary navigation">
+      {HOME_NAV_ITEMS.filter((item) => item.view !== 'SKILL_DOC').map(({ label, view, icon: Icon }) => (
         <button
           key={view}
           type="button"
           onClick={() => onNavigate(view)}
           className={cx(
-            'cyber-nav-chip group min-w-40',
-            isNavItemActive(view, currentView) && 'border-cyan-300/60 text-cyan-100 shadow-[0_0_30px_rgba(45,212,191,0.22)]',
+            'split-nav-item',
+            isNavItemActive(view, currentView) && 'split-nav-item-active',
           )}
         >
-          <Icon className="h-4 w-4 transition-transform duration-300 group-hover:scale-110" />
+          <Icon className="h-3.5 w-3.5" />
           <span>{label}</span>
         </button>
       ))}
@@ -480,64 +506,67 @@ function StatusPill({ connected, label }: { connected: boolean; label: string })
 }
 
 function PlayerCard({
+  side,
   title,
-  subtitle,
-  accent,
-  icon: Icon,
-  meta,
+  description,
+  actionLabel,
   onClick,
 }: {
+  side: 'HUMAN' | 'AGENT'
   title: string
-  subtitle: string
-  accent: 'cyan' | 'orange'
-  icon: typeof Users
-  meta: string
-  onClick?: () => void
+  description: string
+  actionLabel: string
+  onClick: () => void
 }) {
+  const isHuman = side === 'HUMAN'
+
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick() }
+      }}
       className={cx(
-        'group cyber-player-card text-left',
-        accent === 'cyan' ? 'cyber-player-card-cyan' : 'cyber-player-card-orange',
+        'absolute inset-0 overflow-hidden outline-none',
+        isHuman ? 'split-side-human' : 'split-side-agent',
       )}
     >
-      <div className="flex items-start justify-between gap-6">
-        <div>
-          <p className="text-xs uppercase tracking-[0.38em] text-slate-400">Player Mode</p>
-          <h2 className="mt-5 text-4xl font-semibold tracking-[0.08em] text-white md:text-5xl">{title}</h2>
-          <p className="mt-4 max-w-md text-base leading-7 text-slate-300">{subtitle}</p>
-        </div>
-        <div
-          className={cx(
-            'flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl border backdrop-blur-md',
-            accent === 'cyan'
-              ? 'border-cyan-300/30 bg-cyan-400/10 text-cyan-200'
-              : 'border-orange-300/30 bg-orange-400/10 text-orange-200',
-          )}
-        >
-          <Icon className="h-8 w-8" />
-        </div>
+      <div className="split-side-fx" aria-hidden="true">
+        {!isHuman && <div className="split-chip-fx" />}
       </div>
 
-      <div className="mt-12 flex items-end justify-between gap-6">
-        <div>
-          <p className="text-xs uppercase tracking-[0.32em] text-slate-500">Directive</p>
-          <p className="mt-2 text-sm text-slate-300">{meta}</p>
-        </div>
+      <div
+        className={cx(
+          'relative z-10 flex h-full flex-col justify-center gap-3',
+          isHuman
+            ? 'items-start pl-[clamp(2.5rem,7vw,6rem)] pr-[32%] text-left'
+            : 'items-end pr-[clamp(2.5rem,7vw,6rem)] pl-[32%] text-right',
+        )}
+      >
         <span
           className={cx(
-            'rounded-full border px-4 py-2 text-xs uppercase tracking-[0.3em] transition-transform duration-300 group-hover:translate-x-1',
-            accent === 'cyan'
-              ? 'border-cyan-300/40 bg-cyan-400/10 text-cyan-100'
-              : 'border-orange-300/40 bg-orange-400/10 text-orange-100',
+            'text-[0.62rem] font-bold uppercase tracking-[0.6em]',
+            isHuman ? 'text-cyan-400/65' : 'text-red-400/65',
           )}
         >
-          Enter
+          {isHuman ? 'CARBON CORE ///' : '/// SILICON STACK'}
+        </span>
+
+        <h2 className={cx('split-side-title', isHuman ? 'split-title-cyan' : 'split-title-red')}>
+          {isHuman ? (<>HUMAN<br />PLAYER</>) : (<>AGENT<br />INTERFACE</>)}
+        </h2>
+
+        <p className="mt-2 max-w-[26rem] text-[0.9rem] leading-[1.85] text-slate-300/80">
+          {description}
+        </p>
+
+        <span className={cx('split-side-cta', isHuman ? 'split-cta-cyan' : 'split-cta-red')}>
+          {actionLabel}
         </span>
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -568,6 +597,7 @@ export function TowerDefenseFrontendPage() {
   const currentView = resolveCurrentView(location.pathname)
   const [rooms, setRooms] = useState<RoomSummary[]>(INITIAL_ROOMS)
   const [selectedRoomId, setSelectedRoomId] = useState<string>(INITIAL_ROOMS[0]?.id ?? '')
+  const [searchQuery, setSearchQuery] = useState('')
   const [isCreateRoomOpen, setIsCreateRoomOpen] = useState(false)
   const [newRoomName, setNewRoomName] = useState('')
   const [newRoomPassword, setNewRoomPassword] = useState('')
@@ -598,6 +628,12 @@ export function TowerDefenseFrontendPage() {
   const activeReplay = selectedReplay ?? null
   const activeRoomId = routeRoomId ? decodeURIComponent(routeRoomId) : selectedRoomId
   const selectedRoom = rooms.find((room) => room.id === activeRoomId) ?? (currentView === 'ROOM' ? null : rooms[0] ?? null)
+  const filteredRooms = searchQuery.trim()
+    ? rooms.filter((room) =>
+        room.name.toLowerCase().includes(searchQuery.toLowerCase())
+        || room.id.toLowerCase().includes(searchQuery.toLowerCase()),
+      )
+    : rooms
 
   function navigateToView(view: Exclude<CurrentView, 'ROOM'>) {
     navigate(STATIC_VIEW_ROUTES[view])
@@ -676,6 +712,37 @@ export function TowerDefenseFrontendPage() {
     setCountdownValue(3)
   }
 
+  if (currentView === 'HOME') {
+    return (
+      <main className="relative h-screen w-screen overflow-hidden bg-[#020408]">
+        <div className="split-home-logo">
+          <h1 className="split-home-title">Myriad TD</h1>
+        </div>
+
+        <section className="absolute inset-0 split-container">
+          <PlayerCard
+            side="HUMAN"
+            title="HUMAN PLAYER"
+            description=""
+            actionLabel="ENTER LOBBY ›"
+            onClick={() => navigateToView('LOBBY')}
+          />
+
+          <PlayerCard
+            side="AGENT"
+            title="AGENT INTERFACE"
+            description=""
+            actionLabel="‹ OPEN INTERFACE"
+            onClick={() => navigateToView('SKILL_DOC')}
+          />
+
+        </section>
+
+        <HomeNav currentView={currentView} onNavigate={navigateToView} />
+      </main>
+    )
+  }
+
   return (
     <main className="relative min-h-screen overflow-hidden bg-background text-foreground">
       <div className="cyber-background" />
@@ -683,61 +750,10 @@ export function TowerDefenseFrontendPage() {
       <div className="cyber-noise" />
 
       <div className="relative mx-auto flex min-h-screen w-full max-w-[1600px] flex-col px-5 py-6 lg:px-8 lg:py-8">
-        <header className="rounded-[32px] border border-white/10 bg-slate-950/60 px-5 py-5 backdrop-blur-xl lg:px-8 lg:py-7">
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-[0.48em] text-cyan-200/80">AgensTD Championship Client</p>
-              <h1 className="mt-3 max-w-4xl text-4xl font-semibold tracking-[0.08em] text-white lg:text-6xl">
-                Human vs Agent
-                <span className="block text-cyan-200/80">Cyber Defense Arena</span>
-              </h1>
-              <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-300 lg:text-base">
-                单页电竞客户端入口。首页只保留核心导航与玩家身份选择，旧的监控面板、地图面板和 Dashboard 区块已整体退场。
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <StatusPill connected={isConnected} label={connectionState} />
-              <div className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.28em] text-slate-300">
-                Realtime {realtimeStatus}
-              </div>
-            </div>
-          </div>
-        </header>
-
         <section className="flex-1 py-8 lg:py-10">
-          {currentView === 'HOME' ? (
-            <div className="flex min-h-full flex-col justify-center">
-              <div className="mx-auto max-w-3xl text-center">
-                <p className="text-sm uppercase tracking-[0.52em] text-orange-200/80">Main Navigation</p>
-                <HomeNav currentView={currentView} onNavigate={navigateToView} />
-              </div>
-
-              <div className="mx-auto mt-14 grid w-full max-w-6xl gap-6 lg:grid-cols-2 xl:mt-18 xl:gap-8">
-                <PlayerCard
-                  title="Human Player"
-                  subtitle="进入人工操作大厅，接管真实指令、实时连接状态与即将上线的房间匹配流。"
-                  accent="cyan"
-                  icon={Users}
-                  meta="Click to enter /room"
-                  onClick={() => navigateToView('LOBBY')}
-                />
-
-                <PlayerCard
-                  title="Agent Player"
-                  subtitle="切入自治 Agent 展示位，查看排行榜与热门回放，观察策略体在竞技环境中的表现。"
-                  accent="orange"
-                  icon={Bot}
-                  meta="Observe autonomous contenders"
-                  onClick={() => navigateToView('SKILL_DOC')}
-                />
-              </div>
-            </div>
-          ) : null}
-
           {currentView === 'SKILL_DOC' ? <SkillDocPage onBack={() => navigateToView('HOME')} /> : null}
 
-          {currentView !== 'HOME' && currentView !== 'SKILL_DOC' ? (
+          {currentView !== 'SKILL_DOC' ? (
             <div className="mx-auto w-full max-w-6xl">
               <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
                 <button
@@ -768,114 +784,104 @@ export function TowerDefenseFrontendPage() {
               </div>
 
               {currentView === 'LOBBY' ? (
-                <section className="grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
-                  <article className="cyber-panel overflow-hidden">
-                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(45,212,191,0.14),transparent_32%),radial-gradient(circle_at_bottom_right,rgba(251,146,60,0.12),transparent_28%)]" />
-                    <div className="relative">
-                      <p className="text-xs uppercase tracking-[0.42em] text-cyan-200/80">Lobby</p>
-                      <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
-                        <h2 className="text-3xl font-semibold tracking-[0.08em] text-white lg:text-5xl">Room Directory</h2>
-                        <button type="button" onClick={() => setIsCreateRoomOpen(true)} className="cyber-primary-button">
-                          <Plus className="h-4 w-4" />
-                          <span>创建房间</span>
-                        </button>
+                <section className="cyber-panel overflow-hidden !p-0">
+                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(45,212,191,0.06),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(251,146,60,0.05),transparent_25%)]" />
+                  <div className="relative">
+                    {/* Toolbar */}
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.07] px-6 py-4">
+                      <div className="flex flex-1 items-center gap-2 font-mono text-xs text-cyan-400/70">
+                        <span className="shrink-0 text-cyan-400">&gt;</span>
+                        <span className="shrink-0 tracking-wider">检索目标：</span>
+                        <div className="relative min-w-0 flex-1">
+                          <Search className="pointer-events-none absolute left-3 top-1/2 h-3 w-3 -translate-y-1/2 text-cyan-400/50" />
+                          <input
+                            value={searchQuery}
+                            onChange={(event) => setSearchQuery(event.target.value)}
+                            placeholder="输入房间名称或节点 ID 进行搜索..."
+                            className="cyber-grid-search"
+                          />
+                        </div>
                       </div>
-                      <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-300 lg:text-base">
-                        双击房间行可直接加入。房间列表采用大行高滚动布局，便于快速浏览赛事房间状态与空位信息。
-                      </p>
+                      <button type="button" onClick={() => setIsCreateRoomOpen(true)} className="cyber-primary-button shrink-0">
+                        <Plus className="h-4 w-4" />
+                        <span>新建战区</span>
+                      </button>
+                    </div>
 
-                      <div className="cyber-room-list mt-8">
-                        {rooms.map((room) => (
-                          <button
+                    {/* Table header */}
+                    <div className="cyber-dg-header">
+                      <div>节点ID</div>
+                      <div>战区ID</div>
+                      <div className="text-center">玩家数</div>
+                      <div className="text-center">延迟</div>
+                      <div className="text-center">密匙</div>
+                      <div>当前状态</div>
+                      <div>操作指令</div>
+                    </div>
+
+                    {/* Table body */}
+                    <div className="cyber-dg-body">
+                      {filteredRooms.map((room) => {
+                        const isInMatch = room.status === 'IN_MATCH'
+                        return (
+                          <div
                             key={room.id}
-                            type="button"
                             onClick={() => setSelectedRoomId(room.id)}
-                            onDoubleClick={() => joinRoom(room.id)}
+                            onDoubleClick={() => !isInMatch && joinRoom(room.id)}
                             className={cx(
-                              'cyber-room-row w-full text-left',
-                              selectedRoomId === room.id && 'border-cyan-300/40 bg-cyan-400/10',
+                              'cyber-dg-row',
+                              selectedRoomId === room.id && 'cyber-dg-row-selected',
+                              isInMatch && 'cyber-dg-row-inactive',
                             )}
                           >
-                            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                              <div className="flex items-start gap-4">
-                                <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-cyan-300/20 bg-cyan-400/10 text-cyan-100">
-                                  <DoorOpen className="h-7 w-7" />
-                                </div>
-                                <div>
-                                  <div className="flex flex-wrap items-center gap-3">
-                                    <h3 className="text-2xl font-semibold tracking-[0.08em] text-white">{room.name}</h3>
-                                    {room.hasPassword ? <Lock className="h-4 w-4 text-orange-200" /> : null}
-                                  </div>
-                                  <p className="mt-2 text-sm uppercase tracking-[0.28em] text-slate-500">{room.id} · {formatRoomStatus(room.status)}</p>
-                                </div>
-                              </div>
-
-                              <div className="grid gap-3 sm:grid-cols-3">
-                                <div className="cyber-stat-tile min-w-28">
-                                  <span className="cyber-stat-label">Players</span>
-                                  <strong className="mt-3 block text-2xl font-semibold text-white">{room.players}/{room.maxPlayers}</strong>
-                                </div>
-                                <div className="cyber-stat-tile min-w-28">
-                                  <span className="cyber-stat-label">Ping</span>
-                                  <strong className="mt-3 block text-2xl font-semibold text-cyan-100">{room.ping}ms</strong>
-                                </div>
-                                <div className="cyber-stat-tile min-w-28">
-                                  <span className="cyber-stat-label">Join</span>
-                                  <strong className="mt-3 block text-sm text-orange-100">双击加入</strong>
-                                </div>
-                              </div>
+                            <div className="font-mono text-cyan-400/80 tracking-wider">{room.id}</div>
+                            <div className="font-medium text-white/90">{room.name}</div>
+                            <div className="text-center tabular-nums text-slate-300">
+                              {room.players}&thinsp;/&thinsp;{room.maxPlayers}
                             </div>
-                          </button>
-                        ))}
-                      </div>
+                            <div className="text-center tabular-nums text-cyan-200/70">
+                              {String(room.ping).padStart(2, '0')}ms
+                            </div>
+                            <div className="text-center">
+                              {room.hasPassword ? <span className="text-orange-300/80">🔒</span> : null}
+                            </div>
+                            <div>
+                              <span className={cx(
+                                'cyber-status-badge',
+                                isInMatch ? 'cyber-status-badge-red' : 'cyber-status-badge-cyan',
+                              )}>
+                                {formatRoomStatus(room.status)}
+                              </span>
+                            </div>
+                            <div>
+                              {isInMatch ? (
+                                <span className="font-mono text-xs text-slate-600 tracking-wider">----</span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={(event) => { event.stopPropagation(); joinRoom(room.id) }}
+                                  className="cyber-action-btn"
+                                >
+                                  接入
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
 
-                      {engineError ? (
-                        <div className="mt-6 rounded-3xl border border-orange-300/25 bg-orange-400/10 px-5 py-4 text-sm leading-7 text-orange-100">
-                          {engineError}
+                      {filteredRooms.length === 0 ? (
+                        <div className="py-10 text-center font-mono text-xs tracking-[0.3em] text-slate-600 uppercase">
+                          &gt;_ 未找到匹配的节点
                         </div>
                       ) : null}
                     </div>
-                  </article>
 
-                  <aside className="cyber-panel">
-                    <p className="text-xs uppercase tracking-[0.42em] text-orange-200/80">Ready Check</p>
-                    <div className="mt-6 space-y-4">
-                      <div className="cyber-stat-tile">
-                        <span className="cyber-stat-label">Selected Room</span>
-                        <p className="mt-3 text-2xl font-semibold tracking-[0.06em] text-white">{selectedRoom?.name ?? '未选择'}</p>
-                        <p className="mt-3 text-sm leading-7 text-slate-300">{selectedRoom ? `${selectedRoom.players}/${selectedRoom.maxPlayers} 位玩家 · ${formatRoomStatus(selectedRoom.status)}` : '从列表中选择一间房间。'}</p>
-                      </div>
-                      <div className="cyber-stat-tile">
-                        <span className="cyber-stat-label">Socket</span>
-                        <p className="mt-3 break-all text-sm leading-7 text-slate-300">{socketUrl ?? 'Unavailable'}</p>
-                      </div>
-                      <div className="cyber-stat-tile">
-                        <span className="cyber-stat-label">Last Tick</span>
-                        <p className="mt-3 text-2xl font-semibold text-cyan-100">{formatClock(lastTickAt)}</p>
-                      </div>
-                      <div className="cyber-stat-tile">
-                        <span className="cyber-stat-label">Action</span>
-                        <div className="mt-4 flex flex-col gap-3">
-                          <button
-                            type="button"
-                            onClick={reconnect}
-                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-cyan-300/35 bg-cyan-400/10 px-4 py-3 text-sm uppercase tracking-[0.28em] text-cyan-100 transition duration-300 hover:bg-cyan-400/15 hover:shadow-[0_0_24px_rgba(45,212,191,0.2)]"
-                          >
-                            <RefreshCcw className="h-4 w-4" />
-                            重新同步连接
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => selectedRoom && joinRoom(selectedRoom.id)}
-                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-orange-300/35 bg-orange-400/10 px-4 py-3 text-sm uppercase tracking-[0.28em] text-orange-100 transition duration-300 hover:bg-orange-400/15 hover:shadow-[0_0_24px_rgba(251,146,60,0.2)]"
-                          >
-                            <DoorOpen className="h-4 w-4" />
-                            加入所选房间
-                          </button>
-                        </div>
-                      </div>
+                    {/* Footer hint */}
+                    <div className="border-t border-white/[0.05] px-6 py-2.5 text-right font-mono text-xs text-slate-700 tracking-wider">
+                      * 双击行可直接覆盖接入
                     </div>
-                  </aside>
+                  </div>
                 </section>
               ) : null}
 
