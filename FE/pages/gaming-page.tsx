@@ -10,6 +10,7 @@ import { resolveGatewayToken, resolvePlayerId, resolvePlayerKind, resolveSocketU
 const BOARD_DIMENSION = 29
 const DEFAULT_ROOM_ID = 'public-1'
 const CELL_SIZE_CSS_VAR = 'var(--gaming-grid-cell-size)'
+const CELL_STRIDE_CSS_VAR = 'var(--gaming-grid-stride)'
 
 type RoomPhase = 'lobby' | 'countdown' | 'waiting_for_level' | 'playing'
 type MatchStatus = 'waiting' | 'running' | 'finished'
@@ -402,24 +403,8 @@ function evaluateTowerPlacement(gameState: ServerDrivenGameState | null, option:
   return { allowed: true, reason: '点击建造' }
 }
 
-function getTowerGlyph(type: string) {
-  if (type.includes('laser') || type.includes('激光塔')) {
-    return 'LS'
-  }
-
-  if (type.includes('cannon') || type.includes('炮塔')) {
-    return 'CN'
-  }
-
-  if (type.includes('ice') || type.includes('冰塔')) {
-    return 'IC'
-  }
-
-  if (type.includes('arrow') || type.includes('箭塔')) {
-    return 'AR'
-  }
-
-  return type.slice(0, 2).toUpperCase()
+function getTowerGlyph(_type: string) {
+  return ''
 }
 
 function getTowerTone(type: string) {
@@ -436,6 +421,20 @@ function getTowerTone(type: string) {
   }
 
   return 'gaming-tower-node-arrow'
+}
+
+function getTowerSvgProps(type: string): { stroke: string; paths: string } {
+  if (type.includes('laser') || type.includes('激光塔')) {
+    return { stroke: '#f87171', paths: 'M12 2L12 22M6 6L18 18M18 6L6 18' }
+  }
+  if (type.includes('cannon') || type.includes('炮塔')) {
+    return { stroke: '#fb923c', paths: 'M4 20L12 4L20 20ZM12 4L12 14' }
+  }
+  if (type.includes('ice') || type.includes('冰塔')) {
+    return { stroke: '#93c5fd', paths: 'M12 2L12 22M2 12L22 12M4.9 4.9L19.1 19.1M19.1 4.9L4.9 19.1' }
+  }
+  // arrow - hexagon
+  return { stroke: '#38bdf8', paths: 'M12 2L21.5 7.5V16.5L12 22L2.5 16.5V7.5Z' }
 }
 
 function getEnemyTone(kind: string) {
@@ -536,12 +535,17 @@ function GamingBoard({
                     terrain === 0 ? 'gaming-terrain-cell-abyss' : 'gaming-terrain-cell-ground',
                     isCore && 'gaming-terrain-cell-core',
                     tower && 'gaming-terrain-cell-occupied',
-                    selectedBuildType && terrain === 1 && !isCore && !tower && 'gaming-terrain-cell-armable',
                     tower?.id === selectedTowerId && 'gaming-terrain-cell-selected',
                   )}
                   aria-label={gateLabel ? `${gateLabel} 刷怪口` : `坐标 ${x}, ${y}`}
                 >
                   {gateLabel ? <span className="gaming-gate-badge">{gateLabel}</span> : null}
+                  {isCore ? (
+                    <svg className="gaming-core-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <circle cx="12" cy="12" r="3" stroke="#fb923c" strokeWidth="1.5" fill="rgba(251,146,60,0.15)" />
+                      <path d="M12 2V9M12 15V22M2 12H9M15 12H22" stroke="#fb923c" strokeWidth="1" strokeLinecap="round" opacity="0.6" />
+                    </svg>
+                  ) : null}
                 </button>
               )
             })}
@@ -552,33 +556,13 @@ function GamingBoard({
               <div
                 className="gaming-build-preview"
                 style={{
-                  left: `calc(${hoveredCell.x} * ${CELL_SIZE_CSS_VAR})`,
-                  top: `calc(${hoveredCell.y} * ${CELL_SIZE_CSS_VAR})`,
-                  width: `calc(${selectedBuildOption.width} * ${CELL_SIZE_CSS_VAR})`,
-                  height: `calc(${selectedBuildOption.height} * ${CELL_SIZE_CSS_VAR})`,
+                  left: `calc(${hoveredCell.x} * ${CELL_STRIDE_CSS_VAR})`,
+                  top: `calc(${hoveredCell.y} * ${CELL_STRIDE_CSS_VAR})`,
+                  width: `calc(${selectedBuildOption.width} * ${CELL_STRIDE_CSS_VAR} - var(--gaming-grid-gap))`,
+                  height: `calc(${selectedBuildOption.height} * ${CELL_STRIDE_CSS_VAR} - var(--gaming-grid-gap))`,
                 }}
               >
                 <span className="gaming-build-preview-crosshair" />
-              </div>
-            </div>
-          ) : null}
-
-          {hoveredCell && selectedBuildOption && hoveredPlacement?.reason ? (
-            <div className="gaming-board-overlay gaming-board-overlay-preview" aria-hidden="true">
-              <div
-                className={cx(
-                  'gaming-hover-hint',
-                  hoveredPlacement.allowed ? 'gaming-hover-hint-allowed' : 'gaming-hover-hint-blocked',
-                  hoverHintDirection === 'below' ? 'gaming-hover-hint-below' : 'gaming-hover-hint-above',
-                )}
-                style={{
-                  left: `calc(${hoveredCell.x} * ${CELL_SIZE_CSS_VAR})`,
-                  top: `calc(${hoveredCell.y} * ${CELL_SIZE_CSS_VAR})`,
-                  width: `calc(${selectedBuildOption.width} * ${CELL_SIZE_CSS_VAR})`,
-                }}
-              >
-                <span className="gaming-hover-hint-title">{selectedBuildOption.label}</span>
-                <span className="gaming-hover-hint-reason">{hoveredPlacement.reason}</span>
               </div>
             </div>
           ) : null}
@@ -595,13 +579,21 @@ function GamingBoard({
                   selectedTowerId === tower.id && 'gaming-tower-node-selected',
                 )}
                 style={{
-                  left: `calc(${tower.x} * ${CELL_SIZE_CSS_VAR})`,
-                  top: `calc(${tower.y} * ${CELL_SIZE_CSS_VAR})`,
-                  width: `calc(${tower.width} * ${CELL_SIZE_CSS_VAR})`,
-                  height: `calc(${tower.height} * ${CELL_SIZE_CSS_VAR})`,
+                  left: `calc(${tower.x} * ${CELL_STRIDE_CSS_VAR})`,
+                  top: `calc(${tower.y} * ${CELL_STRIDE_CSS_VAR})`,
+                  width: `calc(${tower.width} * ${CELL_STRIDE_CSS_VAR} - var(--gaming-grid-gap))`,
+                  height: `calc(${tower.height} * ${CELL_STRIDE_CSS_VAR} - var(--gaming-grid-gap))`,
                 }}
                 title={`${tower.type} @ (${tower.x}, ${tower.y})`}
               >
+                {(() => {
+                  const svgProps = getTowerSvgProps(tower.type)
+                  return (
+                    <svg className="gaming-tower-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ '--tower-color': svgProps.stroke } as React.CSSProperties}>
+                      <path d={svgProps.paths} stroke={svgProps.stroke} strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  )
+                })()}
                 <span className="gaming-tower-glyph">{getTowerGlyph(tower.type)}</span>
               </button>
             ))}
@@ -616,14 +608,12 @@ function GamingBoard({
                   key={enemy.id}
                   className={cx('gaming-enemy-node', getEnemyTone(enemy.kind))}
                   style={{
-                    left: `calc(${enemy.x} * ${CELL_SIZE_CSS_VAR})`,
-                    top: `calc(${enemy.y} * ${CELL_SIZE_CSS_VAR})`,
+                    left: `calc(${enemy.x} * ${CELL_STRIDE_CSS_VAR})`,
+                    top: `calc(${enemy.y} * ${CELL_STRIDE_CSS_VAR})`,
                   }}
                   title={`${enemy.kind} HP ${enemy.hp}/${enemy.maxHp}`}
                 >
-                  <div className="gaming-enemy-core">
-                    <Skull className="h-3.5 w-3.5" strokeWidth={2.2} />
-                  </div>
+                  <div className="gaming-enemy-core" />
                   <div className="gaming-enemy-hpbar">
                     <span style={{ width: `${hpRatio * 100}%` }} />
                   </div>

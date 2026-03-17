@@ -1434,7 +1434,7 @@ body.crisis-overload-active {
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
-  background: radial-gradient(circle at 50% 0%, rgba(29, 78, 216, 0.12), transparent 32%), #020611;
+  background: #060a12;
 }
 
 .gaming-shell {
@@ -1654,13 +1654,12 @@ body.crisis-overload-active {
   aspect-ratio: 1;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  padding: 0.9rem;
+  gap: 0;
+  padding: 0.5rem;
   border-radius: 14px;
-  border: 1px solid rgba(40, 100, 180, 0.38);
-  background:
-    radial-gradient(ellipse at 50% 45%, #0e1f3a 0%, #09131f 55%, #060c14 100%);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.85), inset 0 0 0 1px rgba(30, 90, 180, 0.08);
+  border: 1px solid rgba(100, 116, 139, 0.18);
+  background: #0b1121;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.9);
 }
 
 .gaming-board-titlebar {
@@ -1708,13 +1707,15 @@ body.crisis-overload-active {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border-radius: 12px;
-  border: 1px solid rgba(15, 23, 42, 0.72);
-  background: rgba(3, 8, 18, 0.72);
+  border-radius: 8px;
+  border: none;
+  background: #0b1121;
 }
 
 .gaming-board-surface {
-  --gaming-grid-cell-size: calc(100% / 29);
+  --gaming-grid-gap: 1px;
+  --gaming-grid-cell-size: calc((100% - 28 * var(--gaming-grid-gap)) / 29);
+  --gaming-grid-stride: calc(var(--gaming-grid-cell-size) + var(--gaming-grid-gap));
   position: relative;
   width: 100%;
   height: 100%;
@@ -1725,10 +1726,12 @@ body.crisis-overload-active {
   display: grid;
   width: 100%;
   height: 100%;
-  grid-template-columns: repeat(29, minmax(0, 1fr));
-  grid-template-rows: repeat(29, minmax(0, 1fr));
-  gap: 0;
-  background: #060a10;
+  grid-template-columns: repeat(29, 1fr);
+  grid-template-rows: repeat(29, 1fr);
+  gap: var(--gaming-grid-gap);
+  background: #0b1121;
+  border-radius: 6px;
+  overflow: hidden;
 }
 
 .gaming-board-overlay {
@@ -1741,88 +1744,116 @@ body.crisis-overload-active {
   pointer-events: none;
 }
 
+/* ═══════ DARK MATRIX KEYCAP CELLS ═══════ */
 .gaming-terrain-cell {
   position: relative;
   border: 0;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: none;
-  box-shadow: inset 0 0 0 0.5px rgba(4, 10, 18, 0.9);
-  transition: filter 100ms linear, box-shadow 100ms linear;
+  background: transparent;
+  cursor: default;
+  transition: background 120ms ease, box-shadow 120ms ease;
 }
 
 .gaming-terrain-cell:hover {
-  filter: brightness(1.08);
+  filter: none;
 }
 
+/* --- Highland keycap (value=1): raised key feel --- */
 .gaming-terrain-cell-ground {
-  background:
-    radial-gradient(circle at 26% 24%, rgba(125, 211, 252, 0.34), transparent 26%),
-    radial-gradient(circle at 74% 72%, rgba(34, 211, 238, 0.12), transparent 32%),
-    linear-gradient(180deg, rgba(28, 68, 102, 0.98), rgba(10, 28, 48, 0.99));
+  background: #1a233a;
+  border-radius: 3px;
+  border: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+}
+
+.gaming-terrain-cell-ground:hover {
+  background: #232f4c;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    inset 0 0 0 1.5px rgba(56, 189, 248, 0.55),
+    0 0 8px rgba(56, 189, 248, 0.12);
 }
 
 .gaming-terrain-cell-ground::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(186, 230, 253, 0.08) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(125, 211, 252, 0.06) 1px, transparent 1px);
-  background-size: 4px 4px;
-  opacity: 0.42;
+  display: none;
 }
 
+/* --- Abyss trench (value=0): sunken slot feel --- */
 .gaming-terrain-cell-abyss {
-  background:
-    radial-gradient(circle at 50% 50%, rgba(121, 15, 15, 0.22), transparent 55%),
-    linear-gradient(180deg, rgba(11, 5, 8, 0.98), rgba(4, 1, 3, 1));
-  box-shadow: inset 0 0 0 1px rgba(118, 15, 30, 0.16);
+  background: #0f172a;
+  border-radius: 3px;
+  border: none;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
 }
 
 .gaming-terrain-cell-abyss::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(135deg, transparent 42%, rgba(231, 76, 60, 0.18) 50%, transparent 58%),
-    linear-gradient(45deg, transparent 38%, rgba(192, 57, 43, 0.1) 50%, transparent 62%);
+  display: none;
 }
 
+/* --- Core zone (3x3): intense orange reactor --- */
 .gaming-terrain-cell-core {
   background:
-    radial-gradient(circle at center, rgba(103, 232, 249, 0.18), rgba(34, 211, 238, 0.05) 46%, rgba(11, 18, 28, 0.95) 100%);
-  box-shadow: inset 0 0 0 1px rgba(103, 232, 249, 0.3), 0 0 16px rgba(34, 211, 238, 0.12);
+    radial-gradient(circle at center, rgba(251, 146, 60, 0.45) 0%, rgba(234, 88, 12, 0.2) 50%, #1a233a 100%);
+  border-radius: 3px;
+  border: none;
+  box-shadow: inset 0 0 12px rgba(251, 146, 60, 0.4), 0 0 16px rgba(234, 88, 12, 0.15);
+  animation: core-breathe 3s ease-in-out infinite;
+}
+
+@keyframes core-breathe {
+  0%, 100% {
+    box-shadow: inset 0 0 12px rgba(251, 146, 60, 0.35), 0 0 14px rgba(234, 88, 12, 0.12);
+  }
+  50% {
+    box-shadow: inset 0 0 20px rgba(251, 146, 60, 0.6), 0 0 24px rgba(234, 88, 12, 0.25);
+  }
 }
 
 .gaming-terrain-cell-armable {
-  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.34), 0 0 10px rgba(14, 165, 233, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.28), 0 0 8px rgba(56, 189, 248, 0.06);
 }
 
 .gaming-terrain-cell-selected {
-  box-shadow: inset 0 0 0 2px rgba(103, 232, 249, 0.8), 0 0 12px rgba(34, 211, 238, 0.2);
+  background: #232f4c;
+  box-shadow:
+    inset 0 0 0 2px rgba(103, 232, 249, 0.7),
+    0 0 12px rgba(34, 211, 238, 0.18);
 }
 
 .gaming-terrain-cell-occupied {
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* Core zone node/branch SVG icon */
+.gaming-core-icon {
+  position: absolute;
+  inset: 15%;
+  width: 70%;
+  height: 70%;
+  pointer-events: none;
+  filter: drop-shadow(0 0 4px rgba(251, 146, 60, 0.35));
 }
 
 .gaming-gate-badge {
   position: absolute;
   inset: 50% auto auto 50%;
   transform: translate(-50%, -50%);
-  border-radius: 999px;
-  border: 1px solid rgba(251, 146, 60, 0.45);
-  background: rgba(88, 32, 12, 0.76);
-  padding: 0.12rem 0.35rem;
-  font-size: 0.52rem;
+  border-radius: 4px;
+  border: 1px solid rgba(251, 146, 60, 0.35);
+  background: rgba(251, 146, 60, 0.08);
+  padding: 0.1rem 0.3rem;
+  font-size: 0.5rem;
   font-weight: 700;
-  letter-spacing: 0.14em;
-  color: #ffedd5;
+  letter-spacing: 0.12em;
+  color: rgba(251, 146, 60, 0.8);
   pointer-events: none;
+  text-shadow: 0 0 4px rgba(251, 146, 60, 0.25);
 }
 
+/* ═══════ TOWER NODES — geometric SVG icons ═══════ */
 .gaming-tower-node {
   position: absolute;
   z-index: 2;
@@ -1830,95 +1861,112 @@ body.crisis-overload-active {
   align-items: center;
   justify-content: center;
   pointer-events: auto;
-  border-radius: 7px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 10px 24px rgba(2, 8, 23, 0.36);
-  transition: transform 100ms linear, box-shadow 100ms linear;
+  border-radius: 3px;
+  background: transparent;
+  transition: box-shadow 120ms ease;
 }
 
 .gaming-tower-node:hover {
-  transform: translateY(-1px);
+  transform: none;
 }
 
 .gaming-tower-node-selected {
-  box-shadow: inset 0 0 0 2px rgba(165, 243, 252, 0.9), 0 0 18px rgba(103, 232, 249, 0.26);
+  box-shadow: inset 0 0 0 2px rgba(165, 243, 252, 0.75), 0 0 14px rgba(103, 232, 249, 0.18);
 }
 
 .gaming-tower-node-arrow {
-  background: linear-gradient(180deg, rgba(36, 71, 97, 0.96), rgba(15, 28, 44, 0.98));
+  /* cyan hexagonal outline feel */
 }
 
 .gaming-tower-node-ice {
-  background: linear-gradient(180deg, rgba(36, 93, 122, 0.96), rgba(12, 36, 52, 0.98));
+  /* blue-purple feel */
 }
 
 .gaming-tower-node-cannon {
-  background: linear-gradient(180deg, rgba(111, 61, 22, 0.98), rgba(52, 24, 8, 1));
+  /* amber feel */
 }
 
 .gaming-tower-node-laser {
-  background: linear-gradient(180deg, rgba(110, 30, 43, 0.98), rgba(42, 10, 20, 1));
+  /* red feel */
 }
 
 .gaming-tower-glyph {
-  font-size: 0.62rem;
-  font-weight: 800;
-  letter-spacing: 0.16em;
-  color: #f8fafc;
-  text-shadow: 0 0 8px rgba(255, 255, 255, 0.2);
+  display: none;
 }
 
+/* SVG icon inside tower node */
+.gaming-tower-node svg.gaming-tower-icon {
+  width: 65%;
+  height: 65%;
+  stroke-width: 1.5;
+  fill: none;
+  filter: drop-shadow(0 0 3px var(--tower-color, rgba(56, 189, 248, 0.4)));
+}
+
+/* ═══════ ENEMY NODES — geometric diamond ═══════ */
 .gaming-enemy-node {
   position: absolute;
   z-index: 3;
-  width: calc(var(--gaming-grid-cell-size) * 0.8);
-  height: calc(var(--gaming-grid-cell-size) * 0.8);
-  transform: translate(calc(var(--gaming-grid-cell-size) * 0.1), calc(var(--gaming-grid-cell-size) * 0.1));
+  width: var(--gaming-grid-cell-size);
+  height: var(--gaming-grid-cell-size);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   transition: all 100ms linear;
 }
 
 .gaming-enemy-core {
-  display: flex;
-  height: 100%;
-  width: 100%;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  box-shadow: 0 8px 18px rgba(2, 8, 23, 0.32);
+  width: 55%;
+  height: 55%;
+  transform: rotate(45deg);
+  border-radius: 2px;
+  border: 1.5px solid rgba(248, 113, 113, 0.75);
+  background: rgba(248, 113, 113, 0.12);
+  box-shadow:
+    0 0 6px rgba(248, 113, 113, 0.3),
+    inset 0 0 4px rgba(248, 113, 113, 0.1);
 }
 
 .gaming-enemy-node-light .gaming-enemy-core {
-  background: radial-gradient(circle at 50% 35%, rgba(248, 113, 113, 0.96), rgba(127, 29, 29, 0.98));
-  color: #fff1f2;
+  border-color: rgba(248, 113, 113, 0.75);
+  background: rgba(248, 113, 113, 0.12);
+  box-shadow:
+    0 0 6px rgba(248, 113, 113, 0.3),
+    inset 0 0 4px rgba(248, 113, 113, 0.1);
 }
 
 .gaming-enemy-node-heavy .gaming-enemy-core {
-  background: radial-gradient(circle at 50% 35%, rgba(251, 191, 36, 0.98), rgba(120, 53, 15, 1));
-  color: #1c1917;
+  border-color: rgba(251, 191, 36, 0.75);
+  background: rgba(251, 191, 36, 0.1);
+  box-shadow:
+    0 0 6px rgba(251, 191, 36, 0.3),
+    inset 0 0 4px rgba(251, 191, 36, 0.1);
 }
 
 .gaming-enemy-node-boss .gaming-enemy-core {
-  background: radial-gradient(circle at 50% 35%, rgba(192, 132, 252, 0.98), rgba(88, 28, 135, 1));
-  color: #f5f3ff;
+  border-color: rgba(192, 132, 252, 0.75);
+  background: rgba(192, 132, 252, 0.12);
+  box-shadow:
+    0 0 10px rgba(192, 132, 252, 0.4),
+    inset 0 0 6px rgba(192, 132, 252, 0.15);
 }
 
 .gaming-enemy-hpbar {
   position: absolute;
-  left: 8%;
-  right: 8%;
-  bottom: -5px;
-  height: 4px;
+  left: 10%;
+  right: 10%;
+  bottom: 2px;
+  height: 2px;
   overflow: hidden;
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.72);
+  background: rgba(0, 0, 0, 0.5);
 }
 
 .gaming-enemy-hpbar span {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #22c55e, #facc15, #ef4444);
+  background: rgba(248, 113, 113, 0.85);
 }
 
 .gaming-connection-banner {
