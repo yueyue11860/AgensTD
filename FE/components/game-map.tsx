@@ -223,7 +223,7 @@ export const GameMap = memo(function GameMap({ tick, map, towers, enemies, selec
         <div>
           <p className="text-[11px] uppercase tracking-[0.26em] text-cold-blue">战场画布</p>
           <h2 className="mt-2 text-xl font-semibold text-white">Tick {tick.toLocaleString()}</h2>
-          <p className="mt-1 text-sm text-slate-400">整个棋盘仅根据最近一次 tick_update 重绘，不保留任何本地战斗模拟。</p>
+          <p className="mt-1 text-sm text-slate-400">整个棋盘仅根据最近一次 TICK_UPDATE 重绘，不保留任何本地战斗模拟。</p>
         </div>
         <div className="flex flex-wrap gap-2 text-xs text-slate-300">
           <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">地图 {map.width} x {map.height}</span>
@@ -261,7 +261,7 @@ export const GameMap = memo(function GameMap({ tick, map, towers, enemies, selec
             <GitFork className="h-3.5 w-3.5 text-warning-orange" />
             指令
           </div>
-          <p className="mt-2 text-sm text-slate-300">建塔等操作全部转换为 JSON 指令，通过 send_action 上报后等待下一帧回流。</p>
+          <p className="mt-2 text-sm text-slate-300">建塔等操作全部转换为 JSON 指令，通过 SEND_ACTION 上报后等待下一帧回流。</p>
         </article>
       </div>
     </section>

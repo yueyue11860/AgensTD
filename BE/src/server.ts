@@ -6,7 +6,6 @@ import cors from 'cors'
 import express from 'express'
 import { createServerConfig } from './config/server-config'
 import { RoomManager } from './core/Room'
-import { GameLoop } from './core/game-loop'
 import { PerformanceTelemetry } from './core/performance-telemetry'
 import { ProjectedTickStream } from './core/projected-tick-stream'
 import { ReplayRecorder } from './core/replay-recorder'
@@ -62,13 +61,12 @@ const room = roomManager.getOrCreateRoom('public-1')
 const engine = room.engine
 const performanceTelemetry = new PerformanceTelemetry()
 engine.attachPerformanceTelemetry(performanceTelemetry)
-const loop = new GameLoop(engine, config.tickRateMs)
 const competitionStore = new SupabaseCompetitionStore(config)
 const projectedTickStream = new ProjectedTickStream(engine, config, performanceTelemetry)
 const replayRecorder = new ReplayRecorder(engine, projectedTickStream, config, competitionStore, performanceTelemetry)
 const actionLimiter = new ActionRateLimiter(config.actionRateLimitWindowMs, config.actionRateLimitMax)
 const progressStore = new ProgressStore()
-const gateway = new SocketGateway(httpServer, room, config, projectedTickStream, performanceTelemetry, actionLimiter, progressStore)
+const gateway = new SocketGateway(httpServer, roomManager, config, performanceTelemetry, actionLimiter, progressStore)
 
 app.use('/api', createRestApiRouter(engine, config, actionLimiter, replayRecorder, competitionStore, progressStore))
 app.use('/api/agent', createAgentApiRouter(projectedTickStream, config, replayRecorder, competitionStore, performanceTelemetry))
@@ -85,13 +83,11 @@ if (hasFrontendBuild) {
 }
 
 httpServer.listen(config.port, () => {
-  loop.start()
 })
 
 const shutdown = () => {
-  loop.stop()
   void replayRecorder.flushLatest().finally(() => {
-    gateway.io.close(() => {
+    gateway.shutdown(() => {
       httpServer.close(() => {
         process.exit(0)
       })

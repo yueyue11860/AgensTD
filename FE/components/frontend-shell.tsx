@@ -17,7 +17,7 @@ export function FrontendShell({ children }: FrontendShellProps) {
               <p className="text-[11px] uppercase tracking-[0.32em] text-cold-blue">AgensTD Frontend</p>
               <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white lg:text-4xl">Server-Driven Tower Defense UI</h1>
               <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">
-                前端仅消费 tick_update 推送并通过 send_action 上报玩家操作，不再维护任何本地战斗推演、金币扣减或敌潮生成逻辑。
+                前端仅消费 TICK_UPDATE 推送并通过 SEND_ACTION 上报玩家操作，不再维护任何本地战斗推演、金币扣减或敌潮生成逻辑。
               </p>
             </div>
             <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300">

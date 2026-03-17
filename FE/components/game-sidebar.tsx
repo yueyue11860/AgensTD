@@ -92,7 +92,7 @@ export const GameSidebar = memo(function GameSidebar({
             </button>
           )) : (
             <div className="rounded-2xl border border-dashed border-white/10 px-4 py-5 text-sm text-slate-400">
-              尚未收到服务端 buildPalette，等待首个 tick_update。
+              尚未收到服务端 buildPalette，等待首个 TICK_UPDATE。
             </div>
           )}
         </div>
@@ -177,7 +177,7 @@ export const GameSidebar = memo(function GameSidebar({
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-[11px] uppercase tracking-[0.26em] text-cold-blue">最近上报</p>
-            <h2 className="mt-2 text-lg font-semibold text-white">最后一次 send_action</h2>
+            <h2 className="mt-2 text-lg font-semibold text-white">最后一次 SEND_ACTION</h2>
           </div>
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-white">
             <Send className="h-5 w-5" />

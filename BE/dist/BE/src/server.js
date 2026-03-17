@@ -11,7 +11,6 @@ const cors_1 = __importDefault(require("cors"));
 const express_1 = __importDefault(require("express"));
 const server_config_1 = require("./config/server-config");
 const Room_1 = require("./core/Room");
-const game_loop_1 = require("./core/game-loop");
 const performance_telemetry_1 = require("./core/performance-telemetry");
 const projected_tick_stream_1 = require("./core/projected-tick-stream");
 const replay_recorder_1 = require("./core/replay-recorder");
@@ -58,13 +57,12 @@ const room = roomManager.getOrCreateRoom('public-1');
 const engine = room.engine;
 const performanceTelemetry = new performance_telemetry_1.PerformanceTelemetry();
 engine.attachPerformanceTelemetry(performanceTelemetry);
-const loop = new game_loop_1.GameLoop(engine, config.tickRateMs);
 const competitionStore = new supabase_competition_store_1.SupabaseCompetitionStore(config);
 const projectedTickStream = new projected_tick_stream_1.ProjectedTickStream(engine, config, performanceTelemetry);
 const replayRecorder = new replay_recorder_1.ReplayRecorder(engine, projectedTickStream, config, competitionStore, performanceTelemetry);
 const actionLimiter = new action_rate_limiter_1.ActionRateLimiter(config.actionRateLimitWindowMs, config.actionRateLimitMax);
 const progressStore = new progress_store_1.ProgressStore();
-const gateway = new socket_gateway_1.SocketGateway(httpServer, room, config, projectedTickStream, performanceTelemetry, actionLimiter, progressStore);
+const gateway = new socket_gateway_1.SocketGateway(httpServer, roomManager, config, performanceTelemetry, actionLimiter, progressStore);
 app.use('/api', (0, rest_api_1.createRestApiRouter)(engine, config, actionLimiter, replayRecorder, competitionStore, progressStore));
 app.use('/api/agent', (0, agent_api_1.createAgentApiRouter)(projectedTickStream, config, replayRecorder, competitionStore, performanceTelemetry));
 if (hasFrontendBuild) {
@@ -77,12 +75,10 @@ if (hasFrontendBuild) {
     });
 }
 httpServer.listen(config.port, () => {
-    loop.start();
 });
 const shutdown = () => {
-    loop.stop();
     void replayRecorder.flushLatest().finally(() => {
-        gateway.io.close(() => {
+        gateway.shutdown(() => {
             httpServer.close(() => {
                 process.exit(0);
             });

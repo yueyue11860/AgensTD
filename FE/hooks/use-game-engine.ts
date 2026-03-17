@@ -23,6 +23,10 @@ export interface ActionLogEntry {
   ts: number
 }
 
+interface CountdownPayload {
+  remainingSeconds: number
+}
+
 interface OptionalIdentityOverrides {
   playerId?: string
   playerName?: string
@@ -48,14 +52,15 @@ interface UseGameEngineResult {
   lastActionAt: number | null
   /** 当前房间生命周期，connect 之前为 null */
   roomPhase: RoomPhase | null
-  /** 已选择的关卡信息，通过 level_selected 事件更新 */
+  countdownSeconds: number | null
+  /** 已选择的关卡信息，通过 LEVEL_SELECTED 事件更新 */
   selectedLevelInfo: SelectedLevelInfo | null
   /** 当前玩家分配到的房间槽位，'P1' 为房主 */
   mySlot: string | null
   /** 是否为房主（mySlot === 'P1'） */
   isHost: boolean
   sendAction: (action: GameAction) => boolean
-  /** 发送任意原始 socket 事件（用于 start_game、select_level 等） */
+  /** 发送任意原始 socket 事件（用于 START_MATCH、SELECT_LEVEL 等） */
   sendSocketEvent: (event: string, payload?: unknown) => boolean
   /** 获取本局收集的操作指令快照 */
   getActionSnapshot: () => ActionLogEntry[]
@@ -271,6 +276,7 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
   const [lastTickAt, setLastTickAt] = useState<number | null>(null)
   const [lastActionAt, setLastActionAt] = useState<number | null>(null)
   const [roomPhase, setRoomPhase] = useState<RoomPhase | null>(null)
+  const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null)
   const [selectedLevelInfo, setSelectedLevelInfo] = useState<SelectedLevelInfo | null>(null)
   const [mySlot, setMySlot] = useState<string | null>(null)
   const actionLogRef = useRef<ActionLogEntry[]>([])
@@ -370,7 +376,35 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
 
   const handleRoomPhaseChanged = useEffectEvent((payload: unknown) => {
     if (payload && typeof payload === 'object' && typeof (payload as Record<string, unknown>).phase === 'string') {
-      setRoomPhase((payload as Record<string, unknown>).phase as RoomPhase)
+      const phase = (payload as Record<string, unknown>).phase as RoomPhase
+      setRoomPhase(phase)
+
+      if (phase !== 'countdown') {
+        setCountdownSeconds(null)
+      }
+    }
+  })
+
+  const handleStartMatchAccepted = useEffectEvent((payload: unknown) => {
+    if (!payload || typeof payload !== 'object') {
+      return
+    }
+
+    const candidate = payload as Partial<CountdownPayload> & { phase?: unknown }
+    if (candidate.phase === 'countdown' && typeof candidate.remainingSeconds === 'number') {
+      setRoomPhase('countdown')
+      setCountdownSeconds(candidate.remainingSeconds)
+    }
+  })
+
+  const handleCountdownTick = useEffectEvent((payload: unknown) => {
+    if (!payload || typeof payload !== 'object') {
+      return
+    }
+
+    const candidate = payload as Partial<CountdownPayload>
+    if (typeof candidate.remainingSeconds === 'number') {
+      setCountdownSeconds(candidate.remainingSeconds)
     }
   })
 
@@ -379,8 +413,21 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
       payload
       && typeof payload === 'object'
       && typeof (payload as Record<string, unknown>).levelId === 'number'
+      && typeof (payload as Record<string, unknown>).label === 'string'
+      && typeof (payload as Record<string, unknown>).description === 'string'
+      && typeof (payload as Record<string, unknown>).waveCount === 'number'
+      && typeof (payload as Record<string, unknown>).targetClearRate === 'number'
+      && typeof (payload as Record<string, unknown>).minPlayers === 'number'
     ) {
-      setSelectedLevelInfo(payload as SelectedLevelInfo)
+      const candidate = payload as Record<string, unknown>
+      setSelectedLevelInfo({
+        levelId: candidate.levelId as number,
+        label: candidate.label as string,
+        description: candidate.description as string,
+        waveCount: candidate.waveCount as number,
+        targetClearRate: candidate.targetClearRate as number,
+        minPlayers: candidate.minPlayers as number,
+      })
     }
   })
 
@@ -402,6 +449,15 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
     socket.on('connect', () => {
       setConnectionState('connected')
       setError(null)
+
+      if (options.roomId) {
+        socket.emit('JOIN_ROOM', {
+          roomId: options.roomId,
+          playerId: options.identity?.playerId,
+          playerName: options.identity?.playerName,
+          playerKind: options.identity?.playerKind,
+        })
+      }
     })
 
     socket.on('disconnect', (reason) => {
@@ -417,12 +473,14 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
       setError(typeof engineError === 'string' ? engineError : engineError.message ?? '游戏引擎返回未知错误')
     })
 
-    socket.on('tick_update', handleTickUpdate)
-    socket.on('ui_state_update', handleUiStateUpdate)
-    socket.on('notice_update', handleNoticeUpdate)
-    socket.on('room_joined', handleRoomJoined)
-    socket.on('room_phase_changed', handleRoomPhaseChanged)
-    socket.on('level_selected', handleLevelSelected)
+    socket.on('TICK_UPDATE', handleTickUpdate)
+    socket.on('UI_STATE_UPDATE', handleUiStateUpdate)
+    socket.on('NOTICE_UPDATE', handleNoticeUpdate)
+    socket.on('ROOM_JOINED', handleRoomJoined)
+    socket.on('ROOM_PHASE_CHANGED', handleRoomPhaseChanged)
+    socket.on('START_MATCH_ACCEPTED', handleStartMatchAccepted)
+    socket.on('COUNTDOWN_TICK', handleCountdownTick)
+    socket.on('LEVEL_SELECTED', handleLevelSelected)
     socket.io.on('reconnect_attempt', () => {
       setConnectionState('reconnecting')
     })
@@ -434,16 +492,18 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
       }
 
       queuedStateRef.current = null
-      socket.off('tick_update', handleTickUpdate)
-      socket.off('ui_state_update', handleUiStateUpdate)
-      socket.off('notice_update', handleNoticeUpdate)
-      socket.off('room_joined', handleRoomJoined)
-      socket.off('room_phase_changed', handleRoomPhaseChanged)
-      socket.off('level_selected', handleLevelSelected)
+      socket.off('TICK_UPDATE', handleTickUpdate)
+      socket.off('UI_STATE_UPDATE', handleUiStateUpdate)
+      socket.off('NOTICE_UPDATE', handleNoticeUpdate)
+      socket.off('ROOM_JOINED', handleRoomJoined)
+      socket.off('ROOM_PHASE_CHANGED', handleRoomPhaseChanged)
+      socket.off('START_MATCH_ACCEPTED', handleStartMatchAccepted)
+      socket.off('COUNTDOWN_TICK', handleCountdownTick)
+      socket.off('LEVEL_SELECTED', handleLevelSelected)
       socket.disconnect()
       socketRef.current = null
     }
-  }, [connectionQuery, gatewayToken, options.autoConnect, options.path, socketUrl])
+  }, [connectionQuery, gatewayToken, options.autoConnect, options.identity?.playerId, options.identity?.playerKind, options.identity?.playerName, options.path, options.roomId, socketUrl])
 
   const sendAction = useCallback((action: GameAction) => {
     const socket = socketRef.current
@@ -452,7 +512,7 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
       return false
     }
 
-    socket.emit('send_action', action)
+    socket.emit('SEND_ACTION', action)
     actionLogRef.current.push({ action, ts: Date.now() })
     setLastActionAt(Date.now())
     setError(null)
@@ -492,6 +552,7 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
     lastTickAt,
     lastActionAt,
     roomPhase,
+    countdownSeconds,
     selectedLevelInfo,
     mySlot,
     isHost: mySlot === 'P1',

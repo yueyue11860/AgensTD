@@ -1,208 +1,449 @@
-import { useEffect, useMemo, useState } from 'react'
-import { OctagonX, ShieldAlert, Skull } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Coins, OctagonX, RadioTower, ShieldAlert, Skull } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { useGameEngine } from '../hooks/use-game-engine'
-import { cx } from '../lib/cx'
-import { resolvePlayerKind } from '../lib/runtime-config'
-import { MissionBriefingModal } from '../components/mission-briefing-modal'
+import { io, type Socket } from 'socket.io-client'
 import { GameOverOverlay } from '../components/game-over-overlay'
-import type { ActionDescriptor, GameAction, GameCell, GameState, TowerBlueprint, TowerState } from '../types/game-state'
+import { MissionBriefingModal } from '../components/mission-briefing-modal'
+import { cx } from '../lib/cx'
+import { resolveGatewayToken, resolvePlayerId, resolvePlayerKind, resolveSocketUrl } from '../lib/runtime-config'
 
 const BOARD_DIMENSION = 29
+const DEFAULT_ROOM_ID = 'public-1'
+const CELL_SIZE_CSS_VAR = 'var(--gaming-grid-cell-size)'
+
+type RoomPhase = 'lobby' | 'countdown' | 'waiting_for_level' | 'playing'
+type MatchStatus = 'waiting' | 'running' | 'finished'
+type MatchOutcome = 'victory' | 'defeat'
+
+interface ServerTowerState {
+  id: string
+  type: string
+  x: number
+  y: number
+  width: number
+  height: number
+  damage?: number
+  range?: number
+  cooldownTicks?: number
+}
+
+interface ServerEnemyState {
+  id: string
+  kind: string
+  x: number
+  y: number
+  hp: number
+  maxHp: number
+}
+
+interface ServerWaveState {
+  index: number
+  label?: string
+}
+
+interface SelectedLevelInfo {
+  levelId: number
+  label: string
+  description: string
+  waveCount: number
+  targetClearRate: number
+  minPlayers: number
+}
+
+interface ServerDrivenGameState {
+  roomId: string
+  phase: RoomPhase
+  tick: number
+  status: MatchStatus
+  towers: ServerTowerState[]
+  enemies: ServerEnemyState[]
+  gold: number
+  overloadTicks: number
+  currentWave: ServerWaveState
+  result: {
+    outcome: MatchOutcome
+    reason?: string
+  } | null
+}
+
+interface BuildOption {
+  type: string
+  label: string
+  cost: number
+  width: number
+  height: number
+  accentClassName: string
+}
+
+const BUILD_OPTIONS: BuildOption[] = [
+  { type: 'arrow-1', label: '箭塔 1级', cost: 1, width: 1, height: 1, accentClassName: 'gaming-build-chip-cyan' },
+  { type: 'ice-1', label: '冰塔 1级', cost: 2, width: 1, height: 1, accentClassName: 'gaming-build-chip-blue' },
+  { type: 'cannon-1', label: '炮塔 1级', cost: 2, width: 1, height: 2, accentClassName: 'gaming-build-chip-orange' },
+  { type: 'laser-1', label: '激光塔 1级', cost: 3, width: 1, height: 2, accentClassName: 'gaming-build-chip-red' },
+]
+
+const BUILD_OPTIONS_BY_TYPE = new Map(BUILD_OPTIONS.map((option) => [option.type, option]))
 
 const REFERENCE_GATE_LABELS = new Map<string, string>([
-  ['13:15', 'p1'],
-  ['15:15', 'p2'],
-  ['15:13', 'p3'],
-  ['13:13', 'p4'],
+  ['13:15', 'P1'],
+  ['15:15', 'P2'],
+  ['15:13', 'P3'],
+  ['13:13', 'P4'],
 ])
 
-function isReferenceCoreCell(x: number, y: number) {
-  return x >= 13 && x <= 15 && y >= 13 && y <= 15
-}
+const ARENA_PATHS = [
+  [
+    { x: 13, y: 15 },
+    { x: 13, y: 18 },
+    { x: 7, y: 18 },
+    { x: 7, y: 21 },
+    { x: 21, y: 21 },
+    { x: 21, y: 7 },
+    { x: 7, y: 7 },
+    { x: 7, y: 14 },
+    { x: 3, y: 14 },
+    { x: 3, y: 3 },
+    { x: 25, y: 3 },
+    { x: 25, y: 25 },
+    { x: 3, y: 25 },
+    { x: 3, y: 14 },
+  ],
+  [
+    { x: 15, y: 15 },
+    { x: 18, y: 15 },
+    { x: 18, y: 21 },
+    { x: 21, y: 21 },
+    { x: 21, y: 7 },
+    { x: 7, y: 7 },
+    { x: 7, y: 21 },
+    { x: 14, y: 21 },
+    { x: 14, y: 25 },
+    { x: 3, y: 25 },
+    { x: 3, y: 3 },
+    { x: 25, y: 3 },
+    { x: 25, y: 25 },
+    { x: 14, y: 25 },
+  ],
+  [
+    { x: 15, y: 13 },
+    { x: 15, y: 10 },
+    { x: 21, y: 10 },
+    { x: 21, y: 7 },
+    { x: 7, y: 7 },
+    { x: 7, y: 21 },
+    { x: 21, y: 21 },
+    { x: 21, y: 14 },
+    { x: 25, y: 14 },
+    { x: 25, y: 25 },
+    { x: 3, y: 25 },
+    { x: 3, y: 3 },
+    { x: 25, y: 3 },
+    { x: 25, y: 14 },
+  ],
+  [
+    { x: 13, y: 13 },
+    { x: 10, y: 13 },
+    { x: 10, y: 7 },
+    { x: 7, y: 7 },
+    { x: 7, y: 21 },
+    { x: 21, y: 21 },
+    { x: 21, y: 7 },
+    { x: 14, y: 7 },
+    { x: 14, y: 3 },
+    { x: 25, y: 3 },
+    { x: 25, y: 25 },
+    { x: 3, y: 25 },
+    { x: 3, y: 3 },
+    { x: 14, y: 3 },
+  ],
+] as const
+
+const BOARD_COORDINATES = Array.from({ length: BOARD_DIMENSION * BOARD_DIMENSION }, (_, index) => ({
+  x: index % BOARD_DIMENSION,
+  y: Math.floor(index / BOARD_DIMENSION),
+  key: `${index % BOARD_DIMENSION}:${Math.floor(index / BOARD_DIMENSION)}`,
+}))
+
+const EMPTY_WAVE_STATE: ServerWaveState = { index: 0, label: '等待同步' }
 
 function makeCoordKey(x: number, y: number) {
   return `${x}:${y}`
 }
 
-function addHorizontalLine(target: Set<string>, y: number, startX: number, endX: number) {
-  const from = Math.min(startX, endX)
-  const to = Math.max(startX, endX)
-
-  for (let x = from; x <= to; x += 1) {
-    target.add(makeCoordKey(x, y))
-  }
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function addVerticalLine(target: Set<string>, x: number, startY: number, endY: number) {
-  const from = Math.min(startY, endY)
-  const to = Math.max(startY, endY)
-
-  for (let y = from; y <= to; y += 1) {
-    target.add(makeCoordKey(x, y))
-  }
+function isReferenceCoreCell(x: number, y: number) {
+  return x >= 13 && x <= 15 && y >= 13 && y <= 15
 }
 
-function createReferenceRouteCells() {
-  const cells = new Set<string>()
-
-  addHorizontalLine(cells, 3, 3, 25)
-  addHorizontalLine(cells, 25, 3, 25)
-  addVerticalLine(cells, 3, 3, 25)
-  addVerticalLine(cells, 25, 3, 25)
-
-  addHorizontalLine(cells, 7, 7, 21)
-  addHorizontalLine(cells, 21, 7, 21)
-  addVerticalLine(cells, 7, 7, 21)
-  addVerticalLine(cells, 21, 7, 21)
-
-  addVerticalLine(cells, 13, 15, 18)
-  addHorizontalLine(cells, 18, 7, 13)
-  addHorizontalLine(cells, 15, 15, 18)
-  addVerticalLine(cells, 18, 15, 21)
-  addVerticalLine(cells, 15, 10, 13)
-  addHorizontalLine(cells, 10, 15, 21)
-  addHorizontalLine(cells, 13, 10, 13)
-  addVerticalLine(cells, 10, 7, 13)
-
-  addHorizontalLine(cells, 14, 3, 7)
-  addVerticalLine(cells, 14, 21, 25)
-  addHorizontalLine(cells, 14, 21, 25)
-  addVerticalLine(cells, 14, 3, 7)
-
-  for (const key of REFERENCE_GATE_LABELS.keys()) {
-    cells.add(key)
-  }
-
-  return cells
-}
-
-const REFERENCE_ROUTE_CELLS = createReferenceRouteCells()
-
-interface GamingPageProps {
-  overloadTicks?: number
-}
-
-const BLUEPRINT_LEVEL_PATTERN = /(?:[-_]?)(\d+)$/
-const LABEL_LEVEL_PATTERN = /\s*\d+级$/
-
-function createFallbackBoardState(): Pick<GameState, 'tick' | 'map' | 'towers' | 'enemies' | 'resources' | 'wave' | 'buildPalette'> {
-  const cells: GameCell[] = []
-
-  for (let y = 0; y < BOARD_DIMENSION; y += 1) {
-    for (let x = 0; x < BOARD_DIMENSION; x += 1) {
-      const key = makeCoordKey(x, y)
-      const label = REFERENCE_GATE_LABELS.get(key)
-      const isGate = Boolean(label)
-      const isCore = isReferenceCoreCell(x, y)
-      const isLane = REFERENCE_ROUTE_CELLS.has(key)
-
-      cells.push({
-        x,
-        y,
-        kind: isGate ? 'gate' : isCore ? 'core' : isLane ? 'path' : 'build',
-        label,
-      })
+function markLine(target: number[][], start: { x: number; y: number }, end: { x: number; y: number }) {
+  if (start.x === end.x) {
+    const step = start.y <= end.y ? 1 : -1
+    for (let y = start.y; y !== end.y + step; y += step) {
+      target[y][start.x] = 0
     }
+    return
+  }
+
+  const step = start.x <= end.x ? 1 : -1
+  for (let x = start.x; x !== end.x + step; x += step) {
+    target[start.y][x] = 0
+  }
+}
+
+function createArenaTerrainMatrix() {
+  const matrix = Array.from({ length: BOARD_DIMENSION }, () => Array<number>(BOARD_DIMENSION).fill(1))
+
+  for (const path of ARENA_PATHS) {
+    for (let index = 0; index < path.length - 1; index += 1) {
+      markLine(matrix, path[index], path[index + 1])
+    }
+  }
+
+  return matrix
+}
+
+const ARENA_TERRAIN_MATRIX = createArenaTerrainMatrix()
+
+function extractSyncCandidate(payload: unknown) {
+  if (!isObject(payload)) {
+    return null
+  }
+
+  if (isObject(payload.gameState)) {
+    return payload.gameState
+  }
+
+  if (isObject(payload.state)) {
+    return payload.state
+  }
+
+  return payload
+}
+
+function normalizeTower(rawTower: unknown): ServerTowerState | null {
+  if (!isObject(rawTower)) {
+    return null
+  }
+
+  const x = typeof rawTower.x === 'number'
+    ? rawTower.x
+    : isObject(rawTower.cell) && typeof rawTower.cell.x === 'number'
+      ? rawTower.cell.x
+      : null
+  const y = typeof rawTower.y === 'number'
+    ? rawTower.y
+    : isObject(rawTower.cell) && typeof rawTower.cell.y === 'number'
+      ? rawTower.cell.y
+      : null
+  const width = typeof rawTower.width === 'number'
+    ? rawTower.width
+    : isObject(rawTower.footprint) && typeof rawTower.footprint.width === 'number'
+      ? rawTower.footprint.width
+      : 1
+  const height = typeof rawTower.height === 'number'
+    ? rawTower.height
+    : isObject(rawTower.footprint) && typeof rawTower.footprint.height === 'number'
+      ? rawTower.footprint.height
+      : 1
+
+  if (typeof rawTower.id !== 'string' || typeof rawTower.type !== 'string' || x === null || y === null) {
+    return null
   }
 
   return {
-    tick: 128,
-    map: {
-      width: BOARD_DIMENSION,
-      height: BOARD_DIMENSION,
-      cells,
-    },
-    towers: [
-      { id: 'laser-1', type: 'laser', name: '激光塔', level: 1, status: 'active', cell: { x: 12, y: 12 }, footprint: { width: 1, height: 1 }, damage: 12 },
-      { id: 'ice-1', type: 'ice', name: '冰塔', level: 1, status: 'active', cell: { x: 15, y: 12 }, footprint: { width: 1, height: 1 }, damage: 8, attackRate: 1.1 },
-      { id: 'cannon-1', type: 'cannon', name: '炮塔', level: 1, status: 'idle', cell: { x: 12, y: 15 }, footprint: { width: 1, height: 1 }, damage: 20 },
-      { id: 'arrow-1', type: 'arrow', name: '箭塔', level: 1, status: 'idle', cell: { x: 15, y: 15 }, footprint: { width: 1, height: 1 }, damage: 10, attackRate: 1.8 },
-    ],
-    enemies: [],
-    resources: {
-      gold: 86,
-      mana: 0,
-      heat: 0,
-      repair: 0,
-      threat: 22,
-      fortress: 100,
-      fortressMax: 100,
-    },
-    wave: {
-      index: 8,
-      label: 'Wave 08',
-    },
-    buildPalette: [
-      { type: 'arrow-1', label: '箭塔 1级', description: '单体高速射击，适合补刀清杂。', costLabel: '2金币' },
-      { type: 'ice-1', label: '冰塔 1级', description: '造成减速效果，帮助队友压制路线。', costLabel: '3金币' },
-      { type: 'cannon-1', label: '炮塔 1级', description: '范围爆炸伤害，适合群体压制。', costLabel: '4金币' },
-      { type: 'laser-1', label: '激光塔 1级', description: '持续锁定输出，对高血量目标更稳定。', costLabel: '4金币' },
-    ],
+    id: rawTower.id,
+    type: rawTower.type,
+    x,
+    y,
+    width,
+    height,
+    damage: typeof rawTower.damage === 'number' ? rawTower.damage : undefined,
+    range: typeof rawTower.range === 'number' ? rawTower.range : undefined,
+    cooldownTicks: typeof rawTower.cooldownTicks === 'number'
+      ? rawTower.cooldownTicks
+      : typeof rawTower.attackRate === 'number'
+        ? rawTower.attackRate
+        : undefined,
   }
 }
 
-function getBlueprintLevel(blueprint: TowerBlueprint) {
-  const typeMatch = blueprint.type.match(BLUEPRINT_LEVEL_PATTERN)
-  if (typeMatch) {
-    return Number(typeMatch[1])
+function normalizeEnemy(rawEnemy: unknown): ServerEnemyState | null {
+  if (!isObject(rawEnemy)) {
+    return null
   }
 
-  const labelMatch = blueprint.label.match(/(\d+)级/)
-  return labelMatch ? Number(labelMatch[1]) : Number.POSITIVE_INFINITY
+  const x = typeof rawEnemy.x === 'number'
+    ? rawEnemy.x
+    : isObject(rawEnemy.position) && typeof rawEnemy.position.x === 'number'
+      ? rawEnemy.position.x
+      : null
+  const y = typeof rawEnemy.y === 'number'
+    ? rawEnemy.y
+    : isObject(rawEnemy.position) && typeof rawEnemy.position.y === 'number'
+      ? rawEnemy.position.y
+      : null
+  const kind = typeof rawEnemy.kind === 'string'
+    ? rawEnemy.kind
+    : typeof rawEnemy.type === 'string'
+      ? rawEnemy.type
+      : null
+
+  if (typeof rawEnemy.id !== 'string' || kind === null || x === null || y === null) {
+    return null
+  }
+
+  return {
+    id: rawEnemy.id,
+    kind,
+    x,
+    y,
+    hp: typeof rawEnemy.hp === 'number' ? rawEnemy.hp : 0,
+    maxHp: typeof rawEnemy.maxHp === 'number' ? rawEnemy.maxHp : Math.max(1, typeof rawEnemy.hp === 'number' ? rawEnemy.hp : 1),
+  }
 }
 
-function getBlueprintFamilyKey(blueprint: TowerBlueprint) {
-  return blueprint.type.replace(BLUEPRINT_LEVEL_PATTERN, '').replace(/[-_]+$/, '').toLowerCase()
+function normalizeSyncState(payload: unknown): ServerDrivenGameState | null {
+  const candidate = extractSyncCandidate(payload)
+  if (!candidate) {
+    return null
+  }
+
+  const towers = Array.isArray(candidate.towers)
+    ? candidate.towers.map(normalizeTower).filter((tower): tower is ServerTowerState => tower !== null)
+    : []
+  const enemies = Array.isArray(candidate.enemies)
+    ? candidate.enemies.map(normalizeEnemy).filter((enemy): enemy is ServerEnemyState => enemy !== null)
+    : []
+  const currentWave = isObject(candidate.currentWave)
+    ? candidate.currentWave
+    : isObject(candidate.wave)
+      ? candidate.wave
+      : null
+  const resultOutcome: MatchOutcome | null = isObject(candidate.result)
+    && (candidate.result.outcome === 'victory' || candidate.result.outcome === 'defeat')
+    ? candidate.result.outcome
+    : null
+  const result = resultOutcome
+    ? {
+        outcome: resultOutcome,
+        reason: isObject(candidate.result) && typeof candidate.result.reason === 'string' ? candidate.result.reason : undefined,
+      }
+    : null
+
+  if (
+    typeof candidate.tick !== 'number'
+    || (typeof candidate.gold !== 'number' && !(isObject(candidate.resources) && typeof candidate.resources.gold === 'number'))
+  ) {
+    return null
+  }
+
+  return {
+    roomId: typeof candidate.roomId === 'string' ? candidate.roomId : DEFAULT_ROOM_ID,
+    phase: candidate.phase === 'countdown' || candidate.phase === 'waiting_for_level' || candidate.phase === 'playing' ? candidate.phase : 'lobby',
+    tick: candidate.tick,
+    status: candidate.status === 'running' || candidate.status === 'finished' ? candidate.status : 'waiting',
+    towers,
+    enemies,
+    gold: typeof candidate.gold === 'number' ? candidate.gold : (candidate.resources as { gold: number }).gold,
+    overloadTicks: typeof candidate.overloadTicks === 'number' ? candidate.overloadTicks : 0,
+    currentWave: currentWave && typeof currentWave.index === 'number'
+      ? {
+          index: currentWave.index,
+          label: typeof currentWave.label === 'string' ? currentWave.label : undefined,
+        }
+      : EMPTY_WAVE_STATE,
+    result,
+  }
 }
 
-function getBlueprintFamilyLabel(blueprint: TowerBlueprint) {
-  return blueprint.label.replace(LABEL_LEVEL_PATTERN, '').trim()
+function findTowerAtCell(towers: ServerTowerState[], x: number, y: number) {
+  return towers.find((tower) => x >= tower.x && x < tower.x + tower.width && y >= tower.y && y < tower.y + tower.height) ?? null
 }
 
-function createBaseBuildCatalog(buildPalette: TowerBlueprint[]) {
-  const familyMap = new Map<string, TowerBlueprint>()
+function evaluateTowerPlacement(gameState: ServerDrivenGameState | null, option: BuildOption | null, x: number, y: number) {
+  if (!gameState || !option) {
+    return { allowed: false, reason: null as string | null }
+  }
 
-  for (const blueprint of buildPalette) {
-    const familyKey = getBlueprintFamilyKey(blueprint)
-    const current = familyMap.get(familyKey)
+  if (gameState.gold < option.cost) {
+    return { allowed: false, reason: '金币不足' }
+  }
 
-    if (!current || getBlueprintLevel(blueprint) < getBlueprintLevel(current)) {
-      familyMap.set(familyKey, {
-        ...blueprint,
-        label: getBlueprintFamilyLabel(blueprint),
-      })
+  for (let offsetY = 0; offsetY < option.height; offsetY += 1) {
+    for (let offsetX = 0; offsetX < option.width; offsetX += 1) {
+      const nextX = x + offsetX
+      const nextY = y + offsetY
+
+      if (nextX < 0 || nextX >= BOARD_DIMENSION || nextY < 0 || nextY >= BOARD_DIMENSION) {
+        return { allowed: false, reason: '越界' }
+      }
+
+      if (isReferenceCoreCell(nextX, nextY)) {
+        return { allowed: false, reason: '核心区域不可建' }
+      }
+
+      if (ARENA_TERRAIN_MATRIX[nextY][nextX] !== 1) {
+        return { allowed: false, reason: '该地块不是可建地基' }
+      }
+
+      if (findTowerAtCell(gameState.towers, nextX, nextY)) {
+        return { allowed: false, reason: '已被占用' }
+      }
     }
   }
 
-  return Array.from(familyMap.values())
+  return { allowed: true, reason: '点击建造' }
 }
 
-function createTowerActions(tower: TowerState): ActionDescriptor[] {
-  if (tower.commands?.length) {
-    return tower.commands
+function getTowerGlyph(type: string) {
+  if (type.includes('laser')) {
+    return 'LS'
   }
 
-  return [
-    {
-      id: `${tower.id}-upgrade`,
-      label: '升级',
-      description: '消耗金币将当前建筑提升 1 级。',
-      payload: {
-        action: 'UPGRADE_TOWER',
-        towerId: tower.id,
-      },
-    },
-    {
-      id: `${tower.id}-sell`,
-      label: '拆除',
-      description: '移除当前建筑，并回收部分已投入资源。',
-      payload: {
-        action: 'SELL_TOWER',
-        towerId: tower.id,
-      },
-    },
-  ]
+  if (type.includes('cannon')) {
+    return 'CN'
+  }
+
+  if (type.includes('ice')) {
+    return 'IC'
+  }
+
+  if (type.includes('arrow')) {
+    return 'AR'
+  }
+
+  return type.slice(0, 2).toUpperCase()
+}
+
+function getTowerTone(type: string) {
+  if (type.includes('laser')) {
+    return 'gaming-tower-node-laser'
+  }
+
+  if (type.includes('cannon')) {
+    return 'gaming-tower-node-cannon'
+  }
+
+  if (type.includes('ice')) {
+    return 'gaming-tower-node-ice'
+  }
+
+  return 'gaming-tower-node-arrow'
+}
+
+function getEnemyTone(kind: string) {
+  if (kind.toLowerCase().includes('lord')) {
+    return 'gaming-enemy-node-boss'
+  }
+
+  if (kind.toLowerCase().includes('tank')) {
+    return 'gaming-enemy-node-heavy'
+  }
+
+  return 'gaming-enemy-node-light'
 }
 
 function CrisisWarning({ overloadTicks }: { overloadTicks: number }) {
@@ -238,216 +479,416 @@ function CrisisWarning({ overloadTicks }: { overloadTicks: number }) {
 function GamingBoard({
   gameState,
   selectedBuildType,
+  hoveredCell,
   selectedTowerId,
   onCellClick,
+  onCellHover,
+  onCellLeave,
+  onTowerClick,
 }: {
-  gameState: Pick<GameState, 'map' | 'towers' | 'enemies'>
+  gameState: ServerDrivenGameState | null
   selectedBuildType: string | null
+  hoveredCell: { x: number; y: number } | null
   selectedTowerId: string | null
-  onCellClick: (cell: GameCell, tower: TowerState | null) => void
+  onCellClick: (x: number, y: number) => void
+  onCellHover: (x: number, y: number) => void
+  onCellLeave: () => void
+  onTowerClick: (towerId: string) => void
 }) {
-  const boardWidth = gameState.map.width
-  const boardHeight = gameState.map.height
-  const cellMap = new Map(gameState.map.cells.map((cell) => [`${cell.x}:${cell.y}`, cell]))
-  const towerMap = new Map(gameState.towers.map((tower) => [`${tower.cell.x}:${tower.cell.y}`, tower]))
-  const enemyMap = new Map(gameState.enemies.map((enemy) => [`${enemy.position.x}:${enemy.position.y}`, enemy]))
-
-  const boardCells = Array.from({ length: boardWidth * boardHeight }, (_, index) => {
-    const x = index % boardWidth
-    const y = Math.floor(index / boardWidth)
-    const key = `${x}:${y}`
-    const cell = cellMap.get(key) ?? { x, y, kind: 'build' as const }
-    const tower = towerMap.get(key) ?? null
-    const enemy = enemyMap.get(key) ?? null
-    return { key, cell, tower, enemy }
-  })
+  const towers = gameState?.towers ?? []
+  const enemies = gameState?.enemies ?? []
+  const selectedBuildOption = selectedBuildType ? BUILD_OPTIONS_BY_TYPE.get(selectedBuildType) ?? null : null
+  const hoveredPlacement = hoveredCell && selectedBuildOption
+    ? evaluateTowerPlacement(gameState, selectedBuildOption, hoveredCell.x, hoveredCell.y)
+    : null
+  const canPreviewAtHoveredCell = hoveredPlacement?.allowed ?? false
+  const hoverHintDirection = hoveredCell && hoveredCell.y < 3 ? 'below' : 'above'
 
   return (
-    <div className="gaming-board-frame">
-      <div
-        className="gaming-board-grid"
-        style={{
-          gridTemplateColumns: `repeat(${boardWidth}, minmax(0, 1fr))`,
-          gridTemplateRows: `repeat(${boardHeight}, minmax(0, 1fr))`,
-        }}
-      >
-        {boardCells.map(({ key, cell, tower, enemy }) => {
-          const isAbyssEye = Math.abs(cell.x - 14) <= 1 && Math.abs(cell.y - 14) <= 1
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => onCellClick(cell, tower)}
-              aria-label={cell.kind === 'gate' ? `${cell.label ?? '入口'} 刷怪口` : undefined}
-              className={cx(
-                'gaming-cell',
-                isAbyssEye ? 'gaming-cell-abyss-eye' : [
-                  cell.kind === 'path' && 'gaming-cell-path',
-                  cell.kind === 'core' && 'gaming-cell-core',
-                  cell.kind === 'blocked' && 'gaming-cell-blocked',
-                  cell.kind === 'gate' && 'gaming-cell-gate',
-                ],
-                tower && 'gaming-cell-tower',
-                enemy && 'gaming-cell-enemy',
-                tower?.id === selectedTowerId && 'gaming-cell-selected',
-                !isAbyssEye && selectedBuildType && cell.kind === 'build' && !tower && 'gaming-cell-armable',
-              )}
-            >
-              {!isAbyssEye && !tower && !enemy && cell.kind === 'gate' ? (
-                <span className="gaming-cell-gate-icon" title={cell.label ?? '入口'}>
-                  <Skull className="h-3.5 w-3.5" strokeWidth={2.1} />
-                </span>
-              ) : null}
-              {tower ? <span className="gaming-tower-dot" /> : null}
-              {enemy ? <span className="gaming-enemy-count">{enemy.count ?? 1}</span> : null}
-            </button>
-          )
-        })}
+    <section className="gaming-board-frame">
+      <div className="gaming-board-viewport">
+        <div className="gaming-board-surface">
+          <div className="gaming-board-grid">
+            {BOARD_COORDINATES.map(({ x, y, key }) => {
+              const terrain = ARENA_TERRAIN_MATRIX[y][x]
+              const tower = findTowerAtCell(towers, x, y)
+              const isCore = isReferenceCoreCell(x, y)
+              const gateLabel = REFERENCE_GATE_LABELS.get(makeCoordKey(x, y))
+
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => onCellClick(x, y)}
+                  onMouseEnter={() => onCellHover(x, y)}
+                  onMouseLeave={onCellLeave}
+                  className={cx(
+                    'gaming-terrain-cell',
+                    terrain === 0 ? 'gaming-terrain-cell-abyss' : 'gaming-terrain-cell-ground',
+                    isCore && 'gaming-terrain-cell-core',
+                    tower && 'gaming-terrain-cell-occupied',
+                    selectedBuildType && terrain === 1 && !isCore && !tower && 'gaming-terrain-cell-armable',
+                    tower?.id === selectedTowerId && 'gaming-terrain-cell-selected',
+                  )}
+                  aria-label={gateLabel ? `${gateLabel} 刷怪口` : `坐标 ${x}, ${y}`}
+                >
+                  {gateLabel ? <span className="gaming-gate-badge">{gateLabel}</span> : null}
+                </button>
+              )
+            })}
+          </div>
+
+          {hoveredCell && selectedBuildOption && canPreviewAtHoveredCell ? (
+            <div className="gaming-board-overlay gaming-board-overlay-preview" aria-hidden="true">
+              <div
+                className="gaming-build-preview"
+                style={{
+                  left: `calc(${hoveredCell.x} * ${CELL_SIZE_CSS_VAR})`,
+                  top: `calc(${hoveredCell.y} * ${CELL_SIZE_CSS_VAR})`,
+                  width: `calc(${selectedBuildOption.width} * ${CELL_SIZE_CSS_VAR})`,
+                  height: `calc(${selectedBuildOption.height} * ${CELL_SIZE_CSS_VAR})`,
+                }}
+              >
+                <span className="gaming-build-preview-crosshair" />
+              </div>
+            </div>
+          ) : null}
+
+          {hoveredCell && selectedBuildOption && hoveredPlacement?.reason ? (
+            <div className="gaming-board-overlay gaming-board-overlay-preview" aria-hidden="true">
+              <div
+                className={cx(
+                  'gaming-hover-hint',
+                  hoveredPlacement.allowed ? 'gaming-hover-hint-allowed' : 'gaming-hover-hint-blocked',
+                  hoverHintDirection === 'below' ? 'gaming-hover-hint-below' : 'gaming-hover-hint-above',
+                )}
+                style={{
+                  left: `calc(${hoveredCell.x} * ${CELL_SIZE_CSS_VAR})`,
+                  top: `calc(${hoveredCell.y} * ${CELL_SIZE_CSS_VAR})`,
+                  width: `calc(${selectedBuildOption.width} * ${CELL_SIZE_CSS_VAR})`,
+                }}
+              >
+                <span className="gaming-hover-hint-title">{selectedBuildOption.label}</span>
+                <span className="gaming-hover-hint-reason">{hoveredPlacement.reason}</span>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="gaming-board-overlay gaming-board-overlay-towers">
+            {towers.map((tower) => (
+              <button
+                key={tower.id}
+                type="button"
+                onClick={() => onTowerClick(tower.id)}
+                className={cx(
+                  'gaming-tower-node',
+                  getTowerTone(tower.type),
+                  selectedTowerId === tower.id && 'gaming-tower-node-selected',
+                )}
+                style={{
+                  left: `calc(${tower.x} * ${CELL_SIZE_CSS_VAR})`,
+                  top: `calc(${tower.y} * ${CELL_SIZE_CSS_VAR})`,
+                  width: `calc(${tower.width} * ${CELL_SIZE_CSS_VAR})`,
+                  height: `calc(${tower.height} * ${CELL_SIZE_CSS_VAR})`,
+                }}
+                title={`${tower.type} @ (${tower.x}, ${tower.y})`}
+              >
+                <span className="gaming-tower-glyph">{getTowerGlyph(tower.type)}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="gaming-board-overlay gaming-board-overlay-enemies">
+            {enemies.map((enemy) => {
+              const hpRatio = enemy.maxHp > 0 ? Math.max(0, Math.min(enemy.hp / enemy.maxHp, 1)) : 0
+
+              return (
+                <div
+                  key={enemy.id}
+                  className={cx('gaming-enemy-node', getEnemyTone(enemy.kind))}
+                  style={{
+                    left: `calc(${enemy.x} * ${CELL_SIZE_CSS_VAR})`,
+                    top: `calc(${enemy.y} * ${CELL_SIZE_CSS_VAR})`,
+                  }}
+                  title={`${enemy.kind} HP ${enemy.hp}/${enemy.maxHp}`}
+                >
+                  <div className="gaming-enemy-core">
+                    <Skull className="h-3.5 w-3.5" strokeWidth={2.2} />
+                  </div>
+                  <div className="gaming-enemy-hpbar">
+                    <span style={{ width: `${hpRatio * 100}%` }} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
       </div>
-    </div>
+    </section>
   )
 }
 
-export function GamingPage({ overloadTicks = 0 }: GamingPageProps) {
+export function GamingPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const roomId = searchParams.get('roomId') ?? null
-  const { gameState, sendAction, error, socketUrl, roomPhase, selectedLevelInfo, isHost, sendSocketEvent, getActionSnapshot } = useGameEngine()
+  const roomId = searchParams.get('roomId') ?? DEFAULT_ROOM_ID
+  const socketUrl = useMemo(() => resolveSocketUrl(), [])
+  const gatewayToken = useMemo(() => resolveGatewayToken(), [])
+  const playerId = useMemo(() => resolvePlayerId() ?? 'human-dev', [])
   const playerKind = resolvePlayerKind()
-  const liveState = useMemo(() => gameState ?? createFallbackBoardState(), [gameState])
-  const buildCatalog = useMemo(() => createBaseBuildCatalog(liveState.buildPalette), [liveState.buildPalette])
-  const [selectedBuildType, setSelectedBuildType] = useState<string | null>(buildCatalog[0]?.type ?? null)
+  const socketRef = useRef<Socket | null>(null)
+  const [gameState, setGameState] = useState<ServerDrivenGameState | null>(null)
+  const [selectedBuildType, setSelectedBuildType] = useState<string | null>(BUILD_OPTIONS[0]?.type ?? null)
+  const [hoveredCell, setHoveredCell] = useState<{ x: number; y: number } | null>(null)
   const [selectedTowerId, setSelectedTowerId] = useState<string | null>(null)
   const [isLeaveConfirmOpen, setIsLeaveConfirmOpen] = useState(false)
-  // 游戏结束覆层状态
-  const [gameOverOutcome, setGameOverOutcome] = useState<'victory' | 'defeat' | null>(null)
-  const showMissionBriefing = roomPhase === 'waiting_for_level'
-  const showGameOver = gameOverOutcome !== null
-  const selectedBlueprint = buildCatalog.find((item) => item.type === selectedBuildType) ?? buildCatalog[0] ?? null
-  const selectedTower = liveState.towers.find((tower) => tower.id === selectedTowerId) ?? null
-  const selectedTowerActions = useMemo(() => (selectedTower ? createTowerActions(selectedTower) : []), [selectedTower])
+  const [error, setError] = useState<string | null>(null)
+  const [selectedLevelInfo, setSelectedLevelInfo] = useState<SelectedLevelInfo | null>(null)
+  const [mySlot, setMySlot] = useState<string | null>(null)
+
+  const selectedTower = useMemo(() => {
+    if (!gameState || !selectedTowerId) {
+      return null
+    }
+
+    return gameState.towers.find((tower) => tower.id === selectedTowerId) ?? null
+  }, [gameState, selectedTowerId])
+
+  const selectedBuildOption = useMemo(
+    () => (selectedBuildType ? BUILD_OPTIONS_BY_TYPE.get(selectedBuildType) ?? null : null),
+    [selectedBuildType],
+  )
 
   useEffect(() => {
-    if (!buildCatalog.length) {
-      setSelectedBuildType(null)
+    const rootElement = document.getElementById('root')
+
+    document.documentElement.classList.add('gaming-route-active')
+    document.body.classList.add('gaming-route-active')
+    rootElement?.classList.add('gaming-route-active')
+
+    return () => {
+      document.documentElement.classList.remove('gaming-route-active')
+      document.body.classList.remove('gaming-route-active')
+      document.body.classList.remove('crisis-overload-active')
+      rootElement?.classList.remove('gaming-route-active')
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!socketUrl || typeof window === 'undefined') {
+      setError('未解析到 WebSocket 地址。')
       return
     }
 
-    if (!selectedBuildType || !buildCatalog.some((item) => item.type === selectedBuildType)) {
-      setSelectedBuildType(buildCatalog[0].type)
-    }
-  }, [buildCatalog, selectedBuildType])
+    const socket = io(socketUrl, {
+      autoConnect: true,
+      withCredentials: true,
+      auth: gatewayToken ? { token: gatewayToken } : undefined,
+      query: {
+        roomId,
+        playerId,
+        playerKind,
+      },
+    })
 
-  useEffect(() => {
-    if (selectedTowerId && !liveState.towers.some((tower) => tower.id === selectedTowerId)) {
-      setSelectedTowerId(null)
-    }
-  }, [liveState.towers, selectedTowerId])
+    socketRef.current = socket
 
-  // 监听游戏结束
-  useEffect(() => {
-    if (gameState?.status === 'finished' && gameState.result && !gameOverOutcome) {
-      setGameOverOutcome(gameState.result.outcome)
-    }
-  }, [gameState?.status, gameState?.result, gameOverOutcome])
+    const handleSyncState = (payload: unknown) => {
+      const nextState = normalizeSyncState(payload)
+      if (!nextState) {
+        return
+      }
 
-  useEffect(() => {
-    if (!isLeaveConfirmOpen) {
-      return
+      setGameState(nextState)
+      setError(null)
     }
 
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        setIsLeaveConfirmOpen(false)
+    const handleRoomJoined = (payload: unknown) => {
+      if (isObject(payload) && typeof payload.slot === 'string') {
+        setMySlot(payload.slot)
       }
     }
 
-    window.addEventListener('keydown', handleKeyDown)
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [isLeaveConfirmOpen])
+    const handleRoomPhaseChanged = (payload: unknown) => {
+      if (!isObject(payload) || typeof payload.phase !== 'string') {
+        return
+      }
 
-  function handleCellClick(cell: GameCell, tower: TowerState | null) {
+      setGameState((current) => current
+        ? {
+            ...current,
+            phase: payload.phase === 'countdown' || payload.phase === 'waiting_for_level' || payload.phase === 'playing'
+              ? payload.phase
+              : 'lobby',
+          }
+        : current)
+    }
+
+    const handleLevelSelected = (payload: unknown) => {
+      if (
+        isObject(payload)
+        && typeof payload.levelId === 'number'
+        && typeof payload.label === 'string'
+        && typeof payload.description === 'string'
+        && typeof payload.waveCount === 'number'
+        && typeof payload.targetClearRate === 'number'
+        && typeof payload.minPlayers === 'number'
+      ) {
+        setSelectedLevelInfo({
+          levelId: payload.levelId,
+          label: payload.label,
+          description: payload.description,
+          waveCount: payload.waveCount,
+          targetClearRate: payload.targetClearRate,
+          minPlayers: payload.minPlayers,
+        })
+      }
+    }
+
+    socket.on('connect', () => {
+      setError(null)
+      socket.emit('JOIN_ROOM', {
+        roomId,
+        playerId,
+        playerName: playerId,
+        playerKind,
+      })
+    })
+
+    socket.on('disconnect', () => {
+    })
+
+    socket.on('connect_error', (connectError) => {
+      setError(connectError.message)
+    })
+
+    socket.on('engine_error', (engineError: unknown) => {
+      if (typeof engineError === 'string') {
+        setError(engineError)
+        return
+      }
+
+      if (isObject(engineError) && typeof engineError.message === 'string') {
+        setError(engineError.message)
+      }
+    })
+
+    socket.on('SYNC_STATE', handleSyncState)
+    socket.on('ROOM_JOINED', handleRoomJoined)
+    socket.on('ROOM_PHASE_CHANGED', handleRoomPhaseChanged)
+    socket.on('LEVEL_SELECTED', handleLevelSelected)
+
+    return () => {
+      socket.off('SYNC_STATE', handleSyncState)
+      socket.off('ROOM_JOINED', handleRoomJoined)
+      socket.off('ROOM_PHASE_CHANGED', handleRoomPhaseChanged)
+      socket.off('LEVEL_SELECTED', handleLevelSelected)
+      socket.disconnect()
+      socketRef.current = null
+    }
+  }, [gatewayToken, playerId, playerKind, roomId, socketUrl])
+
+  useEffect(() => {
+    if (selectedTowerId && gameState && !gameState.towers.some((tower) => tower.id === selectedTowerId)) {
+      setSelectedTowerId(null)
+    }
+  }, [gameState, selectedTowerId])
+
+  useEffect(() => {
+    if (!selectedBuildOption || (gameState?.gold ?? 0) >= selectedBuildOption.cost) {
+      return
+    }
+
+    setSelectedBuildType((current) => (current === selectedBuildOption.type ? null : current))
+    setHoveredCell(null)
+  }, [gameState?.gold, selectedBuildOption])
+
+  function emitSocketEvent(event: string, payload?: unknown) {
+    const socket = socketRef.current
+    if (!socket || !socket.connected) {
+      setError('WebSocket 尚未连接。')
+      return false
+    }
+
+    socket.emit(event, payload)
+    return true
+  }
+
+  function handleCellClick(x: number, y: number) {
+    const tower = findTowerAtCell(gameState?.towers ?? [], x, y)
     if (tower) {
-      setSelectedTowerId((current) => (current === tower.id ? null : tower.id))
+      setSelectedTowerId((current) => current === tower.id ? null : tower.id)
+      return
+    }
+
+    const option = selectedBuildType ? BUILD_OPTIONS_BY_TYPE.get(selectedBuildType) ?? null : null
+    if (!option) {
+      setSelectedTowerId(null)
+      return
+    }
+
+    const placement = evaluateTowerPlacement(gameState, option, x, y)
+    if (!placement.allowed) {
+      setSelectedTowerId(null)
       return
     }
 
     setSelectedTowerId(null)
-
-    if (!selectedBuildType || cell.kind !== 'build') {
-      return
-    }
-
-    void sendAction({
-      action: 'BUILD_TOWER',
-      type: selectedBuildType,
-      x: cell.x,
-      y: cell.y,
+    setHoveredCell(null)
+    emitSocketEvent('BUILD_TOWER', {
+      x,
+      y,
+      towerType: option.type,
     })
-  }
-
-  function handleTowerAction(action: GameAction) {
-    void sendAction(action)
-  }
-
-  function requestLeaveGame() {
-    setIsLeaveConfirmOpen(true)
-  }
-
-  function closeLeaveConfirm() {
-    setIsLeaveConfirmOpen(false)
   }
 
   function leaveGame() {
     document.body.classList.remove('crisis-overload-active')
-    navigate(roomId ? `/room/${encodeURIComponent(roomId)}` : '/room')
-  }
-
-  function handleSelectLevel(levelId: number) {
-    sendSocketEvent('select_level', { levelId })
-  }
-
-  function handleLeaveAfterGameOver() {
-    // 不上传录像（失败），直接游走并清除覆层
-    setGameOverOutcome(null)
-    leaveGame()
+    navigate(`/room/${encodeURIComponent(roomId)}`)
   }
 
   return (
     <main className="gaming-page">
       <div className="cyber-background" />
       <div className="cyber-noise" />
-      <CrisisWarning overloadTicks={overloadTicks} />
+      <CrisisWarning overloadTicks={gameState?.overloadTicks ?? 0} />
 
       <section className="gaming-shell">
         <div className="gaming-stage">
           <aside className="gaming-side-rail gaming-side-rail-build">
-            <div className="gaming-pill-group gaming-pill-group-compact">
-              <div className="gaming-pill gaming-pill-compact">
-                <span>金币</span>
-                <strong>{liveState.resources.gold}</strong>
-              </div>
-              <div className="gaming-pill gaming-pill-compact">
-                <span>波数</span>
-                <strong>{liveState.wave?.index ?? 0}</strong>
-              </div>
-            </div>
-
             <div className="gaming-side-rail-scroll">
+              {error ? (
+                <section className="gaming-panel-card">
+                  <p className="gaming-error-text">{error}</p>
+                </section>
+              ) : null}
+
               <section className="gaming-panel-card">
+                <p className="gaming-section-label">建造指令</p>
                 <div className="gaming-build-list gaming-build-list-vertical">
-                  {buildCatalog.map((blueprint) => (
+                  {BUILD_OPTIONS.map((option) => (
                     <button
-                      key={blueprint.type}
+                      key={option.type}
                       type="button"
-                      disabled={blueprint.disabled}
-                      onClick={() => setSelectedBuildType(blueprint.type)}
-                      className={cx('gaming-build-chip gaming-build-chip-stacked', selectedBlueprint?.type === blueprint.type && 'gaming-build-chip-active')}
+                      onClick={() => {
+                        if ((gameState?.gold ?? 0) < option.cost) {
+                          return
+                        }
+
+                        setSelectedBuildType((current) => (current === option.type ? null : option.type))
+                        setSelectedTowerId(null)
+                      }}
+                      disabled={(gameState?.gold ?? 0) < option.cost}
+                      className={cx(
+                        'gaming-build-chip gaming-build-chip-stacked',
+                        option.accentClassName,
+                        selectedBuildType === option.type && 'gaming-build-chip-active',
+                        (gameState?.gold ?? 0) < option.cost && 'gaming-build-chip-disabled',
+                      )}
+                      aria-pressed={selectedBuildType === option.type}
                     >
-                      <span className="gaming-build-chip-title">{blueprint.label}</span>
-                      <span className="gaming-build-chip-cost">{blueprint.costLabel ?? '--'}</span>
+                      <span className="gaming-build-chip-title">{option.label}</span>
+                      <span className="gaming-build-chip-cost">{option.cost} 金币</span>
                     </button>
                   ))}
                 </div>
@@ -455,48 +896,68 @@ export function GamingPage({ overloadTicks = 0 }: GamingPageProps) {
 
               {selectedTower ? (
                 <section className="gaming-selected-card gaming-selected-card-compact">
-                  <>
-                    <div className="gaming-selected-header">
-                      <h2 className="text-lg font-semibold tracking-[0.04em] text-white">{selectedTower.name}</h2>
-                      <span className="gaming-selected-level">Lv.{selectedTower.level}</span>
-                    </div>
-
-                    <div className="gaming-tower-stats">
-                      <div className="gaming-tower-stat">伤害 {selectedTower.damage ?? '-'}</div>
-                      <div className="gaming-tower-stat">范围 {selectedTower.range ?? '-'}</div>
-                      <div className="gaming-tower-stat">攻速 {selectedTower.attackRate ?? '-'}</div>
-                      <div className="gaming-tower-stat">状态 {selectedTower.status}</div>
-                    </div>
-
-                    <div className="gaming-tower-actions">
-                      {selectedTowerActions.map((descriptor) => (
-                        <button
-                          key={descriptor.id}
-                          type="button"
-                          disabled={descriptor.disabled}
-                          onClick={() => handleTowerAction(descriptor.payload)}
-                          className={cx(
-                            'gaming-tower-action',
-                            descriptor.payload.action === 'SELL_TOWER' && 'gaming-tower-action-danger',
-                            descriptor.disabled && 'gaming-tower-action-disabled',
-                          )}
-                        >
-                          <span className="gaming-tower-action-title">{descriptor.label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                  {error ? <p className="mt-3 text-sm text-orange-100">{error}</p> : null}
-                  <p className="mt-3 text-xs text-slate-500">{socketUrl ?? 'Socket unavailable'}</p>
+                  <div className="gaming-selected-header">
+                    <h2 className="text-lg font-semibold tracking-[0.04em] text-white">{selectedTower.type}</h2>
+                    <span className="gaming-selected-level">{selectedTower.x},{selectedTower.y}</span>
+                  </div>
+                  <div className="gaming-tower-stats">
+                    <div className="gaming-tower-stat">伤害 {selectedTower.damage ?? '-'}</div>
+                    <div className="gaming-tower-stat">范围 {selectedTower.range ?? '-'}</div>
+                    <div className="gaming-tower-stat">冷却 {selectedTower.cooldownTicks ?? '-'}</div>
+                    <div className="gaming-tower-stat">尺寸 {selectedTower.width}x{selectedTower.height}</div>
+                  </div>
                 </section>
               ) : null}
             </div>
           </aside>
 
-          <GamingBoard gameState={liveState} selectedBuildType={selectedBuildType} selectedTowerId={selectedTowerId} onCellClick={handleCellClick} />
+          <GamingBoard
+            gameState={gameState}
+            selectedBuildType={selectedBuildType}
+            hoveredCell={hoveredCell}
+            selectedTowerId={selectedTowerId}
+            onCellClick={handleCellClick}
+            onCellHover={(x, y) => setHoveredCell({ x, y })}
+            onCellLeave={() => setHoveredCell(null)}
+            onTowerClick={(towerId) => setSelectedTowerId((current) => current === towerId ? null : towerId)}
+          />
 
           <aside className="gaming-side-rail gaming-side-rail-right">
-            <button type="button" onClick={requestLeaveGame} className="gaming-exit-card">
+            <section className="gaming-panel-card">
+              <p className="gaming-section-label">战场状态</p>
+              <div className="gaming-status-stack">
+                <div className="gaming-status-row">
+                  <Coins className="h-4 w-4 text-amber-300" />
+                  <span>当前金币</span>
+                  <strong>{gameState?.gold ?? 0}</strong>
+                </div>
+                <div className="gaming-status-row">
+                  <RadioTower className="h-4 w-4 text-cyan-300" />
+                  <span>已部署塔</span>
+                  <strong>{gameState?.towers.length ?? 0}</strong>
+                </div>
+                <div className="gaming-status-row">
+                  <Skull className="h-4 w-4 text-red-300" />
+                  <span>活跃敌人</span>
+                  <strong>{gameState?.enemies.length ?? 0}</strong>
+                </div>
+                <div className="gaming-status-row">
+                  <ShieldAlert className="h-4 w-4 text-orange-300" />
+                  <span>当前波次</span>
+                  <strong>{gameState?.currentWave.label ?? gameState?.currentWave.index ?? 0}</strong>
+                </div>
+              </div>
+            </section>
+
+            {selectedLevelInfo ? (
+              <section className="gaming-panel-card">
+                <p className="gaming-section-label">已选关卡</p>
+                <h2 className="mt-2 text-lg font-semibold text-white">{selectedLevelInfo.label}</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-300">{selectedLevelInfo.description}</p>
+              </section>
+            ) : null}
+
+            <button type="button" onClick={() => setIsLeaveConfirmOpen(true)} className="gaming-exit-card">
               <OctagonX className="h-5 w-5" />
               <span>退出游戏</span>
             </button>
@@ -505,14 +966,14 @@ export function GamingPage({ overloadTicks = 0 }: GamingPageProps) {
       </section>
 
       {isLeaveConfirmOpen ? (
-        <div className="cyber-modal-backdrop" onClick={closeLeaveConfirm}>
+        <div className="cyber-modal-backdrop" onClick={() => setIsLeaveConfirmOpen(false)}>
           <div className="gaming-confirm-panel" onClick={(event) => event.stopPropagation()}>
             <p className="gaming-confirm-eyebrow">Exit Match</p>
             <h2 className="mt-3 text-2xl font-semibold tracking-[0.08em] text-white">确认退出游戏？</h2>
-            <p className="mt-3 text-sm leading-7 text-slate-300">确认后将离开当前对局，并返回{roomId ? '等待房间' : '房间列表'}页面。</p>
+            <p className="mt-3 text-sm leading-7 text-slate-300">确认后将离开当前对局，并返回等待房间页面。</p>
 
             <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
-              <button type="button" onClick={closeLeaveConfirm} className="gaming-confirm-button gaming-confirm-button-muted">
+              <button type="button" onClick={() => setIsLeaveConfirmOpen(false)} className="gaming-confirm-button gaming-confirm-button-muted">
                 取消
               </button>
               <button type="button" onClick={leaveGame} className="gaming-confirm-button gaming-confirm-button-danger">
@@ -523,23 +984,21 @@ export function GamingPage({ overloadTicks = 0 }: GamingPageProps) {
         </div>
       ) : null}
 
-      {/* ── WAITING_FOR_LEVEL 关卡选择把 ──────────────────────────────────────── */}
-      {showMissionBriefing ? (
+      {gameState?.phase === 'waiting_for_level' ? (
         <MissionBriefingModal
-          isHost={isHost}
+          isHost={mySlot === 'P1'}
           playerKind={playerKind}
-          onSelectLevel={handleSelectLevel}
+          onSelectLevel={(levelId) => emitSocketEvent('SELECT_LEVEL', { levelId })}
           engineError={error}
         />
       ) : null}
 
-      {/* ── 游戏结束全屏 ───────────────────────────────────────────────── */}
-      {showGameOver && gameOverOutcome ? (
+      {gameState?.result?.outcome ? (
         <GameOverOverlay
-          outcome={gameOverOutcome}
+          outcome={gameState.result.outcome}
           currentLevelId={selectedLevelInfo?.levelId ?? null}
-          actionLog={getActionSnapshot()}
-          onLeave={handleLeaveAfterGameOver}
+          actionLog={[]}
+          onLeave={leaveGame}
         />
       ) : null}
     </main>

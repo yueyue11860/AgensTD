@@ -47,7 +47,7 @@ export const GameResources = memo(function GameResources({ resources }: GameReso
   return (
     <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
       <ResourceMetric label="金币" value={resources.gold} icon={Coins} tone="text-yellow-400" note="仅展示服务端当前余额。" />
-      <ResourceMetric label="法力" value={resources.mana} max={resources.manaLimit} icon={Sparkles} tone="text-cold-blue" note="所有数值以 tick_update 为准。" />
+      <ResourceMetric label="法力" value={resources.mana} max={resources.manaLimit} icon={Sparkles} tone="text-cold-blue" note="所有数值以 TICK_UPDATE 为准。" />
       <ResourceMetric label="热量" value={resources.heat} max={resources.heatLimit} icon={Flame} tone="text-warning-orange" note="前端不再自行推导热量变化。" />
       <ResourceMetric label="维修" value={resources.repair} icon={Wrench} tone="text-cyan-300" note="维护点消耗由后端引擎裁定。" />
       <ResourceMetric label="主堡" value={resources.fortress} max={resources.fortressMax} icon={ShieldAlert} tone="text-alert-red" note="主堡损伤完全来自服务端权威结果。" />
