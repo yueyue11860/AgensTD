@@ -1,13 +1,17 @@
 import type { ServerConfig } from '../config/server-config'
 import {
   ARENA_GRID_SIZE,
-  WAYPOINTS_MAP,
+  createArenaEnemyLanePath,
   createArenaMapCells,
+  getArenaLaneSpawnPoint,
   getArenaLoopStartIndex,
   getArenaPrimaryBasePoint,
+  getArenaPrimarySpawnPoint,
+  WAYPOINTS_MAP,
 } from '../config/arena-layout'
 import type { Position } from '../domain/game-state'
 import type { GridMapCell } from './grid-map'
+import { GridMap } from './grid-map'
 import { GameEngine, type EngineLaneRoute, type EngineSlotId } from './game-engine'
 import type { WaveConfig } from '../../../shared/contracts/game'
 
@@ -52,36 +56,25 @@ const MIN_ROOM_HEIGHT = ARENA_GRID_SIZE
 
 const HUB: Position = getArenaPrimaryBasePoint()
 
-function clonePath(path: readonly Position[]) {
-  return path.map((position) => ({ x: position.x, y: position.y }))
-}
+function createLaneRoutes(pathGrid: GridMap): Record<EngineSlotId, EngineLaneRoute> {
+  function createLaneRoute(slot: EngineSlotId): EngineLaneRoute {
+    const spawn = getArenaLaneSpawnPoint(slot)
+    const path = createArenaEnemyLanePath(slot)
+    const loopStartIndex = getArenaLoopStartIndex(WAYPOINTS_MAP[slot])
 
-function createLaneRoutes(): Record<EngineSlotId, EngineLaneRoute> {
+    return {
+      slot,
+      spawn,
+      path,
+      loopStartIndex,
+    }
+  }
+
   return {
-    P1: {
-      slot: 'P1',
-      spawn: { ...WAYPOINTS_MAP.P1[0] },
-      path: clonePath(WAYPOINTS_MAP.P1),
-      loopStartIndex: getArenaLoopStartIndex(WAYPOINTS_MAP.P1),
-    },
-    P2: {
-      slot: 'P2',
-      spawn: { ...WAYPOINTS_MAP.P2[0] },
-      path: clonePath(WAYPOINTS_MAP.P2),
-      loopStartIndex: getArenaLoopStartIndex(WAYPOINTS_MAP.P2),
-    },
-    P3: {
-      slot: 'P3',
-      spawn: { ...WAYPOINTS_MAP.P3[0] },
-      path: clonePath(WAYPOINTS_MAP.P3),
-      loopStartIndex: getArenaLoopStartIndex(WAYPOINTS_MAP.P3),
-    },
-    P4: {
-      slot: 'P4',
-      spawn: { ...WAYPOINTS_MAP.P4[0] },
-      path: clonePath(WAYPOINTS_MAP.P4),
-      loopStartIndex: getArenaLoopStartIndex(WAYPOINTS_MAP.P4),
-    },
+    P1: createLaneRoute('P1'),
+    P2: createLaneRoute('P2'),
+    P3: createLaneRoute('P3'),
+    P4: createLaneRoute('P4'),
   }
 }
 
@@ -90,8 +83,9 @@ export function createFixedRoomLayout(width: number, height: number): RoomLayout
     throw new Error(`Arena room requires at least ${MIN_ROOM_WIDTH}x${MIN_ROOM_HEIGHT} cells`)
   }
 
-  const laneRoutes = createLaneRoutes()
   const cells: GridMapCell[][] = createArenaMapCells(width, height)
+  const pathGrid = new GridMap(cells, getArenaPrimarySpawnPoint(), HUB)
+  const laneRoutes = createLaneRoutes(pathGrid)
 
   return {
     width,

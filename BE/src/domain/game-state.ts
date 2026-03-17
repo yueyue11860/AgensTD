@@ -166,6 +166,8 @@ export interface GameState {
   playerCount: number
   maxCapacity: number
   overloadTicks: number
+  /** 超载倒计时剩余秒数（0 = 未超载，>0 = 正在倒计时） */
+  overloadCountdownSec: number
   map: GameMapState
   base: BaseState
   wave: WaveState

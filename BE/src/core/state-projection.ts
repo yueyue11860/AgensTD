@@ -407,7 +407,7 @@ function buildFrontendNotices(state: GameState): NonNullable<FrontendGameState['
   return state.players.length === 0
     ? ['等待玩家或 Agent 连接网关。']
     : [
-      `当前 ${state.playerCount} 人房间，刷怪容量 ${state.enemies.length}/${state.maxCapacity}，超载计数 ${state.overloadTicks}/100。`,
+      `当前 ${state.playerCount} 人房间，刷怪容量 ${state.enemies.length}/${state.maxCapacity}${state.overloadCountdownSec > 0 ? `，超载倒计时 ${state.overloadCountdownSec}s` : ''}。`,
       ...(resultNotice ? [resultNotice] : []),
     ]
 }

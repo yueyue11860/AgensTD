@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Coins, OctagonX, RadioTower, ShieldAlert, Skull } from 'lucide-react'
+import { Coins, OctagonX, Play, RadioTower, ShieldAlert, Skull } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { io, type Socket } from 'socket.io-client'
 import { GameOverOverlay } from '../components/game-over-overlay'
@@ -59,6 +59,8 @@ interface ServerDrivenGameState {
   enemies: ServerEnemyState[]
   gold: number
   overloadTicks: number
+  overloadCountdownSec: number
+  maxCapacity: number
   currentWave: ServerWaveState
   result: {
     outcome: MatchOutcome
@@ -76,10 +78,10 @@ interface BuildOption {
 }
 
 const BUILD_OPTIONS: BuildOption[] = [
-  { type: 'arrow-1', label: '箭塔 1级', cost: 1, width: 1, height: 1, accentClassName: 'gaming-build-chip-cyan' },
-  { type: 'ice-1', label: '冰塔 1级', cost: 2, width: 1, height: 1, accentClassName: 'gaming-build-chip-blue' },
-  { type: 'cannon-1', label: '炮塔 1级', cost: 2, width: 1, height: 2, accentClassName: 'gaming-build-chip-orange' },
-  { type: 'laser-1', label: '激光塔 1级', cost: 3, width: 1, height: 2, accentClassName: 'gaming-build-chip-red' },
+  { type: '箭塔:1', label: '箭塔 1级', cost: 1, width: 1, height: 1, accentClassName: 'gaming-build-chip-cyan' },
+  { type: '冰塔:1', label: '冰塔 1级', cost: 2, width: 1, height: 1, accentClassName: 'gaming-build-chip-blue' },
+  { type: '炮塔:1', label: '炮塔 1级', cost: 2, width: 1, height: 2, accentClassName: 'gaming-build-chip-orange' },
+  { type: '激光塔:1', label: '激光塔 1级', cost: 3, width: 1, height: 2, accentClassName: 'gaming-build-chip-red' },
 ]
 
 const BUILD_OPTIONS_BY_TYPE = new Map(BUILD_OPTIONS.map((option) => [option.type, option]))
@@ -349,6 +351,8 @@ function normalizeSyncState(payload: unknown): ServerDrivenGameState | null {
     enemies,
     gold: typeof candidate.gold === 'number' ? candidate.gold : (candidate.resources as { gold: number }).gold,
     overloadTicks: typeof candidate.overloadTicks === 'number' ? candidate.overloadTicks : 0,
+    overloadCountdownSec: typeof candidate.overloadCountdownSec === 'number' ? candidate.overloadCountdownSec : 0,
+    maxCapacity: typeof candidate.maxCapacity === 'number' ? candidate.maxCapacity : 10,
     currentWave: currentWave && typeof currentWave.index === 'number'
       ? {
           index: currentWave.index,
@@ -399,19 +403,19 @@ function evaluateTowerPlacement(gameState: ServerDrivenGameState | null, option:
 }
 
 function getTowerGlyph(type: string) {
-  if (type.includes('laser')) {
+  if (type.includes('laser') || type.includes('激光塔')) {
     return 'LS'
   }
 
-  if (type.includes('cannon')) {
+  if (type.includes('cannon') || type.includes('炮塔')) {
     return 'CN'
   }
 
-  if (type.includes('ice')) {
+  if (type.includes('ice') || type.includes('冰塔')) {
     return 'IC'
   }
 
-  if (type.includes('arrow')) {
+  if (type.includes('arrow') || type.includes('箭塔')) {
     return 'AR'
   }
 
@@ -419,15 +423,15 @@ function getTowerGlyph(type: string) {
 }
 
 function getTowerTone(type: string) {
-  if (type.includes('laser')) {
+  if (type.includes('laser') || type.includes('激光塔')) {
     return 'gaming-tower-node-laser'
   }
 
-  if (type.includes('cannon')) {
+  if (type.includes('cannon') || type.includes('炮塔')) {
     return 'gaming-tower-node-cannon'
   }
 
-  if (type.includes('ice')) {
+  if (type.includes('ice') || type.includes('冰塔')) {
     return 'gaming-tower-node-ice'
   }
 
@@ -446,7 +450,7 @@ function getEnemyTone(kind: string) {
   return 'gaming-enemy-node-light'
 }
 
-function CrisisWarning({ overloadTicks }: { overloadTicks: number }) {
+function CrisisWarning({ overloadTicks, overloadCountdownSec, enemyCount, maxCapacity }: { overloadTicks: number; overloadCountdownSec: number; enemyCount: number; maxCapacity: number }) {
   useEffect(() => {
     if (overloadTicks > 0) {
       document.body.classList.add('crisis-overload-active')
@@ -467,10 +471,15 @@ function CrisisWarning({ overloadTicks }: { overloadTicks: number }) {
 
   return (
     <div className="gaming-warning-card">
-      <ShieldAlert className="h-5 w-5 text-red-200" />
+      <ShieldAlert className="h-5 w-5 shrink-0 text-red-200" />
       <div>
-        <p className="text-xs uppercase tracking-[0.3em] text-red-200/80">Overload</p>
-        <p className="mt-1 text-sm text-red-50">满怪危机持续 {overloadTicks} ticks</p>
+        <p className="text-xs uppercase tracking-[0.3em] text-red-200/80">同屏超载</p>
+        <p className="mt-0.5 tabular-nums text-red-50">
+          <span className="text-2xl font-bold">{enemyCount}</span>
+          <span className="text-sm text-red-200/70"> / {maxCapacity}</span>
+        </p>
+        <p className="mt-1 text-2xl font-bold tabular-nums text-red-50">{overloadCountdownSec}s</p>
+        <p className="mt-0.5 text-xs text-red-200/70">倒计时结束将失败</p>
       </div>
     </div>
   )
@@ -645,6 +654,8 @@ export function GamingPage() {
   const [error, setError] = useState<string | null>(null)
   const [selectedLevelInfo, setSelectedLevelInfo] = useState<SelectedLevelInfo | null>(null)
   const [mySlot, setMySlot] = useState<string | null>(null)
+
+  const isHost = mySlot === 'P1'
 
   const selectedTower = useMemo(() => {
     if (!gameState || !selectedTowerId) {
@@ -856,11 +867,24 @@ export function GamingPage() {
     })
   }
 
+  function handleStartMatch() {
+    if (!isHost) {
+      return
+    }
+
+    emitSocketEvent('START_MATCH')
+  }
+
   return (
     <main className="gaming-page">
       <div className="cyber-background" />
       <div className="cyber-noise" />
-      <CrisisWarning overloadTicks={gameState?.overloadTicks ?? 0} />
+      <CrisisWarning
+        overloadTicks={gameState?.overloadTicks ?? 0}
+        overloadCountdownSec={gameState?.overloadCountdownSec ?? 0}
+        enemyCount={gameState?.enemies.length ?? 0}
+        maxCapacity={gameState?.maxCapacity ?? 10}
+      />
 
       <section className="gaming-shell">
         <div className="gaming-stage">
@@ -958,6 +982,31 @@ export function GamingPage() {
               </div>
             </section>
 
+            <section className="gaming-panel-card">
+              <p className="gaming-section-label">对局阶段</p>
+              <div className="mt-3 space-y-3 text-sm text-slate-300">
+                <p>
+                  {gameState?.phase === 'lobby' && (isHost ? '等待房主下达开始指令。' : '等待房主开始游戏。')}
+                  {gameState?.phase === 'countdown' && '对局倒计时中，稍后进入关卡选择。'}
+                  {gameState?.phase === 'waiting_for_level' && '正在等待房主选择关卡。'}
+                  {gameState?.phase === 'playing' && '战斗进行中，敌人会按波次持续刷新。'}
+                  {!gameState && '等待战场状态同步。'}
+                </p>
+
+                {gameState?.phase === 'lobby' ? (
+                  <button
+                    type="button"
+                    onClick={handleStartMatch}
+                    disabled={!isHost}
+                    className={cx('gaming-action-button gaming-action-button-muted w-full justify-center', !isHost && 'opacity-50')}
+                  >
+                    <Play className="h-4 w-4" />
+                    <span>开始游戏</span>
+                  </button>
+                ) : null}
+              </div>
+            </section>
+
             {selectedLevelInfo ? (
               <section className="gaming-panel-card">
                 <p className="gaming-section-label">已选关卡</p>
@@ -995,7 +1044,7 @@ export function GamingPage() {
 
       {gameState?.phase === 'waiting_for_level' ? (
         <MissionBriefingModal
-          isHost={mySlot === 'P1'}
+          isHost={isHost}
           playerKind={playerKind}
           onSelectLevel={(levelId) => emitSocketEvent('SELECT_LEVEL', { levelId })}
           engineError={error}

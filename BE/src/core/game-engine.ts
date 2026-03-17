@@ -14,7 +14,9 @@ import type { WaveConfig } from '../../../shared/contracts/game'
 import type { TowerCatalogEntry } from '../domain/tower-catalog'
 import {
   WAYPOINTS_MAP,
+  createArenaEnemyLanePath,
   createArenaMapCells,
+  getArenaLaneSpawnPoint,
   getArenaLoopStartIndex,
   getArenaPrimaryBasePoint,
   getArenaPrimarySpawnPoint,
@@ -33,7 +35,7 @@ export interface EngineLaneRoute {
   slot: EngineSlotId
   spawn: Position
   path: Position[]
-  loopStartIndex: number
+  loopStartIndex: number | null
 }
 
 export interface GameEngineOptions {
@@ -88,26 +90,26 @@ function createFallbackLaneRoutes(): Record<EngineSlotId, EngineLaneRoute> {
   return {
     P1: {
       slot: 'P1',
-      spawn: clonePosition(WAYPOINTS_MAP.P1[0]),
-      path: clonePath(WAYPOINTS_MAP.P1),
+      spawn: getArenaLaneSpawnPoint('P1'),
+      path: createArenaEnemyLanePath('P1'),
       loopStartIndex: getArenaLoopStartIndex(WAYPOINTS_MAP.P1),
     },
     P2: {
       slot: 'P2',
-      spawn: clonePosition(WAYPOINTS_MAP.P2[0]),
-      path: clonePath(WAYPOINTS_MAP.P2),
+      spawn: getArenaLaneSpawnPoint('P2'),
+      path: createArenaEnemyLanePath('P2'),
       loopStartIndex: getArenaLoopStartIndex(WAYPOINTS_MAP.P2),
     },
     P3: {
       slot: 'P3',
-      spawn: clonePosition(WAYPOINTS_MAP.P3[0]),
-      path: clonePath(WAYPOINTS_MAP.P3),
+      spawn: getArenaLaneSpawnPoint('P3'),
+      path: createArenaEnemyLanePath('P3'),
       loopStartIndex: getArenaLoopStartIndex(WAYPOINTS_MAP.P3),
     },
     P4: {
       slot: 'P4',
-      spawn: clonePosition(WAYPOINTS_MAP.P4[0]),
-      path: clonePath(WAYPOINTS_MAP.P4),
+      spawn: getArenaLaneSpawnPoint('P4'),
+      path: createArenaEnemyLanePath('P4'),
       loopStartIndex: getArenaLoopStartIndex(WAYPOINTS_MAP.P4),
     },
   }
@@ -184,6 +186,7 @@ export class GameEngine {
       playerCount: this.playerCount,
       maxCapacity: this.maxCapacity,
       overloadTicks: this.overloadTicks,
+      overloadCountdownSec: 0,
       map: {
         width: config.mapWidth,
         height: config.mapHeight,
@@ -772,10 +775,12 @@ export class GameEngine {
   }
 
   private evaluateOverloadState() {
-    if (this.enemies.length >= this.maxCapacity) {
+    const isOverloaded = this.enemies.length >= this.maxCapacity
+
+    if (isOverloaded) {
       this.overloadTicks += 1
     }
-    else if (this.overloadTicks > 0) {
+    else {
       this.overloadTicks = 0
     }
 
@@ -783,8 +788,15 @@ export class GameEngine {
     this.state.maxCapacity = this.maxCapacity
     this.state.playerCount = this.playerCount
 
-    if (this.overloadTicks >= 100) {
-      this.finishMatch('defeat', `Overload persisted for ${this.overloadTicks} ticks`)
+    // 10 秒倒计时 = 10000ms / tickRateMs ticks
+    const overloadLimitTicks = Math.ceil(10000 / this.config.tickRateMs)
+    const remainingTicks = Math.max(0, overloadLimitTicks - this.overloadTicks)
+    this.state.overloadCountdownSec = this.overloadTicks > 0
+      ? Math.ceil(remainingTicks * this.config.tickRateMs / 1000)
+      : 0
+
+    if (this.overloadTicks >= overloadLimitTicks) {
+      this.finishMatch('defeat', `同屏怪物超载超过 10 秒`)
     }
   }
 

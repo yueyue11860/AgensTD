@@ -8,7 +8,7 @@ export const ARENA_GRID_SIZE = 29
 const ARENA_CORE_CENTER: Position = { x: 14, y: 14 }
 const ARENA_CORE_RADIUS = 1
 
-export const LOOP_REENTRY_OFFSET = 5
+export const LOOP_REENTRY_OFFSET = 6
 
 export const WAYPOINTS_MAP: Record<ArenaSlotId, Position[]> = {
   P1: [
@@ -83,6 +83,10 @@ function clonePosition(position: Position): Position {
   return { x: position.x, y: position.y }
 }
 
+function clonePath(path: readonly Position[]) {
+  return path.map(clonePosition)
+}
+
 function isArenaCoreCell(x: number, y: number) {
   return Math.abs(x - ARENA_CORE_CENTER.x) <= ARENA_CORE_RADIUS && Math.abs(y - ARENA_CORE_CENTER.y) <= ARENA_CORE_RADIUS
 }
@@ -122,8 +126,35 @@ export function getArenaLoopStartIndex(path: readonly Position[]) {
   return Math.max(0, path.length - LOOP_REENTRY_OFFSET)
 }
 
+function appendHubApproach(path: Position[], hub: Position) {
+  const nextPath = clonePath(path)
+  const last = nextPath[nextPath.length - 1]
+
+  if (!last) {
+    return [clonePosition(hub)]
+  }
+
+  if (last.x !== hub.x) {
+    nextPath.push({ x: hub.x, y: last.y })
+  }
+
+  if (nextPath[nextPath.length - 1].y !== hub.y) {
+    nextPath.push({ x: hub.x, y: hub.y })
+  }
+
+  return nextPath
+}
+
+export function createArenaEnemyLanePath(slot: ArenaSlotId): Position[] {
+  return clonePath(WAYPOINTS_MAP[slot])
+}
+
+export function getArenaLaneSpawnPoint(slot: ArenaSlotId): Position {
+  return clonePosition(WAYPOINTS_MAP[slot][0])
+}
+
 export function getArenaPrimarySpawnPoint(): Position {
-  return clonePosition(WAYPOINTS_MAP.P1[0])
+  return getArenaLaneSpawnPoint('P1')
 }
 
 export function getArenaPrimaryBasePoint(): Position {
@@ -161,7 +192,7 @@ export function createArenaMapCells(width: number, height: number): GridMapCell[
   const gateByKey = new Map<string, string>()
 
   for (const slot of ARENA_SLOT_ORDER) {
-    const spawn = WAYPOINTS_MAP[slot][0]
+    const spawn = getArenaLaneSpawnPoint(slot)
     gateByKey.set(positionKey(spawn.x, spawn.y), slot.toLowerCase())
   }
 

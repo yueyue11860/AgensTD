@@ -64,6 +64,9 @@ interface SerializedRoomGameState {
   }>
   currentWave: GameState['wave']
   overloadTicks: number
+  overloadCountdownSec: number
+  maxCapacity: number
+  result: GameState['result']
 }
 
 const DEFAULT_ROOM_ID = 'public-1'
@@ -571,6 +574,9 @@ export class SocketGateway {
       })),
       currentWave: state.wave,
       overloadTicks: state.overloadTicks,
+      overloadCountdownSec: state.overloadCountdownSec,
+      maxCapacity: state.maxCapacity,
+      result: state.result,
     }
   }
 

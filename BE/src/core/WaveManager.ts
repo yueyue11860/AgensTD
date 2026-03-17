@@ -49,9 +49,7 @@ export class WaveManager {
     this.spawnMultiplier = this.normalizeSpawnMultiplier(options?.spawnMultiplier ?? 1)
 
     if (this.waves.length === 0) {
-      this.state = 'CLEARING'
-      this.currentWaveIndex = -1
-      this.timer = 0
+      this.triggerVictoryOnce()
       return
     }
 
@@ -169,28 +167,19 @@ export class WaveManager {
     this.currentWaveElapsedTicks += 1
 
     if (this.areAllGroupsCompleted(wave)) {
-      this.state = 'CLEARING'
-      this.timer = 0
+      const hasNextWave = this.currentWaveIndex + 1 < this.waves.length
+      if (!hasNextWave) {
+        // 最后一波出完，进入清场模式等待場上怪物全部消灯再判定胜利
+        this.state = 'CLEARING'
+        return
+      }
+
+      this.currentWaveIndex += 1
+      this.enterPrepStateForCurrentWave()
       return
     }
 
     this.currentWaveTick += 1
-  }
-
-  private updateClearingState() {
-    if (!this.callbacks.isMapClear()) {
-      this.currentWaveElapsedTicks += 1
-      return
-    }
-
-    const hasNextWave = this.currentWaveIndex + 1 < this.waves.length
-    if (!hasNextWave) {
-      this.triggerVictoryOnce()
-      return
-    }
-
-    this.currentWaveIndex += 1
-    this.enterPrepStateForCurrentWave()
   }
 
   private areAllGroupsCompleted(wave: WaveConfig) {
@@ -203,6 +192,12 @@ export class WaveManager {
     }
 
     return true
+  }
+
+  private updateClearingState() {
+    if (this.callbacks.isMapClear()) {
+      this.triggerVictoryOnce()
+    }
   }
 
   private enterPrepStateForCurrentWave() {
