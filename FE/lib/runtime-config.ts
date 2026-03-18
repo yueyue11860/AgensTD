@@ -56,6 +56,12 @@ export function resolveGatewayToken() {
     return null
   }
 
+  // 优先使用 OAuth session token
+  try {
+    const sessionToken = localStorage.getItem('agenstd_session_token')
+    if (sessionToken) return sessionToken
+  } catch { /* ignore */ }
+
   const configuredToken = readConfiguredValue('VITE_GATEWAY_TOKEN', 'WS_TOKEN')
   if (configuredToken) {
     return configuredToken
@@ -101,6 +107,15 @@ export function resolveSupabaseAnonKey() {
  * 开发模式下回退到 'human-dev'（与 BE 默认 authTokens 对齐）。
  */
 export function resolvePlayerId(): string | null {
+  // 优先使用 OAuth 用户 ID
+  try {
+    const userJson = localStorage.getItem('agenstd_auth_user')
+    if (userJson) {
+      const user = JSON.parse(userJson) as { userId?: string }
+      if (user.userId) return user.userId
+    }
+  } catch { /* ignore */ }
+
   const configured = readConfiguredValue('VITE_PLAYER_ID', 'PLAYER_ID')
   if (configured) {
     return configured

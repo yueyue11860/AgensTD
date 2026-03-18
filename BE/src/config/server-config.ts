@@ -26,6 +26,9 @@ export interface ServerConfig {
   persistenceFlushEveryTicks: number
   supabaseUrl: string | null
   supabaseServiceRoleKey: string | null
+  oauthClientId: string
+  oauthClientSecret: string
+  oauthRedirectUri: string
   authTokens: AuthTokenConfig[]
   waveConfigs: WaveConfig[]
 }
@@ -97,6 +100,9 @@ export function createServerConfig(): ServerConfig {
     persistenceFlushEveryTicks: readNumber('PERSISTENCE_FLUSH_EVERY_TICKS', 10),
     supabaseUrl: readString('SUPABASE_URL'),
     supabaseServiceRoleKey: readString('SUPABASE_SERVICE_ROLE_KEY'),
+    oauthClientId: process.env.OAUTH_CLIENT_ID ?? '',
+    oauthClientSecret: process.env.OAUTH_CLIENT_SECRET ?? '',
+    oauthRedirectUri: process.env.OAUTH_REDIRECT_URI ?? 'http://localhost:5173/auth/callback',
     authTokens: buildAuthTokens(),
     waveConfigs: defaultWaveConfigs,
   }

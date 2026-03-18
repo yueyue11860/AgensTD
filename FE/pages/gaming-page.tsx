@@ -82,8 +82,8 @@ interface BuildOption {
 const BUILD_OPTIONS: BuildOption[] = [
   { type: '箭塔:1', label: '箭塔 1级', cost: 1, width: 1, height: 1, accentClassName: 'gaming-build-chip-cyan' },
   { type: '冰塔:1', label: '冰塔 1级', cost: 2, width: 1, height: 1, accentClassName: 'gaming-build-chip-blue' },
-  { type: '炮塔:1', label: '炮塔 1级', cost: 2, width: 1, height: 2, accentClassName: 'gaming-build-chip-orange' },
-  { type: '激光塔:1', label: '激光塔 1级', cost: 3, width: 1, height: 2, accentClassName: 'gaming-build-chip-red' },
+  { type: '炮塔:1', label: '炮塔 1级', cost: 2, width: 1, height: 1, accentClassName: 'gaming-build-chip-orange' },
+  { type: '激光塔:1', label: '激光塔 1级', cost: 3, width: 1, height: 1, accentClassName: 'gaming-build-chip-red' },
 ]
 
 const BUILD_OPTIONS_BY_TYPE = new Map(BUILD_OPTIONS.map((option) => [option.type, option]))

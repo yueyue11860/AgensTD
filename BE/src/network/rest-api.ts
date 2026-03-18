@@ -332,14 +332,14 @@ export function createRestApiRouter(
 
   // ── GET /leaderboard/level5 — Level 5 大师排行榜 ───────────────────────────
   // 只返回 level5ClearCount > 0 的玩家，按通关次数降序，包含名次与硅基/碳基标识。
-  router.get('/leaderboard/level5', (request, response) => {
+  router.get('/leaderboard/level5', async (request, response) => {
     const principal = resolvePrincipal(request, config)
     if (!principal) {
       rejectUnauthorized(response)
       return
     }
 
-    const leaderboard = progressStore.getLevel5Leaderboard()
+    const leaderboard = await progressStore.getLevel5LeaderboardAsync()
     response.json({ ok: true, leaderboard })
   })
 

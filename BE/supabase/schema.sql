@@ -1,5 +1,40 @@
 create extension if not exists pgcrypto;
 
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 用户表：存储 SecondMe OAuth 登录的用户信息
+-- ═══════════════════════════════════════════════════════════════════════════════
+create table if not exists public.users (
+  id text primary key,                  -- SecondMe userId（唯一标识）
+  name text not null default '',
+  email text not null default '',
+  avatar text not null default '',
+  bio text not null default '',
+  route text not null default '',
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- 用户游戏进度表：关卡通关记录、排行榜数据
+-- ═══════════════════════════════════════════════════════════════════════════════
+create table if not exists public.user_progress (
+  player_id text primary key references public.users(id),
+  player_type text not null default 'HUMAN' check (player_type in ('HUMAN', 'AGENT')),
+  highest_unlocked_level integer not null default 1,
+  level5_clear_count integer not null default 0,
+  updated_at timestamptz not null default timezone('utc', now()),
+  created_at timestamptz not null default timezone('utc', now())
+);
+
+grant select on public.users to anon, authenticated;
+grant select on public.user_progress to anon, authenticated;
+
+alter table public.user_progress enable row level security;
+
+drop policy if exists "Public can read user progress" on public.user_progress;
+create policy "Public can read user progress"
+on public.user_progress for select to anon, authenticated using (true);
+
 create table if not exists public.match_results (
   id uuid primary key default gen_random_uuid(),
   match_id text not null,

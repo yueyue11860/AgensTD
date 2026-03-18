@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { AuthCallbackPage } from './pages/auth-callback-page'
 import { GamingPage } from './pages/gaming-page'
 import { TowerDefenseFrontendPage } from './pages/tower-defense-frontend-page'
 import './app/globals.css'
@@ -17,6 +18,7 @@ createRoot(rootElement).render(
       <Routes>
         <Route path="/" element={<Navigate to="/home" replace />} />
         <Route path="/home" element={<TowerDefenseFrontendPage />} />
+        <Route path="/auth/callback" element={<AuthCallbackPage />} />
         <Route path="/room" element={<TowerDefenseFrontendPage />} />
         <Route path="/room/:roomId" element={<TowerDefenseFrontendPage />} />
         <Route path="/leaderboard" element={<TowerDefenseFrontendPage />} />

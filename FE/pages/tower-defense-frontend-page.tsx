@@ -24,6 +24,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useCompetitionData } from '../hooks/use-competition-data'
 import { useGameEngine } from '../hooks/use-game-engine'
 import { useRoomLobbyData, type RoomPlayerSlot, type RoomSummary } from '../hooks/use-room-lobby-data'
+import { useAuth } from '../hooks/use-auth'
 import { cx } from '../lib/cx'
 import { resolvePlayerId, resolvePlayerKind } from '../lib/runtime-config'
 
@@ -574,6 +575,7 @@ export function TowerDefenseFrontendPage() {
   const suppressAutoResumeRef = useRef(false)
   const previousRoomPhaseRef = useRef<ReturnType<typeof useGameEngine>['roomPhase']>(null)
   const currentView = resolveCurrentView(location.pathname)
+  const { user: authUser, isLoggedIn, login: oauthLogin, logout: oauthLogout, isLoading: authLoading } = useAuth()
   const playerId = useRef(resolvePlayerId() ?? 'human-dev').current
   const playerKind = useRef(resolvePlayerKind()).current
   const { rooms, isLoadingRooms, roomsError, refreshRooms, createRoom } = useRoomLobbyData()
@@ -804,6 +806,35 @@ export function TowerDefenseFrontendPage() {
   if (currentView === 'HOME') {
     return (
       <main className="relative h-screen w-screen overflow-hidden bg-[#020408]">
+        {/* 右上角登录/用户信息 */}
+        <div className="absolute right-6 top-6 z-30 flex items-center gap-3">
+          {authLoading ? (
+            <span className="text-xs text-cyan-200/50">加载中...</span>
+          ) : isLoggedIn && authUser ? (
+            <div className="flex items-center gap-3">
+              {authUser.avatar && (
+                <img src={authUser.avatar} alt="" className="h-8 w-8 rounded-full border border-cyan-400/40" />
+              )}
+              <span className="text-sm text-cyan-100">{authUser.name || authUser.userId}</span>
+              <button
+                type="button"
+                onClick={() => void oauthLogout()}
+                className="rounded border border-slate-600/50 px-3 py-1 text-xs text-slate-400 hover:border-red-400/50 hover:text-red-300 transition-colors"
+              >
+                登出
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void oauthLogin()}
+              className="rounded border border-cyan-400/40 bg-cyan-400/10 px-5 py-2 text-sm font-medium text-cyan-200 shadow-[0_0_20px_rgba(34,211,238,0.15)] hover:bg-cyan-400/20 transition-colors"
+            >
+              SecondMe 登录
+            </button>
+          )}
+        </div>
+
         <div className="split-home-logo">
           <h1 className="split-home-title">Myriad TD</h1>
         </div>

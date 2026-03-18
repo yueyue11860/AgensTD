@@ -220,7 +220,7 @@ async function main() {
   }
 
   for (let index = 0; index < 10; index += 1) {
-    const cell = reserveFootprintCell(2, 2)
+    const cell = reserveBuildCell()
     await submitAction({
       action: 'BUILD_TOWER',
       type: levelThreeMagicType,
@@ -281,7 +281,7 @@ async function main() {
       && finalState.wave?.index !== undefined
       && finalState.wave.index <= 2
     ) {
-      const cell = reserveFootprintCell(2, 2)
+      const cell = reserveBuildCell()
       await submitAction({
         action: 'BUILD_TOWER',
         type: levelThreeMagicType,
