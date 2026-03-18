@@ -1,0 +1,26 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "CommonJS",
+		"moduleResolution": "Node",
+		"rootDir": "..",
+		"outDir": "dist",
+		"strict": true,
+		"esModuleInterop": true,
+		"allowSyntheticDefaultImports": true,
+		"forceConsistentCasingInFileNames": true,
+		"skipLibCheck": true,
+		"resolveJsonModule": true,
+		"types": ["node"]
+	},
+	"include": [
+		"../shared/contracts/**/*.ts",
+		"src/server.ts",
+		"src/config/**/*.ts",
+		"src/core/**/*.ts",
+		"src/data/**/*.ts",
+		"src/domain/**/*.ts",
+		"src/network/**/*.ts"
+	],
+	"exclude": ["dist", "node_modules", "scripts", "src/game", "src/gateway", "src/supabase"]
+}
