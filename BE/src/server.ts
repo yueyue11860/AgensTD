@@ -13,10 +13,8 @@ import { SupabaseCompetitionStore } from './data/supabase-competition-store'
 import { ActionRateLimiter } from './network/action-rate-limiter'
 import { createAgentApiRouter } from './network/agent-api'
 import { createRestApiRouter } from './network/rest-api'
-import { createOAuthRouter } from './network/oauth-routes'
 import { SocketGateway } from './network/socket-gateway'
 import { ProgressStore } from './data/progress-store'
-import { SupabaseUserStore } from './data/supabase-user-store'
 
 const config = createServerConfig()
 const app = express()
@@ -68,11 +66,8 @@ const projectedTickStream = new ProjectedTickStream(engine, config, performanceT
 const replayRecorder = new ReplayRecorder(engine, projectedTickStream, config, competitionStore, performanceTelemetry)
 const actionLimiter = new ActionRateLimiter(config.actionRateLimitWindowMs, config.actionRateLimitMax)
 const progressStore = new ProgressStore()
-const userStore = new SupabaseUserStore(config)
-progressStore.setUserStore(userStore)
 const gateway = new SocketGateway(httpServer, roomManager, config, performanceTelemetry, actionLimiter, progressStore)
 
-app.use('/api', createOAuthRouter(config, userStore))
 app.use('/api', createRestApiRouter(engine, roomManager, config, actionLimiter, replayRecorder, competitionStore, progressStore))
 app.use('/api/agent', createAgentApiRouter(projectedTickStream, config, replayRecorder, competitionStore, performanceTelemetry))
 

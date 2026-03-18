@@ -1,6 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { ServerConfig } from '../config/server-config'
-import type { SecondMeUser } from '../domain/user'
 import type { UserProgress, PlayerType } from '../domain/progress'
 
 export class SupabaseUserStore {
@@ -18,30 +17,6 @@ export class SupabaseUserStore {
 
   isEnabled(): boolean {
     return this.client !== null
-  }
-
-  /** 写入或更新用户信息 */
-  async upsertUser(user: SecondMeUser): Promise<void> {
-    if (!this.client) return
-
-    const { error } = await this.client
-      .from('users')
-      .upsert(
-        {
-          id: user.userId,
-          name: user.name,
-          email: user.email,
-          avatar: user.avatar,
-          bio: user.bio,
-          route: user.route,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'id' },
-      )
-
-    if (error) {
-      console.error('upsertUser failed:', error.message)
-    }
   }
 
   /** 查询用户进度，不存在则创建默认记录 */
