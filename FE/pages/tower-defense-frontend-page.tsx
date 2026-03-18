@@ -575,7 +575,7 @@ export function TowerDefenseFrontendPage() {
   const suppressAutoResumeRef = useRef(false)
   const previousRoomPhaseRef = useRef<ReturnType<typeof useGameEngine>['roomPhase']>(null)
   const currentView = resolveCurrentView(location.pathname)
-  const { user: authUser, isLoggedIn, login: oauthLogin, logout: oauthLogout, isLoading: authLoading } = useAuth()
+  const { user: authUser, logout: oauthLogout } = useAuth()
   const playerId = useRef(resolvePlayerId() ?? 'human-dev').current
   const playerKind = useRef(resolvePlayerKind()).current
   const { rooms, isLoadingRooms, roomsError, refreshRooms, createRoom } = useRoomLobbyData()
@@ -586,6 +586,7 @@ export function TowerDefenseFrontendPage() {
   const [newRoomName, setNewRoomName] = useState('')
   const [newRoomPassword, setNewRoomPassword] = useState('')
   const [countdownValue, setCountdownValue] = useState<number | null>(null)
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
   const activeRoomId = routeRoomId ? decodeURIComponent(routeRoomId) : selectedRoomId
 
   const {
@@ -806,31 +807,110 @@ export function TowerDefenseFrontendPage() {
   if (currentView === 'HOME') {
     return (
       <main className="relative h-screen w-screen overflow-hidden bg-[#020408]">
-        {/* 右上角登录/用户信息 */}
-        <div className="absolute right-6 top-6 z-30 flex items-center gap-3">
-          {authLoading ? (
-            <span className="text-xs text-cyan-200/50">加载中...</span>
-          ) : isLoggedIn && authUser ? (
-            <div className="flex items-center gap-3">
-              {authUser.avatar && (
-                <img src={authUser.avatar} alt="" className="h-8 w-8 rounded-full border border-cyan-400/40" />
-              )}
-              <span className="text-sm text-cyan-100">{authUser.name || authUser.userId}</span>
+        {/* 右上角登录区域 */}
+        <div className="absolute right-5 top-5 z-30">
+          {authUser ? (
+            // 已登录：头像 + 右键展开菜单
+            <div className="relative">
               <button
                 type="button"
-                onClick={() => void oauthLogout()}
-                className="rounded border border-slate-600/50 px-3 py-1 text-xs text-slate-400 hover:border-red-400/50 hover:text-red-300 transition-colors"
+                onClick={() => setUserMenuOpen((v) => !v)}
+                className="flex items-center gap-2 rounded-sm px-2 py-1 transition-colors hover:bg-sky-400/10"
+                aria-label="用户菜单"
               >
-                登出
+                {authUser.avatar ? (
+                  <img
+                    src={authUser.avatar}
+                    alt=""
+                    className="h-8 w-8 rounded-full object-cover"
+                    style={{ border: '1px solid rgba(56,189,248,0.55)', boxShadow: '0 0 10px rgba(56,189,248,0.35)' }}
+                  />
+                ) : (
+                  <div
+                    className="flex h-8 w-8 items-center justify-center rounded-full font-bold text-xs text-sky-300"
+                    style={{ border: '1px solid rgba(56,189,248,0.55)', background: 'rgba(56,189,248,0.12)' }}
+                  >
+                    {(authUser.name || authUser.userId).slice(0, 1).toUpperCase()}
+                  </div>
+                )}
+                <span className="font-mono text-xs tracking-wider text-sky-200/75 max-w-[120px] truncate">
+                  {authUser.name || authUser.userId}
+                </span>
+                <svg className={cx('h-3 w-3 text-sky-400/50 transition-transform', userMenuOpen && 'rotate-180')} viewBox="0 0 10 6" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M1 1l4 4 4-4" /></svg>
               </button>
+
+              {/* 下拉弹出菜单 */}
+              {userMenuOpen && (
+                <>
+                  {/* 芹点关闭遮罩 */}
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setUserMenuOpen(false)}
+                  />
+                  <div
+                    className="absolute right-0 top-full z-50 mt-2 w-64"
+                    style={{
+                      border: '1px solid rgba(56,189,248,0.25)',
+                      background: 'rgba(2,8,20,0.92)',
+                      backdropFilter: 'blur(12px)',
+                      boxShadow: '0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(56,189,248,0.08)',
+                    }}
+                  >
+                    {/* 用户信息头部 */}
+                    <div className="flex items-center gap-3 p-4" style={{ borderBottom: '1px solid rgba(56,189,248,0.12)' }}>
+                      {authUser.avatar ? (
+                        <img src={authUser.avatar} alt="" className="h-10 w-10 rounded-full object-cover flex-shrink-0" style={{ border: '1px solid rgba(56,189,248,0.4)' }} />
+                      ) : (
+                        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full font-bold text-sm text-sky-300" style={{ border: '1px solid rgba(56,189,248,0.4)', background: 'rgba(56,189,248,0.1)' }}>
+                          {(authUser.name || authUser.userId).slice(0, 1).toUpperCase()}
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-semibold text-sm text-white">{authUser.name || authUser.userId}</p>
+                        <p className="font-mono text-[0.6rem] text-sky-400/50 tracking-wider mt-0.5">IDENTITY VERIFIED</p>
+                      </div>
+                    </div>
+                    {/* ID 信息行 */}
+                    <div className="px-4 py-3" style={{ borderBottom: '1px solid rgba(56,189,248,0.08)' }}>
+                      <p className="font-mono text-[0.6rem] text-sky-400/40 tracking-widest mb-1">PLAYER_ID</p>
+                      <p className="font-mono text-xs text-sky-300/80 truncate">{authUser.userId}</p>
+                    </div>
+                    {/* 登出按钮 */}
+                    <div className="p-2">
+                      <button
+                        type="button"
+                        onClick={() => { setUserMenuOpen(false); void oauthLogout() }}
+                        className="w-full px-3 py-2 text-left font-mono text-xs tracking-wider text-red-400/70 transition-colors hover:bg-red-500/10 hover:text-red-300"
+                      >
+                        &gt;_ TERMINATE_SESSION
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           ) : (
+            // 未登录：登录按钮
             <button
               type="button"
-              onClick={() => void oauthLogin()}
-              className="rounded border border-cyan-400/40 bg-cyan-400/10 px-5 py-2 text-sm font-medium text-cyan-200 shadow-[0_0_20px_rgba(34,211,238,0.15)] hover:bg-cyan-400/20 transition-colors"
+              onClick={() => navigate('/login')}
+              className="font-mono text-xs tracking-[0.18em] uppercase transition-all"
+              style={{
+                padding: '8px 18px',
+                border: '1px solid rgba(56,189,248,0.45)',
+                color: 'rgb(186,230,253)',
+                background: 'transparent',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'rgba(56,189,248,0.15)'
+                e.currentTarget.style.boxShadow = '0 0 18px rgba(56,189,248,0.3)'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent'
+                e.currentTarget.style.boxShadow = 'none'
+              }}
             >
-              SecondMe 登录
+              [ LOGIN ]
             </button>
           )}
         </div>
@@ -845,7 +925,14 @@ export function TowerDefenseFrontendPage() {
             title="HUMAN PLAYER"
             description=""
             actionLabel="ENTER LOBBY ›"
-            onClick={() => navigateToView('LOBBY')}
+            onClick={() => {
+              if (!authUser) {
+                // 未登录，跳转登录页，登录后回到大厅
+                navigate('/login', { state: { from: '/room' } })
+                return
+              }
+              navigateToView('LOBBY')
+            }}
           />
 
           <PlayerCard
