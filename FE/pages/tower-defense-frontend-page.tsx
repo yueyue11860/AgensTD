@@ -46,7 +46,7 @@ function isRoomNavigationState(value: unknown): value is RoomNavigationState {
 const HOME_NAV_ITEMS: NavItem[] = [
   { label: '首页', view: 'HOME', icon: House },
   { label: '排行榜', view: 'LEADERBOARD', icon: Trophy },
-  { label: '热门回放', view: 'HOT_REPLAYS', icon: Clapperboard },
+  // { label: '热门回放', view: 'HOT_REPLAYS', icon: Clapperboard }, // 暂时隐藏，后续按需开启
 ]
 
 const AGENT_SKILL_DOC = `# Agent Player 接入说明
@@ -674,7 +674,7 @@ export function TowerDefenseFrontendPage() {
     const room = rooms.find((candidate) => candidate.id === activeRoomId)
 
     if (!room) {
-      if (isLoadingRooms || connectionState === 'connecting' || (isConnected && roomPhase !== null)) {
+      if (isLoadingRooms || connectionState === 'connecting' || (isConnected && roomPhase !== null) || suppressAutoResumeRef.current) {
         return
       }
 

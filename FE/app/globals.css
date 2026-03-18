@@ -1648,6 +1648,32 @@ body.crisis-overload-active {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 36px rgba(15, 23, 42, 0.34);
 }
 
+.gaming-exit-fab {
+  position: fixed;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 50;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  background: rgba(27, 10, 18, 0.72);
+  padding: 0.35rem 0.75rem;
+  color: rgba(254, 226, 226, 0.75);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.gaming-exit-fab:hover {
+  color: #fee2e2;
+  border-color: rgba(248, 113, 113, 0.55);
+  background: rgba(76, 18, 30, 0.72);
+}
+
 .gaming-board-frame {
   width: var(--gaming-board-size);
   max-width: 100%;

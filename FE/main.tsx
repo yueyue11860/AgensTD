@@ -20,7 +20,7 @@ createRoot(rootElement).render(
         <Route path="/room" element={<TowerDefenseFrontendPage />} />
         <Route path="/room/:roomId" element={<TowerDefenseFrontendPage />} />
         <Route path="/leaderboard" element={<TowerDefenseFrontendPage />} />
-        <Route path="/hot-replays" element={<TowerDefenseFrontendPage />} />
+        {/* <Route path="/hot-replays" element={<TowerDefenseFrontendPage />} /> */}{/* 暂时隐藏热门回放，后续按需开启 */}
         <Route path="/skill" element={<TowerDefenseFrontendPage />} />
         <Route path="/gaming" element={<GamingPage />} />
         <Route path="*" element={<Navigate to="/home" replace />} />

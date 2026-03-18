@@ -51,6 +51,8 @@ export interface WaveState {
   startedAtTick: number
   endsAtTick: number | null
   remainingSpawns: number
+  /** 准备阶段(PREP)距下一波出怪的倒计时秒数，出怪中或清场时为 0 */
+  prepCountdownSec: number
 }
 
 export interface MatchResultState {

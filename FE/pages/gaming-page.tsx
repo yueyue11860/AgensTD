@@ -40,6 +40,7 @@ interface ServerEnemyState {
 interface ServerWaveState {
   index: number
   label?: string
+  prepCountdownSec?: number
 }
 
 interface SelectedLevelInfo {
@@ -358,6 +359,7 @@ function normalizeSyncState(payload: unknown): ServerDrivenGameState | null {
       ? {
           index: currentWave.index,
           label: typeof currentWave.label === 'string' ? currentWave.label : undefined,
+          prepCountdownSec: typeof currentWave.prepCountdownSec === 'number' ? currentWave.prepCountdownSec : undefined,
         }
       : EMPTY_WAVE_STATE,
     result,
@@ -869,6 +871,10 @@ export function GamingPage() {
     <main className="gaming-page">
       <div className="cyber-background" />
       <div className="cyber-noise" />
+      <button type="button" onClick={() => setIsLeaveConfirmOpen(true)} className="gaming-exit-fab">
+        <OctagonX className="h-3.5 w-3.5" />
+        <span>退出</span>
+      </button>
       <CrisisWarning
         overloadTicks={gameState?.overloadTicks ?? 0}
         overloadCountdownSec={gameState?.overloadCountdownSec ?? 0}
@@ -967,7 +973,12 @@ export function GamingPage() {
                 <div className="gaming-status-row">
                   <ShieldAlert className="h-4 w-4 text-orange-300" />
                   <span>当前波次</span>
-                  <strong>{gameState?.currentWave.label ?? gameState?.currentWave.index ?? 0}</strong>
+                  <div className="flex flex-col items-end gap-0.5">
+                    <strong>{gameState?.currentWave.label ?? gameState?.currentWave.index ?? 0}</strong>
+                    {(gameState?.currentWave.prepCountdownSec ?? 0) > 0 && (
+                      <span className="text-xs text-amber-400 tabular-nums">出怪倒计时 {gameState!.currentWave.prepCountdownSec}s</span>
+                    )}
+                  </div>
                 </div>
               </div>
             </section>
@@ -1004,11 +1015,6 @@ export function GamingPage() {
                 <p className="mt-2 text-sm leading-6 text-slate-300">{selectedLevelInfo.description}</p>
               </section>
             ) : null}
-
-            <button type="button" onClick={() => setIsLeaveConfirmOpen(true)} className="gaming-exit-card">
-              <OctagonX className="h-5 w-5" />
-              <span>退出游戏</span>
-            </button>
           </aside>
         </div>
       </section>

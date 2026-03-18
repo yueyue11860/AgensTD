@@ -754,9 +754,14 @@ export class GameEngine {
         startedAtTick: 0,
         endsAtTick: null,
         remainingSpawns: 0,
+        prepCountdownSec: 0,
       }
       return
     }
+
+    const prepCountdownSec = snapshot.state === 'PREP'
+      ? Math.ceil(snapshot.timer * this.config.tickRateMs / 1000)
+      : 0
 
     const phaseLabel =
       snapshot.state === 'PREP'
@@ -771,6 +776,7 @@ export class GameEngine {
       startedAtTick: Math.max(0, this.state.tick - this.waveManager.getCurrentWaveElapsedTicks()),
       endsAtTick: null,
       remainingSpawns: snapshot.remainingSpawns,
+      prepCountdownSec,
     }
   }
 

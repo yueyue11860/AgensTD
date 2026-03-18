@@ -75,7 +75,7 @@ export interface LevelConfig {
 const level0Waves: WaveConfig[] = [
   {
     waveNumber: 1,
-    prepTime: 60,
+    prepTime: 300,
     groups: [
       // 5 只 Grunt，每 2 秒 1 只，极度宽松
       { enemyType: 'Grunt', count: 5, interval: 20, delay: 0 },
@@ -83,7 +83,7 @@ const level0Waves: WaveConfig[] = [
   },
   {
     waveNumber: 2,
-    prepTime: 50,
+    prepTime: 300,
     groups: [
       // 8 只 Grunt，每 1 秒 1 只，初步体验节奏
       { enemyType: 'Grunt', count: 8, interval: 10, delay: 0 },
@@ -91,7 +91,7 @@ const level0Waves: WaveConfig[] = [
   },
   {
     waveNumber: 3,
-    prepTime: 40,
+    prepTime: 300,
     groups: [
       // 10 只 Grunt，每 0.8 秒 1 只，结尾小高潮
       { enemyType: 'Grunt', count: 10, interval: 8, delay: 0 },
@@ -109,14 +109,14 @@ const level0Waves: WaveConfig[] = [
 const level1Waves: WaveConfig[] = [
   {
     waveNumber: 1,
-    prepTime: 30,
+    prepTime: 300,
     groups: [
       { enemyType: 'Grunt', count: 8, interval: 5, delay: 0 },
     ],
   },
   {
     waveNumber: 2,
-    prepTime: 25,
+    prepTime: 300,
     groups: [
       { enemyType: 'Grunt',     count: 10, interval: 4, delay: 0 },
       { enemyType: 'Speedster', count: 3,  interval: 8, delay: 10 },
@@ -124,7 +124,7 @@ const level1Waves: WaveConfig[] = [
   },
   {
     waveNumber: 3,
-    prepTime: 20,
+    prepTime: 300,
     groups: [
       { enemyType: 'Grunt',     count: 12, interval: 3, delay: 0 },
       { enemyType: 'Speedster', count: 5,  interval: 5, delay: 5 },
@@ -132,7 +132,7 @@ const level1Waves: WaveConfig[] = [
   },
   {
     waveNumber: 4,
-    prepTime: 20,
+    prepTime: 300,
     groups: [
       { enemyType: 'Grunt',     count: 15, interval: 3, delay: 0 },
       { enemyType: 'Speedster', count: 8,  interval: 4, delay: 3 },
@@ -140,7 +140,7 @@ const level1Waves: WaveConfig[] = [
   },
   {
     waveNumber: 5,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Grunt',     count: 18, interval: 3, delay: 0 },
       { enemyType: 'Speedster', count: 12, interval: 3, delay: 2 },
@@ -158,14 +158,14 @@ const level1Waves: WaveConfig[] = [
 const level2Waves: WaveConfig[] = [
   {
     waveNumber: 1,
-    prepTime: 25,
+    prepTime: 300,
     groups: [
       { enemyType: 'Grunt', count: 10, interval: 4, delay: 0 },
     ],
   },
   {
     waveNumber: 2,
-    prepTime: 20,
+    prepTime: 300,
     groups: [
       { enemyType: 'Grunt', count: 12, interval: 3, delay: 0 },
       { enemyType: 'Tank',  count: 2,  interval: 20, delay: 5 },
@@ -173,7 +173,7 @@ const level2Waves: WaveConfig[] = [
   },
   {
     waveNumber: 3,
-    prepTime: 20,
+    prepTime: 300,
     groups: [
       { enemyType: 'Grunt', count: 14, interval: 3, delay: 0 },
       { enemyType: 'Tank',  count: 3,  interval: 15, delay: 0 },
@@ -181,7 +181,7 @@ const level2Waves: WaveConfig[] = [
   },
   {
     waveNumber: 4,
-    prepTime: 18,
+    prepTime: 300,
     groups: [
       { enemyType: 'Grunt', count: 12, interval: 3, delay: 0 },
       { enemyType: 'Tank',  count: 4,  interval: 12, delay: 0 },
@@ -190,7 +190,7 @@ const level2Waves: WaveConfig[] = [
   },
   {
     waveNumber: 5,
-    prepTime: 18,
+    prepTime: 300,
     groups: [
       { enemyType: 'Grunt', count: 15, interval: 2, delay: 0 },
       { enemyType: 'Tank',  count: 5,  interval: 10, delay: 0 },
@@ -198,7 +198,7 @@ const level2Waves: WaveConfig[] = [
   },
   {
     waveNumber: 6,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Grunt-Armored', count: 10, interval: 5, delay: 0 },
       { enemyType: 'Tank',          count: 6,  interval: 9, delay: 0 },
@@ -207,7 +207,7 @@ const level2Waves: WaveConfig[] = [
   },
   {
     waveNumber: 7,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Grunt-Armored', count: 15, interval: 4, delay: 0 },
       { enemyType: 'Tank',          count: 6,  interval: 8, delay: 0 },
@@ -216,7 +216,7 @@ const level2Waves: WaveConfig[] = [
   },
   {
     waveNumber: 8,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Grunt-Armored', count: 12, interval: 3, delay: 0 },
       { enemyType: 'Tank-Fortress', count: 4,  interval: 20, delay: 0 },
@@ -236,7 +236,7 @@ const level2Waves: WaveConfig[] = [
 const level3Waves: WaveConfig[] = [
   {
     waveNumber: 1,
-    prepTime: 25,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone', count: 20, interval: 2, delay: 0 },
       { enemyType: 'Grunt',       count: 5,  interval: 6, delay: 5 },
@@ -244,7 +244,7 @@ const level3Waves: WaveConfig[] = [
   },
   {
     waveNumber: 2,
-    prepTime: 20,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone', count: 30, interval: 2, delay: 0 },
       { enemyType: 'Speedster',   count: 5,  interval: 5, delay: 0 },
@@ -252,7 +252,7 @@ const level3Waves: WaveConfig[] = [
   },
   {
     waveNumber: 3,
-    prepTime: 20,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone', count: 35, interval: 2, delay: 0 },
       { enemyType: 'Tank',        count: 3,  interval: 15, delay: 0 },
@@ -260,7 +260,7 @@ const level3Waves: WaveConfig[] = [
   },
   {
     waveNumber: 4,
-    prepTime: 18,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone', count: 40, interval: 2, delay: 0 },
       { enemyType: 'Swarm-Runner', count: 10, interval: 3, delay: 5 },
@@ -269,7 +269,7 @@ const level3Waves: WaveConfig[] = [
   },
   {
     waveNumber: 5,
-    prepTime: 18,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone',  count: 50, interval: 2, delay: 0 },
       { enemyType: 'Swarm-Runner', count: 15, interval: 2, delay: 0 },
@@ -278,7 +278,7 @@ const level3Waves: WaveConfig[] = [
   },
   {
     waveNumber: 6,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone',   count: 60, interval: 1, delay: 0 },
       { enemyType: 'Grunt-Armored', count: 8,  interval: 8, delay: 0 },
@@ -287,7 +287,7 @@ const level3Waves: WaveConfig[] = [
   },
   {
     waveNumber: 7,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone',  count: 70, interval: 1, delay: 0 },
       { enemyType: 'Swarm-Runner', count: 20, interval: 2, delay: 0 },
@@ -296,7 +296,7 @@ const level3Waves: WaveConfig[] = [
   },
   {
     waveNumber: 8,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone',   count: 80, interval: 1, delay: 0 },
       { enemyType: 'Grunt-Armored', count: 8,  interval: 6, delay: 0 },
@@ -305,7 +305,7 @@ const level3Waves: WaveConfig[] = [
   },
   {
     waveNumber: 9,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone',   count: 90, interval: 1, delay: 0 },
       { enemyType: 'Swarm-Runner',  count: 25, interval: 2, delay: 0 },
@@ -314,7 +314,7 @@ const level3Waves: WaveConfig[] = [
   },
   {
     waveNumber: 10,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone',   count: 100, interval: 1, delay: 0 },
       { enemyType: 'Swarm-Runner',  count: 30,  interval: 1, delay: 0 },
@@ -337,7 +337,7 @@ const level3Waves: WaveConfig[] = [
 const level4Waves: WaveConfig[] = [
   {
     waveNumber: 1,
-    prepTime: 25,
+    prepTime: 300,
     groups: [
       { enemyType: 'Shielded', count: 6,  interval: 8, delay: 0 },
       { enemyType: 'Grunt',    count: 8,  interval: 4, delay: 0 },
@@ -345,7 +345,7 @@ const level4Waves: WaveConfig[] = [
   },
   {
     waveNumber: 2,
-    prepTime: 20,
+    prepTime: 300,
     groups: [
       { enemyType: 'Shielded', count: 8,  interval: 6, delay: 0 },
       { enemyType: 'Cleanser', count: 3,  interval: 20, delay: 0 },
@@ -353,7 +353,7 @@ const level4Waves: WaveConfig[] = [
   },
   {
     waveNumber: 3,
-    prepTime: 20,
+    prepTime: 300,
     groups: [
       { enemyType: 'Shielded', count: 10, interval: 5, delay: 0 },
       { enemyType: 'Cleanser', count: 5,  interval: 15, delay: 0 },
@@ -362,7 +362,7 @@ const level4Waves: WaveConfig[] = [
   },
   {
     waveNumber: 4,
-    prepTime: 18,
+    prepTime: 300,
     groups: [
       { enemyType: 'Shielded', count: 12, interval: 5, delay: 0 },
       { enemyType: 'Cleanser', count: 6,  interval: 12, delay: 0 },
@@ -371,7 +371,7 @@ const level4Waves: WaveConfig[] = [
   },
   {
     waveNumber: 5,
-    prepTime: 18,
+    prepTime: 300,
     groups: [
       { enemyType: 'Shielded', count: 14, interval: 4, delay: 0 },
       { enemyType: 'Cleanser', count: 6,  interval: 10, delay: 0 },
@@ -380,7 +380,7 @@ const level4Waves: WaveConfig[] = [
   },
   {
     waveNumber: 6,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Shielded', count: 15, interval: 4, delay: 0 },
       { enemyType: 'Cleanser', count: 8,  interval: 9, delay: 0 },
@@ -389,7 +389,7 @@ const level4Waves: WaveConfig[] = [
   },
   {
     waveNumber: 7,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Shielded',      count: 18, interval: 3, delay: 0 },
       { enemyType: 'Cleanser',      count: 8,  interval: 8, delay: 0 },
@@ -399,7 +399,7 @@ const level4Waves: WaveConfig[] = [
   },
   {
     waveNumber: 8,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Shielded',      count: 20, interval: 3, delay: 0 },
       { enemyType: 'Cleanser',      count: 10, interval: 7, delay: 0 },
@@ -408,7 +408,7 @@ const level4Waves: WaveConfig[] = [
   },
   {
     waveNumber: 9,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Shielded',      count: 22, interval: 3, delay: 0 },
       { enemyType: 'Cleanser',      count: 10, interval: 7, delay: 0 },
@@ -418,7 +418,7 @@ const level4Waves: WaveConfig[] = [
   },
   {
     waveNumber: 10,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Shielded',     count: 25, interval: 3, delay: 0 },
       { enemyType: 'Cleanser',     count: 12, interval: 6, delay: 0 },
@@ -427,7 +427,7 @@ const level4Waves: WaveConfig[] = [
   },
   {
     waveNumber: 11,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Shielded',      count: 20, interval: 2, delay: 0 },
       { enemyType: 'Cleanser-Pro',  count: 10, interval: 10, delay: 0 },
@@ -436,7 +436,7 @@ const level4Waves: WaveConfig[] = [
   },
   {
     waveNumber: 12,
-    prepTime: 20,
+    prepTime: 300,
     groups: [
       // ── 终章 ──────────────────────────────────────────────────────────────
       // Lord-02 (hp:8000, shield:1000, armor:20)
@@ -461,7 +461,7 @@ const level4Waves: WaveConfig[] = [
 const level5Waves: WaveConfig[] = [
   {
     waveNumber: 1,
-    prepTime: 25,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone', count: 30, interval: 2, delay: 0 },
       { enemyType: 'Grunt',       count: 10, interval: 4, delay: 0 },
@@ -469,7 +469,7 @@ const level5Waves: WaveConfig[] = [
   },
   {
     waveNumber: 2,
-    prepTime: 20,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone',  count: 50, interval: 1, delay: 0 },
       { enemyType: 'Speedster',    count: 8,  interval: 3, delay: 0 },
@@ -477,7 +477,7 @@ const level5Waves: WaveConfig[] = [
   },
   {
     waveNumber: 3,
-    prepTime: 20,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone',  count: 60, interval: 1, delay: 0 },
       { enemyType: 'Swarm-Runner', count: 10, interval: 2, delay: 0 },
@@ -486,7 +486,7 @@ const level5Waves: WaveConfig[] = [
   },
   {
     waveNumber: 4,
-    prepTime: 18,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone',  count: 70, interval: 1, delay: 0 },
       { enemyType: 'Swarm-Runner', count: 15, interval: 2, delay: 0 },
@@ -495,7 +495,7 @@ const level5Waves: WaveConfig[] = [
   },
   {
     waveNumber: 5,
-    prepTime: 18,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone',  count: 60, interval: 1, delay: 0 },
       { enemyType: 'Shielded',     count: 10, interval: 6, delay: 0 },
@@ -504,7 +504,7 @@ const level5Waves: WaveConfig[] = [
   },
   {
     waveNumber: 6,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone',   count: 80, interval: 1, delay: 0 },
       { enemyType: 'Swarm-Runner',  count: 20, interval: 2, delay: 0 },
@@ -513,7 +513,7 @@ const level5Waves: WaveConfig[] = [
   },
   {
     waveNumber: 7,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone',  count: 80, interval: 1, delay: 0 },
       { enemyType: 'Shielded',     count: 12, interval: 5, delay: 0 },
@@ -523,7 +523,7 @@ const level5Waves: WaveConfig[] = [
   },
   {
     waveNumber: 8,
-    prepTime: 20,
+    prepTime: 300,
     groups: [
       // ── Lord-01 首次现身 ─────────────────────────────────────────────────
       { enemyType: 'Lord-01',      count: 1,  interval: 1,  delay: 0  },
@@ -533,7 +533,7 @@ const level5Waves: WaveConfig[] = [
   },
   {
     waveNumber: 9,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone',  count: 100, interval: 1, delay: 0 },
       { enemyType: 'Swarm-Runner', count: 25,  interval: 2, delay: 0 },
@@ -542,7 +542,7 @@ const level5Waves: WaveConfig[] = [
   },
   {
     waveNumber: 10,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone',   count: 100, interval: 1, delay: 0 },
       { enemyType: 'Cleanser-Pro',  count: 10,  interval: 8, delay: 0 },
@@ -551,7 +551,7 @@ const level5Waves: WaveConfig[] = [
   },
   {
     waveNumber: 11,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone',  count: 120, interval: 1, delay: 0 },
       { enemyType: 'Swarm-Runner', count: 30,  interval: 1, delay: 0 },
@@ -560,7 +560,7 @@ const level5Waves: WaveConfig[] = [
   },
   {
     waveNumber: 12,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone',   count: 100, interval: 1, delay: 0 },
       { enemyType: 'Swarm-Runner',  count: 25,  interval: 1, delay: 0 },
@@ -570,7 +570,7 @@ const level5Waves: WaveConfig[] = [
   },
   {
     waveNumber: 13,
-    prepTime: 20,
+    prepTime: 300,
     groups: [
       // ── Lord-02 中场决战 ─────────────────────────────────────────────────
       { enemyType: 'Lord-02',      count: 1,   interval: 1, delay: 0  },
@@ -580,7 +580,7 @@ const level5Waves: WaveConfig[] = [
   },
   {
     waveNumber: 14,
-    prepTime: 15,
+    prepTime: 300,
     groups: [
       { enemyType: 'Swarm-Drone',   count: 150, interval: 1, delay: 0 },
       { enemyType: 'Swarm-Runner',  count: 30,  interval: 1, delay: 0 },
@@ -590,7 +590,7 @@ const level5Waves: WaveConfig[] = [
   },
   {
     waveNumber: 15,
-    prepTime: 20,
+    prepTime: 300,
     groups: [
       // ── Lord-03 终局 (hp:12000, armor:10, speed:0.8) ─────────────────────
       { enemyType: 'Lord-03',      count: 1,   interval: 1, delay: 0  },
@@ -638,7 +638,7 @@ const level6Waves: WaveConfig[] = [
   {
     waveNumber: 1,
     // 准备时间 10 秒，给双人玩家协调布阵
-    prepTime: 100,
+    prepTime: 300,
     groups: [
       // ─ 高速流（15/sec）──────────────────────────────────────
       // Group A: 每 tick 1 只 → 10/sec, 持续 1800 tick

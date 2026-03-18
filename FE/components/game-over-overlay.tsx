@@ -91,7 +91,7 @@ export function GameOverOverlay({ outcome, currentLevelId, actionLog, onLeave }:
         <p className="game-over-subtitle">
           {isVictory
             ? `Level ${currentLevelId ?? '?'} 防线稳固，抵御成功`
-            : '防线被突破，返回大厅重新部署'}
+            : '防线被突破，返回节点重新部署'}
         </p>
 
         {/* ── 录像上传状态（仅 L5/L6 胜利显示） ────────────────────────── */}
@@ -134,7 +134,7 @@ export function GameOverOverlay({ outcome, currentLevelId, actionLog, onLeave }:
               isVictory ? 'game-over-btn-victory' : 'game-over-btn-defeat',
             )}
           >
-            返回大厅
+            返回节点
           </button>
         </div>
       </div>
