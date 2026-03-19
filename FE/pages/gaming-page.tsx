@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Coins, OctagonX, Play, RadioTower, ShieldAlert, Skull } from 'lucide-react'
+import { Coins, OctagonX, RadioTower, ShieldAlert, Skull } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { io, type Socket } from 'socket.io-client'
 import { GameOverOverlay } from '../components/game-over-overlay'
 import { MissionBriefingModal } from '../components/mission-briefing-modal'
 import { cx } from '../lib/cx'
-import { resolveGatewayToken, resolvePlayerId, resolvePlayerKind, resolveSocketUrl } from '../lib/runtime-config'
+import { LEVEL_DEFS } from '../lib/level-defs'
+import { resolveGatewayToken, resolvePlayerId, resolvePlayerKind, resolvePlayerName, resolveSocketUrl } from '../lib/runtime-config'
 
 const BOARD_DIMENSION = 29
 const DEFAULT_ROOM_ID = 'public-1'
@@ -176,6 +177,21 @@ function makeCoordKey(x: number, y: number) {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isRoomSnapshotPayload(value: unknown): value is {
+  id: string
+  slots: Array<{
+    slotId: string
+    playerId: string | null
+    isHost: boolean
+  }>
+} {
+  if (!isObject(value) || typeof value.id !== 'string' || !Array.isArray(value.slots)) {
+    return false
+  }
+
+  return value.slots.every((slot) => isObject(slot) && typeof slot.slotId === 'string' && typeof slot.isHost === 'boolean')
 }
 
 function isReferenceCoreCell(x: number, y: number) {
@@ -636,18 +652,47 @@ export function GamingPage() {
   const socketUrl = useMemo(() => resolveSocketUrl(), [])
   const gatewayToken = useMemo(() => resolveGatewayToken(), [])
   const playerId = useMemo(() => resolvePlayerId() ?? 'human-dev', [])
+  const playerName = useMemo(() => resolvePlayerName() ?? playerId, [playerId])
   const playerKind = resolvePlayerKind()
   const socketRef = useRef<Socket | null>(null)
   const [gameState, setGameState] = useState<ServerDrivenGameState | null>(null)
+  const [roomPhase, setRoomPhase] = useState<RoomPhase>('lobby')
   const [selectedBuildType, setSelectedBuildType] = useState<string | null>(BUILD_OPTIONS[0]?.type ?? null)
   const [hoveredCell, setHoveredCell] = useState<{ x: number; y: number } | null>(null)
   const [selectedTowerId, setSelectedTowerId] = useState<string | null>(null)
   const [isLeaveConfirmOpen, setIsLeaveConfirmOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedLevelInfo, setSelectedLevelInfo] = useState<SelectedLevelInfo | null>(null)
+  const [pendingLevelId, setPendingLevelId] = useState<number | null>(null)
+  const [missionBriefingDismissed, setMissionBriefingDismissed] = useState(false)
   const [mySlot, setMySlot] = useState<string | null>(null)
+  const [hostPlayerId, setHostPlayerId] = useState<string | null>(null)
 
-  const isHost = mySlot === 'P1'
+  const isHost = hostPlayerId ? hostPlayerId === playerId : mySlot === 'P1'
+  const isAwaitingLevelSelection = roomPhase === 'waiting_for_level'
+    || ((roomPhase === 'lobby' || roomPhase === 'countdown') && gameState?.status === 'waiting')
+  const shouldShowMissionBriefing = !missionBriefingDismissed
+    && pendingLevelId === null
+    && !selectedLevelInfo
+    && !gameState?.result?.outcome
+    && isAwaitingLevelSelection
+  const selectedLevelPreview = selectedLevelInfo ?? (pendingLevelId !== null
+    ? (() => {
+        const pendingLevelDef = LEVEL_DEFS.find((level) => level.levelId === pendingLevelId)
+        if (!pendingLevelDef) {
+          return null
+        }
+
+        return {
+          levelId: pendingLevelDef.levelId,
+          label: pendingLevelDef.label,
+          description: pendingLevelDef.subtitle,
+          waveCount: 0,
+          targetClearRate: pendingLevelDef.clearRate,
+          minPlayers: pendingLevelDef.minPlayers,
+        }
+      })()
+    : null)
 
   const selectedTower = useMemo(() => {
     if (!gameState || !selectedTowerId) {
@@ -710,12 +755,22 @@ export function GamingPage() {
       }
 
       setGameState(nextState)
+      setRoomPhase(nextState.phase)
       setError(null)
     }
 
     const handleRoomJoined = (payload: unknown) => {
       if (isObject(payload) && typeof payload.slot === 'string') {
         setMySlot(payload.slot)
+      }
+      if (isObject(payload) && typeof payload.hostPlayerId === 'string') {
+        setHostPlayerId(payload.hostPlayerId)
+      }
+      if (isObject(payload) && typeof payload.phase === 'string') {
+        const phase = payload.phase === 'countdown' || payload.phase === 'waiting_for_level' || payload.phase === 'playing'
+          ? payload.phase as RoomPhase
+          : 'lobby' as RoomPhase
+        setRoomPhase(phase)
       }
     }
 
@@ -724,13 +779,13 @@ export function GamingPage() {
         return
       }
 
+      const newPhase = payload.phase === 'countdown' || payload.phase === 'waiting_for_level' || payload.phase === 'playing'
+        ? payload.phase as RoomPhase
+        : 'lobby' as RoomPhase
+
+      setRoomPhase(newPhase)
       setGameState((current) => current
-        ? {
-            ...current,
-            phase: payload.phase === 'countdown' || payload.phase === 'waiting_for_level' || payload.phase === 'playing'
-              ? payload.phase
-              : 'lobby',
-          }
+        ? { ...current, phase: newPhase }
         : current)
     }
 
@@ -744,6 +799,8 @@ export function GamingPage() {
         && typeof payload.targetClearRate === 'number'
         && typeof payload.minPlayers === 'number'
       ) {
+        setError(null)
+        setPendingLevelId(null)
         setSelectedLevelInfo({
           levelId: payload.levelId,
           label: payload.label,
@@ -755,12 +812,24 @@ export function GamingPage() {
       }
     }
 
+    const handleRoomSnapshot = (payload: unknown) => {
+      if (!isRoomSnapshotPayload(payload)) {
+        return
+      }
+
+      const myRoomSlot = payload.slots.find((slot) => slot.playerId === playerId) ?? null
+      const hostSlot = payload.slots.find((slot) => slot.isHost && typeof slot.playerId === 'string') ?? null
+
+      setMySlot(myRoomSlot?.slotId ?? null)
+      setHostPlayerId(hostSlot?.playerId ?? null)
+    }
+
     socket.on('connect', () => {
       setError(null)
       socket.emit('JOIN_ROOM', {
         roomId,
         playerId,
-        playerName: playerId,
+        playerName,
         playerKind,
       })
     })
@@ -773,6 +842,9 @@ export function GamingPage() {
     })
 
     socket.on('engine_error', (engineError: unknown) => {
+      setPendingLevelId(null)
+      setMissionBriefingDismissed(false)
+
       if (typeof engineError === 'string') {
         setError(engineError)
         return
@@ -785,18 +857,26 @@ export function GamingPage() {
 
     socket.on('SYNC_STATE', handleSyncState)
     socket.on('ROOM_JOINED', handleRoomJoined)
+    socket.on('ROOM_SNAPSHOT', handleRoomSnapshot)
     socket.on('ROOM_PHASE_CHANGED', handleRoomPhaseChanged)
     socket.on('LEVEL_SELECTED', handleLevelSelected)
 
     return () => {
       socket.off('SYNC_STATE', handleSyncState)
       socket.off('ROOM_JOINED', handleRoomJoined)
+      socket.off('ROOM_SNAPSHOT', handleRoomSnapshot)
       socket.off('ROOM_PHASE_CHANGED', handleRoomPhaseChanged)
       socket.off('LEVEL_SELECTED', handleLevelSelected)
       socket.disconnect()
       socketRef.current = null
     }
-  }, [gatewayToken, playerId, playerKind, roomId, socketUrl])
+  }, [gatewayToken, playerId, playerKind, playerName, roomId, socketUrl])
+
+  useEffect(() => {
+    if (roomPhase === 'playing' || gameState?.status === 'running') {
+      setPendingLevelId(null)
+    }
+  }, [gameState?.status, roomPhase])
 
   useEffect(() => {
     if (selectedTowerId && gameState && !gameState.towers.some((tower) => tower.id === selectedTowerId)) {
@@ -859,12 +939,16 @@ export function GamingPage() {
     })
   }
 
-  function handleStartMatch() {
-    if (!isHost) {
-      return
-    }
+  function handleSelectLevel(levelId: number) {
+    setError(null)
+    setPendingLevelId(levelId)
+    setMissionBriefingDismissed(true)
 
-    emitSocketEvent('START_MATCH')
+    const emitted = emitSocketEvent('SELECT_LEVEL', { levelId })
+    if (!emitted) {
+      setPendingLevelId(null)
+      setMissionBriefingDismissed(false)
+    }
   }
 
   return (
@@ -987,32 +1071,20 @@ export function GamingPage() {
               <p className="gaming-section-label">对局阶段</p>
               <div className="mt-3 space-y-3 text-sm text-slate-300">
                 <p>
-                  {gameState?.phase === 'lobby' && (isHost ? '等待房主下达开始指令。' : '等待房主开始游戏。')}
-                  {gameState?.phase === 'countdown' && '对局倒计时中，稍后进入关卡选择。'}
-                  {gameState?.phase === 'waiting_for_level' && '正在等待房主选择关卡。'}
-                  {gameState?.phase === 'playing' && '战斗进行中，敌人会按波次持续刷新。'}
-                  {!gameState && '等待战场状态同步。'}
+                  {(roomPhase === 'lobby' || roomPhase === 'countdown') && !shouldShowMissionBriefing && '战局启动中，等待战场同步…'}
+                  {pendingLevelId !== null && '关卡协议下发中，准备进入战斗…'}
+                  {pendingLevelId === null && roomPhase === 'waiting_for_level' && (isHost ? '请选择关卡以启动战局。' : '正在等待房主选择关卡。')}
+                  {roomPhase !== 'waiting_for_level' && shouldShowMissionBriefing && (isHost ? '请选择关卡以启动战局。' : '正在等待房主选择关卡。')}
+                  {roomPhase === 'playing' && '战斗进行中，敌人会按波次持续刷新。'}
                 </p>
-
-                {gameState?.phase === 'lobby' ? (
-                  <button
-                    type="button"
-                    onClick={handleStartMatch}
-                    disabled={!isHost}
-                    className={cx('gaming-action-button gaming-action-button-muted w-full justify-center', !isHost && 'opacity-50')}
-                  >
-                    <Play className="h-4 w-4" />
-                    <span>开始游戏</span>
-                  </button>
-                ) : null}
               </div>
             </section>
 
-            {selectedLevelInfo ? (
+            {selectedLevelPreview ? (
               <section className="gaming-panel-card">
                 <p className="gaming-section-label">已选关卡</p>
-                <h2 className="mt-2 text-lg font-semibold text-white">{selectedLevelInfo.label}</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-300">{selectedLevelInfo.description}</p>
+                <h2 className="mt-2 text-lg font-semibold text-white">{selectedLevelPreview.label}</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-300">{selectedLevelPreview.description}</p>
               </section>
             ) : null}
           </aside>
@@ -1038,11 +1110,11 @@ export function GamingPage() {
         </div>
       ) : null}
 
-      {gameState?.phase === 'waiting_for_level' ? (
+      {shouldShowMissionBriefing ? (
         <MissionBriefingModal
           isHost={isHost}
           playerKind={playerKind}
-          onSelectLevel={(levelId) => emitSocketEvent('SELECT_LEVEL', { levelId })}
+          onSelectLevel={handleSelectLevel}
           engineError={error}
         />
       ) : null}

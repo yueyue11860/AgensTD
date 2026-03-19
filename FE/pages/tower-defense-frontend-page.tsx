@@ -26,7 +26,7 @@ import { useGameEngine } from '../hooks/use-game-engine'
 import { useRoomLobbyData, type RoomPlayerSlot, type RoomSummary } from '../hooks/use-room-lobby-data'
 import { useAuth } from '../hooks/use-auth'
 import { cx } from '../lib/cx'
-import { resolvePlayerId, resolvePlayerKind } from '../lib/runtime-config'
+import { resolvePlayerId, resolvePlayerKind, resolvePlayerName } from '../lib/runtime-config'
 
 type CurrentView = 'HOME' | 'LOBBY' | 'ROOM' | 'LEADERBOARD' | 'HOT_REPLAYS' | 'SKILL_DOC'
 
@@ -218,6 +218,10 @@ function normalizePathname(pathname: string) {
   return pathname.replace(/\/+$/, '')
 }
 
+function withCurrentSearch(path: string, search: string) {
+  return search ? `${path}${search}` : path
+}
+
 function resolveCurrentView(pathname: string): CurrentView {
   const normalizedPath = normalizePathname(pathname)
 
@@ -384,7 +388,6 @@ function CountdownOverlay({ value }: { value: number }) {
   return (
     <div className="countdown-overlay">
       <div className="countdown-digit" key={value}>{value}</div>
-      <p className="mt-8 text-sm uppercase tracking-[0.52em] text-cyan-100/80">Match Starting</p>
     </div>
   )
 }
@@ -577,6 +580,7 @@ export function TowerDefenseFrontendPage() {
   const currentView = resolveCurrentView(location.pathname)
   const { user: authUser, logout: oauthLogout } = useAuth()
   const playerId = useRef(resolvePlayerId() ?? 'human-dev').current
+  const playerName = useRef(resolvePlayerName() ?? playerId).current
   const playerKind = useRef(resolvePlayerKind()).current
   const { rooms, isLoadingRooms, roomsError, refreshRooms, createRoom } = useRoomLobbyData()
   const [selectedRoomId, setSelectedRoomId] = useState<string>('')
@@ -591,6 +595,7 @@ export function TowerDefenseFrontendPage() {
 
   const {
     socketUrl,
+    roomSummary,
     connectionState,
     error: engineError,
     isConnected,
@@ -605,7 +610,7 @@ export function TowerDefenseFrontendPage() {
     roomId: currentView === 'ROOM' ? activeRoomId : undefined,
     identity: {
       playerId,
-      playerName: playerId,
+      playerName,
       playerKind,
     },
   })
@@ -625,6 +630,7 @@ export function TowerDefenseFrontendPage() {
 
   const activeReplay = selectedReplay ?? null
   const selectedRoom = rooms.find((room) => room.id === activeRoomId) ?? (currentView === 'ROOM' ? null : rooms[0] ?? null)
+  const activeRoom = roomSummary ?? selectedRoom
   const filteredRooms = searchQuery.trim()
     ? rooms.filter((room) =>
         room.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -638,11 +644,11 @@ export function TowerDefenseFrontendPage() {
     normalizedRoomPage * ROOMS_PER_PAGE,
   )
 
-  const mySlot = joinedSlot ? selectedRoom?.slots.find((s) => s.slotId === joinedSlot) ?? null : null
-  const allConnected = selectedRoom
-    ? selectedRoom.slots.every((slot) => !slot.playerName || slot.connected)
+  const mySlot = joinedSlot ? activeRoom?.slots.find((s) => s.slotId === joinedSlot) ?? null : null
+  const allConnected = activeRoom
+    ? activeRoom.slots.every((slot) => !slot.playerName || slot.connected)
     : false
-  const canStartMatch = Boolean(selectedRoom && isHost && isConnected && selectedRoom.status === 'OPEN' && allConnected)
+  const canStartMatch = Boolean(activeRoom && isHost && isConnected && activeRoom.status === 'OPEN' && allConnected)
 
   useEffect(() => {
     const rootElement = document.getElementById('root')
@@ -666,7 +672,7 @@ export function TowerDefenseFrontendPage() {
   }, [currentView])
 
   function navigateToView(view: Exclude<CurrentView, 'ROOM'>) {
-    navigate(STATIC_VIEW_ROUTES[view])
+    navigate(withCurrentSearch(STATIC_VIEW_ROUTES[view], location.search))
   }
 
   useEffect(() => {
@@ -681,14 +687,14 @@ export function TowerDefenseFrontendPage() {
         return
       }
 
-      navigate(STATIC_VIEW_ROUTES.LOBBY, { replace: true })
+      navigate(withCurrentSearch(STATIC_VIEW_ROUTES.LOBBY, location.search), { replace: true })
       return
     }
 
     if (selectedRoomId !== room.id) {
       setSelectedRoomId(room.id)
     }
-  }, [activeRoomId, connectionState, currentView, isConnected, isLoadingRooms, navigate, roomPhase, rooms, selectedRoomId])
+  }, [activeRoomId, connectionState, currentView, isConnected, isLoadingRooms, location.search, navigate, roomPhase, rooms, selectedRoomId])
 
   useEffect(() => {
     if (currentView !== 'LOBBY') {
@@ -767,13 +773,17 @@ export function TowerDefenseFrontendPage() {
     const gamingPath = activeRoomId
       ? `/gaming?roomId=${encodeURIComponent(activeRoomId)}`
       : '/gaming'
-    navigate(gamingPath)
+    const separator = gamingPath.includes('?') && location.search ? '&' : ''
+    const nextGamingPath = location.search
+      ? `${gamingPath}${separator}${location.search.replace(/^\?/, '')}`
+      : gamingPath
+    navigate(nextGamingPath)
     setCountdownValue(null)
-  }, [activeRoomId, countdownValue, currentView, navigate, roomPhase])
+  }, [activeRoomId, countdownValue, currentView, location.search, navigate, roomPhase])
 
   function joinRoom(roomId: string) {
     setSelectedRoomId(roomId)
-    navigate(getRoomDetailPath(roomId))
+    navigate(withCurrentSearch(getRoomDetailPath(roomId), location.search))
   }
 
   async function handleCreateRoom() {
@@ -789,7 +799,7 @@ export function TowerDefenseFrontendPage() {
       setNewRoomName('')
       setNewRoomPassword('')
       setIsCreateRoomOpen(false)
-      navigate(getRoomDetailPath(createdRoom.id))
+      navigate(withCurrentSearch(getRoomDetailPath(createdRoom.id), location.search))
     }
     catch {
       // 错误通过 roomsError 呈现，这里避免重复 toast
@@ -926,11 +936,11 @@ export function TowerDefenseFrontendPage() {
             description=""
             actionLabel="ENTER LOBBY ›"
             onClick={() => {
-              if (!authUser) {
-                // 未登录，跳转登录页，登录后回到大厅
-                navigate('/login', { state: { from: '/room' } })
-                return
-              }
+              // TODO: 测试中暂时跳过登录检查，恢复时取消注释下方代码
+              // if (!authUser) {
+              //   navigate('/login', { state: { from: '/room' } })
+              //   return
+              // }
               navigateToView('LOBBY')
             }}
           />
@@ -1131,7 +1141,7 @@ export function TowerDefenseFrontendPage() {
                 </section>
               ) : null}
 
-              {currentView === 'ROOM' && selectedRoom ? (
+              {currentView === 'ROOM' && activeRoom ? (
                 <section className="cyber-panel overflow-hidden !p-0 room-route-panel">
 
                   {/* ── Header ── */}
@@ -1144,11 +1154,11 @@ export function TowerDefenseFrontendPage() {
                     <button
                       type="button"
                       className="flex items-center gap-2 font-mono text-sm tracking-wider transition hover:text-cyan-200"
-                      onClick={() => { navigator.clipboard?.writeText(selectedRoom.id) }}
+                      onClick={() => { navigator.clipboard?.writeText(activeRoom.id) }}
                       title="点击复制节点 ID"
                     >
                       <span className="text-slate-400">节点 ID:</span>
-                      <span className="text-cyan-300">{selectedRoom.id}</span>
+                      <span className="text-cyan-300">{activeRoom.id}</span>
                       <span className="text-slate-500">📋</span>
                     </button>
 
@@ -1173,6 +1183,7 @@ export function TowerDefenseFrontendPage() {
 
                   {/* ── 四象限矩阵 ── */}
                   <div className="room-matrix-stage relative px-8 py-10">
+                    {countdownValue !== null ? <CountdownOverlay value={countdownValue} /> : null}
 
                     {/* SVG 连接线 */}
                     <svg className="pointer-events-none absolute inset-0 h-full w-full" preserveAspectRatio="none" aria-hidden>
@@ -1191,11 +1202,11 @@ export function TowerDefenseFrontendPage() {
 
                       {/* 行 1: 上方卡片 */}
                       <RoomSlotCard
-                        slot={selectedRoom.slots.find((s) => s.slotId === 'P4') ?? null}
+                        slot={activeRoom.slots.find((s) => s.slotId === 'P4') ?? null}
                       />
                       <div />
                       <RoomSlotCard
-                        slot={selectedRoom.slots.find((s) => s.slotId === 'P3') ?? null}
+                        slot={activeRoom.slots.find((s) => s.slotId === 'P3') ?? null}
                       />
 
                       {/* 行 2: 中心按钮 */}
@@ -1211,11 +1222,11 @@ export function TowerDefenseFrontendPage() {
 
                       {/* 行 3: 下方卡片 */}
                       <RoomSlotCard
-                        slot={selectedRoom.slots.find((s) => s.slotId === 'P1') ?? null}
+                        slot={activeRoom.slots.find((s) => s.slotId === 'P1') ?? null}
                       />
                       <div />
                       <RoomSlotCard
-                        slot={selectedRoom.slots.find((s) => s.slotId === 'P2') ?? null}
+                        slot={activeRoom.slots.find((s) => s.slotId === 'P2') ?? null}
                       />
 
                       {/* 行 4: 下方标签 */}
@@ -1229,8 +1240,8 @@ export function TowerDefenseFrontendPage() {
                   {/* ── Footer ── */}
                   <div className="room-route-footer flex flex-wrap items-center justify-between gap-4 border-t border-white/[0.07] px-6 py-4">
                     <div className="flex flex-wrap items-center gap-6 font-mono text-xs">
-                      <span className="text-slate-500">延迟: <span className="text-cyan-300">{formatPing(selectedRoom.pingMs)}</span></span>
-                      <span className="text-slate-500">承载量: <span className="text-cyan-300">{selectedRoom.players}/4</span></span>
+                      <span className="text-slate-500">延迟: <span className="text-cyan-300">{formatPing(activeRoom.pingMs)}</span></span>
+                      <span className="text-slate-500">承载量: <span className="text-cyan-300">{activeRoom.players}/4</span></span>
                       <span className="text-slate-500">接口: <span className={isConnected ? 'text-green-400' : 'text-orange-300'}>{isConnected ? 'CONNECTED' : connectionState.toUpperCase()}</span></span>
                     </div>
 
@@ -1439,7 +1450,6 @@ export function TowerDefenseFrontendPage() {
         onCreate={handleCreateRoom}
       />
 
-      {countdownValue !== null ? <CountdownOverlay value={countdownValue} /> : null}
     </main>
   )
 }

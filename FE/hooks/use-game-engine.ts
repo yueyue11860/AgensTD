@@ -2,6 +2,7 @@ import { startTransition, useCallback, useEffect, useEffectEvent, useMemo, useRe
 import { io, type Socket } from 'socket.io-client'
 import { resolveGatewayToken, resolveSocketUrl } from '../lib/runtime-config'
 import type { ConnectionState, GameAction, GameNoticeUpdate, GameState, GameStatePatch, GameUiStateUpdate, TickEnvelope } from '../types/game-state'
+import type { RoomSummary } from './use-room-lobby-data'
 
 // ────────────────────────────── Room 生命周期相关类型 ─────────────────────────────
 
@@ -45,6 +46,7 @@ interface UseGameEngineOptions {
 interface UseGameEngineResult {
   socketUrl: string | null
   gameState: GameState | null
+  roomSummary: RoomSummary | null
   connectionState: ConnectionState
   error: string | null
   isConnected: boolean
@@ -151,6 +153,19 @@ function isGameNoticeUpdate(value: unknown): value is GameNoticeUpdate {
 
   const candidate = value as Partial<GameNoticeUpdate>
   return Array.isArray(candidate.notices)
+}
+
+function isRoomSummary(value: unknown): value is RoomSummary {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const candidate = value as Partial<RoomSummary>
+  return typeof candidate.id === 'string'
+    && typeof candidate.name === 'string'
+    && typeof candidate.players === 'number'
+    && typeof candidate.maxPlayers === 'number'
+    && Array.isArray(candidate.slots)
 }
 
 function mergeGameStatePatch(previousState: GameState | null, patch: GameStatePatch) {
@@ -271,6 +286,7 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
   const queuedStateRef = useRef<GameState | null>(null)
   const frameRequestRef = useRef<number | null>(null)
   const [gameState, setGameState] = useState<GameState | null>(null)
+  const [roomSummary, setRoomSummary] = useState<RoomSummary | null>(null)
   const [connectionState, setConnectionState] = useState<ConnectionState>(options.autoConnect === false ? 'idle' : 'connecting')
   const [error, setError] = useState<string | null>(null)
   const [lastTickAt, setLastTickAt] = useState<number | null>(null)
@@ -351,6 +367,7 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
     setCountdownSeconds(null)
     setSelectedLevelInfo(null)
     setMySlot(null)
+    setRoomSummary(null)
   }, [options.roomId])
 
   useEffect(() => {
@@ -391,6 +408,14 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
     if (payload && typeof payload === 'object' && typeof (payload as Record<string, unknown>).slot === 'string') {
       setMySlot((payload as Record<string, unknown>).slot as string)
     }
+  })
+
+  const handleRoomSnapshot = useEffectEvent((payload: unknown) => {
+    if (!isRoomSummary(payload)) {
+      return
+    }
+
+    setRoomSummary(payload)
   })
 
   const handleRoomPhaseChanged = useEffectEvent((payload: unknown) => {
@@ -512,6 +537,7 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
     socket.on('UI_STATE_UPDATE', handleUiStateUpdate)
     socket.on('NOTICE_UPDATE', handleNoticeUpdate)
     socket.on('ROOM_JOINED', handleRoomJoined)
+    socket.on('ROOM_SNAPSHOT', handleRoomSnapshot)
     socket.on('ROOM_PHASE_CHANGED', handleRoomPhaseChanged)
     socket.on('START_MATCH_ACCEPTED', handleStartMatchAccepted)
     socket.on('COUNTDOWN_TICK', handleCountdownTick)
@@ -533,6 +559,7 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
       socket.off('UI_STATE_UPDATE', handleUiStateUpdate)
       socket.off('NOTICE_UPDATE', handleNoticeUpdate)
       socket.off('ROOM_JOINED', handleRoomJoined)
+      socket.off('ROOM_SNAPSHOT', handleRoomSnapshot)
       socket.off('ROOM_PHASE_CHANGED', handleRoomPhaseChanged)
       socket.off('START_MATCH_ACCEPTED', handleStartMatchAccepted)
       socket.off('COUNTDOWN_TICK', handleCountdownTick)
@@ -584,6 +611,7 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
   return {
     socketUrl,
     gameState,
+    roomSummary,
     connectionState,
     error,
     isConnected: connectionState === 'connected',

@@ -47,6 +47,7 @@ interface RoomRuntime {
   projectedTickStream: ProjectedTickStream
   unsubscribeProjection: () => void
   playerConnections: Map<string, number>
+  disconnectTimers: Map<string, NodeJS.Timeout>
 }
 
 interface SerializedRoomGameState {
@@ -69,8 +70,20 @@ interface SerializedRoomGameState {
   result: GameState['result']
 }
 
+interface SerializedRoomSummary {
+  id: string
+  name: string
+  hasPassword: boolean
+  players: number
+  maxPlayers: number
+  status: 'OPEN' | 'IN_MATCH' | 'DRAFTING'
+  pingMs: number | null
+  slots: ReturnType<Room['getSummary']>['slots']
+}
+
 const DEFAULT_ROOM_ID = 'public-1'
 const COUNTDOWN_DURATION_MS = 3000
+const PLAYER_RECONNECT_GRACE_MS = 5000
 
 function isJoinRoomPayload(payload: unknown): payload is JoinRoomPayload {
   return typeof payload === 'object'
@@ -206,9 +219,16 @@ export class SocketGateway {
     }
 
     const runtime = this.ensureRoomRuntime(nextRoomId)
+    const pendingDisconnectTimer = runtime.disconnectTimers.get(identity.playerId)
+    if (pendingDisconnectTimer) {
+      clearTimeout(pendingDisconnectTimer)
+      runtime.disconnectTimers.delete(identity.playerId)
+    }
+
+    const existingSlot = runtime.room.getPlayerSlot(identity.playerId)
     const existingConnections = runtime.playerConnections.get(identity.playerId) ?? 0
-    const assignedSlot = existingConnections > 0
-      ? runtime.room.getPlayerSlot(identity.playerId)
+    const assignedSlot = existingConnections > 0 || existingSlot
+      ? existingSlot
       : runtime.room.joinPlayer(identity.playerId)
 
     if (!assignedSlot) {
@@ -223,6 +243,7 @@ export class SocketGateway {
     socket.data.roomId = nextRoomId
 
     this.emitJoinSnapshot(socket, runtime, assignedSlot)
+    this.emitRoomSnapshot(runtime.room)
   }
 
   private emitJoinSnapshot(socket: Socket, runtime: RoomRuntime, assignedSlot: string) {
@@ -244,6 +265,7 @@ export class SocketGateway {
     socket.emit('TICK_UPDATE', fullEnvelope)
     const statePayload = this.serializeRoomGameState(runtime.room, runtime.room.engine.getStateSnapshot())
     socket.emit('SYNC_STATE', statePayload)
+    socket.emit('ROOM_SNAPSHOT', this.serializeRoomSummary(runtime.room))
     socket.emit('GAME_STATE', statePayload)
     socket.emit('ROOM_PHASE_CHANGED', { phase: runtime.room.getPhase() })
     this.recordOutbound('socket.TICK_UPDATE.full', fullEnvelope, 1)
@@ -299,41 +321,13 @@ export class SocketGateway {
       return
     }
 
-    const result = joinedContext.room.beginCountdown(joinedContext.identity.playerId, () => {
-      const waitingPayload = { phase: 'waiting_for_level' as const }
-      this.io.to(joinedContext.room.id).emit('ROOM_PHASE_CHANGED', waitingPayload)
-    })
-
-    if (result === 'forbidden') {
-      this.emitEngineError(socket, 'FORBIDDEN', '只有房主可以启动游戏')
-      return
-    }
-
-    if (result === 'wrong_phase') {
-      this.emitEngineError(socket, 'WRONG_PHASE', '当前房间状态不允许启动该操作')
-      return
-    }
-
-    const countdownPayload = {
-      phase: 'countdown' as const,
-      durationMs: COUNTDOWN_DURATION_MS,
-      remainingSeconds: COUNTDOWN_DURATION_MS / 1000,
-    }
-
-    this.io.to(joinedContext.room.id).emit('START_MATCH_ACCEPTED', countdownPayload)
-    this.io.to(joinedContext.room.id).emit('ROOM_PHASE_CHANGED', countdownPayload)
-    this.scheduleCountdownBroadcast(joinedContext.room)
+    this.beginRoomCountdown(joinedContext, socket)
   }
 
   private handleSelectLevel(socket: Socket, payload: unknown) {
     const joinedContext = this.getJoinedContext(socket)
     if (!joinedContext) {
       this.emitEngineError(socket, 'NOT_IN_ROOM', '请先发送 JOIN_ROOM 加入房间')
-      return
-    }
-
-    if (joinedContext.room.getPhase() !== 'waiting_for_level') {
-      this.emitEngineError(socket, 'WRONG_PHASE', '当前状态不接受难度选择，请等待倒计时完成')
       return
     }
 
@@ -372,7 +366,77 @@ export class SocketGateway {
       return
     }
 
-    joinedContext.room.igniteWithLevel(levelConfig.waves, levelConfig.startingGold)
+    const currentPhase = joinedContext.room.getPhase()
+    if (currentPhase === 'playing') {
+      this.emitEngineError(socket, 'WRONG_PHASE', '当前对局已开始，不能再次选择难度')
+      return
+    }
+
+    if (currentPhase === 'lobby' || currentPhase === 'countdown') {
+      joinedContext.room.setPendingLevelSelection(payload.levelId)
+
+      if (currentPhase === 'lobby') {
+        this.beginRoomCountdown(joinedContext, socket)
+      }
+
+      return
+    }
+
+    if (currentPhase !== 'waiting_for_level') {
+      this.emitEngineError(socket, 'WRONG_PHASE', '当前状态不接受难度选择，请等待倒计时完成')
+      return
+    }
+
+    this.activateRoomLevel(joinedContext.room, levelConfig)
+  }
+
+  private beginRoomCountdown(joinedContext: JoinedRoomContext, socket: Socket) {
+    const result = joinedContext.room.beginCountdown(joinedContext.identity.playerId, () => {
+      this.handleCountdownCompleted(joinedContext.room)
+    })
+
+    if (result === 'forbidden') {
+      this.emitEngineError(socket, 'FORBIDDEN', '只有房主可以启动游戏')
+      return false
+    }
+
+    if (result === 'wrong_phase') {
+      this.emitEngineError(socket, 'WRONG_PHASE', '当前房间状态不允许启动该操作')
+      return false
+    }
+
+    const countdownPayload = {
+      phase: 'countdown' as const,
+      durationMs: COUNTDOWN_DURATION_MS,
+      remainingSeconds: COUNTDOWN_DURATION_MS / 1000,
+    }
+
+    this.io.to(joinedContext.room.id).emit('START_MATCH_ACCEPTED', countdownPayload)
+    this.io.to(joinedContext.room.id).emit('ROOM_PHASE_CHANGED', countdownPayload)
+    this.emitRoomSnapshot(joinedContext.room)
+    this.scheduleCountdownBroadcast(joinedContext.room)
+    return true
+  }
+
+  private handleCountdownCompleted(room: Room) {
+    const pendingLevelId = room.consumePendingLevelSelection()
+    if (pendingLevelId === null) {
+      this.io.to(room.id).emit('ROOM_PHASE_CHANGED', { phase: 'waiting_for_level' as const })
+      this.emitRoomSnapshot(room)
+      return
+    }
+
+    const levelConfig = LEVEL_CONFIGS[pendingLevelId]
+    if (!levelConfig) {
+      this.io.to(room.id).emit('ROOM_PHASE_CHANGED', { phase: 'waiting_for_level' as const })
+      return
+    }
+
+    this.activateRoomLevel(room, levelConfig)
+  }
+
+  private activateRoomLevel(room: Room, levelConfig: (typeof LEVEL_CONFIGS)[number]) {
+    room.igniteWithLevel(levelConfig.waves, levelConfig.startingGold)
 
     const levelSelectedPayload = {
       levelId: levelConfig.levelId,
@@ -383,8 +447,9 @@ export class SocketGateway {
       minPlayers: levelConfig.minPlayers,
     }
 
-    this.io.to(joinedContext.room.id).emit('LEVEL_SELECTED', levelSelectedPayload)
-    this.io.to(joinedContext.room.id).emit('ROOM_PHASE_CHANGED', { phase: 'playing', levelId: payload.levelId })
+    this.io.to(room.id).emit('LEVEL_SELECTED', levelSelectedPayload)
+    this.io.to(room.id).emit('ROOM_PHASE_CHANGED', { phase: 'playing', levelId: levelConfig.levelId })
+    this.emitRoomSnapshot(room)
   }
 
   private scheduleCountdownBroadcast(room: Room) {
@@ -420,6 +485,7 @@ export class SocketGateway {
       loop,
       projectedTickStream,
       playerConnections: new Map(),
+      disconnectTimers: new Map(),
       unsubscribeProjection: () => {},
     }
 
@@ -480,11 +546,25 @@ export class SocketGateway {
     const activeConnectionCount = runtime.playerConnections.get(identity.playerId) ?? 0
     if (activeConnectionCount <= 1) {
       runtime.playerConnections.delete(identity.playerId)
-      runtime.room.leavePlayer(identity.playerId)
       runtime.room.engine.markPlayerDisconnected(identity.playerId)
-      this.cleanupRoomIfEmpty(roomId)
+      this.emitRoomSnapshot(runtime.room)
+
+      const disconnectTimer = setTimeout(() => {
+        runtime.disconnectTimers.delete(identity.playerId)
+
+        if ((runtime.playerConnections.get(identity.playerId) ?? 0) > 0) {
+          return
+        }
+
+        runtime.room.leavePlayer(identity.playerId)
+        this.emitRoomSnapshot(runtime.room)
+        this.cleanupRoomIfEmpty(roomId)
+      }, PLAYER_RECONNECT_GRACE_MS)
+
+      runtime.disconnectTimers.set(identity.playerId, disconnectTimer)
     } else {
       runtime.playerConnections.set(identity.playerId, activeConnectionCount - 1)
+      this.emitRoomSnapshot(runtime.room)
     }
 
     socket.leave(roomId)
@@ -497,6 +577,12 @@ export class SocketGateway {
     if (!runtime || !runtime.room.isEmpty()) {
       return
     }
+
+    for (const disconnectTimer of runtime.disconnectTimers.values()) {
+      clearTimeout(disconnectTimer)
+    }
+
+    runtime.disconnectTimers.clear()
 
     runtime.unsubscribeProjection()
     runtime.loop.stop()
@@ -547,8 +633,15 @@ export class SocketGateway {
 
   private resolvePlayerIdentity(socket: Socket, overrides?: Partial<JoinRoomPayload>): PlayerIdentity {
     const principal = socket.data.principal as GatewayPrincipal | undefined
-    const playerId = principal?.playerId ?? overrides?.playerId ?? readHandshakeValue(socket, 'playerId') ?? socket.id
-    const playerName = principal?.playerName ?? overrides?.playerName ?? readHandshakeValue(socket, 'playerName') ?? `player-${playerId.slice(0, 6)}`
+    const requestedPlayerId = overrides?.playerId ?? readHandshakeValue(socket, 'playerId')
+    const requestedPlayerName = overrides?.playerName ?? readHandshakeValue(socket, 'playerName')
+    const isOAuthSession = principal?.token.startsWith('sess_') ?? false
+    const playerId = isOAuthSession
+      ? principal?.playerId ?? requestedPlayerId ?? socket.id
+      : requestedPlayerId ?? principal?.playerId ?? socket.id
+    const playerName = isOAuthSession
+      ? principal?.playerName ?? requestedPlayerName ?? `player-${playerId.slice(0, 6)}`
+      : requestedPlayerName ?? principal?.playerName ?? `player-${playerId.slice(0, 6)}`
     const playerKind = principal?.playerKind ?? overrides?.playerKind ?? (readHandshakeValue(socket, 'playerKind') === 'agent' ? 'agent' : 'human')
 
     return {
@@ -578,6 +671,28 @@ export class SocketGateway {
       maxCapacity: state.maxCapacity,
       result: state.result,
     }
+  }
+
+  private serializeRoomSummary(room: Room): SerializedRoomSummary {
+    const summary = room.getSummary()
+    return {
+      id: summary.id,
+      name: summary.name,
+      hasPassword: summary.hasPassword,
+      players: summary.players,
+      maxPlayers: summary.maxPlayers,
+      status: summary.phase === 'playing'
+        ? 'IN_MATCH'
+        : summary.phase === 'countdown' || summary.phase === 'waiting_for_level'
+          ? 'DRAFTING'
+          : 'OPEN',
+      pingMs: null,
+      slots: summary.slots,
+    }
+  }
+
+  private emitRoomSnapshot(room: Room) {
+    this.io.to(room.id).emit('ROOM_SNAPSHOT', this.serializeRoomSummary(room))
   }
 
   private emitEngineError(socket: Socket, code: string, message: string, retryAfterMs?: number) {

@@ -119,6 +119,8 @@ export class Room {
   // 倒计时定时器句柄（idle 时务必清除）
   private countdownTimer: NodeJS.Timeout | null = null
 
+  private pendingLevelId: number | null = null
+
   constructor(id: string, config: ServerConfig, options?: RoomCreateOptions) {
     this.id = id
     this.displayName = options?.displayName?.trim() || id
@@ -281,11 +283,24 @@ export class Room {
    * 应由 SocketGateway 在所有校验通过后调用。
    */
   igniteWithLevel(waves: WaveConfig[], startingGold?: number): void {
+    this.pendingLevelId = null
     this.phase = 'playing'
     this.engine.ignite(waves, startingGold)
   }
 
+  setPendingLevelSelection(levelId: number) {
+    this.pendingLevelId = levelId
+  }
+
+  consumePendingLevelSelection() {
+    const nextLevelId = this.pendingLevelId
+    this.pendingLevelId = null
+    return nextLevelId
+  }
+
   destroy() {
+    this.pendingLevelId = null
+
     if (this.countdownTimer) {
       clearTimeout(this.countdownTimer)
       this.countdownTimer = null

@@ -4,6 +4,9 @@ interface ImportMetaEnv {
 	readonly VITE_WS_URL?: string
 	readonly VITE_GATEWAY_TOKEN?: string
 	readonly VITE_API_BASE_URL?: string
+	readonly VITE_PLAYER_ID?: string
+	readonly VITE_PLAYER_NAME?: string
+	readonly VITE_PLAYER_KIND?: string
 	readonly VITE_SUPABASE_URL?: string
 	readonly VITE_SUPABASE_ANON_KEY?: string
 }

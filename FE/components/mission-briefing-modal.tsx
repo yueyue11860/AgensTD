@@ -70,10 +70,10 @@ function resolveUnlock(def: LevelDef, progress: UserProgressSnapshot | null, pla
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 子组件：单个关卡卡片
+// 子组件：单个关卡行
 // ─────────────────────────────────────────────────────────────────────────────
 
-function LevelCard({
+function LevelRow({
   def,
   unlocked,
   onClick,
@@ -91,55 +91,44 @@ function LevelCard({
       disabled={!unlocked}
       onClick={onClick}
       className={cx(
-        'mission-level-card',
-        unlocked && !isDanger && 'mission-level-card-active',
-        unlocked && isDanger && 'mission-level-card-danger',
-        !unlocked && 'mission-level-card-locked',
-        isDanger && 'col-span-full',
+        'mission-level-row',
+        unlocked && !isDanger && 'mission-level-row-active',
+        unlocked && isDanger && 'mission-level-row-danger',
+        !unlocked && 'mission-level-row-locked',
       )}
     >
-      {/* 关卡编号徽章 */}
+      {/* 关卡编号 */}
       <span className={cx('mission-level-badge', isDanger && 'mission-level-badge-danger')}>
         {isHidden ? '???' : `L${def.levelId}`}
       </span>
 
-      {/* 关卡主标题 */}
-      <p className={cx('mission-level-title', isDanger && 'mission-level-title-danger')}>
-        {def.label}
-      </p>
+      {/* 名称 + 副标题 */}
+      <span className="mission-row-info">
+        <span className={cx('mission-row-name', isDanger && 'mission-level-title-danger')}>
+          {def.label}
+        </span>
+        <span className="mission-row-sub">{def.subtitle}</span>
+      </span>
 
-      {/* 副标题 */}
-      <p className="mission-level-subtitle">{def.subtitle}</p>
-
-      {/* 预计生存率 */}
-      <div className={cx('mission-level-rate', isDanger && 'mission-level-rate-danger')}>
-        <span className="mission-level-rate-label">预计生存率</span>
-        <strong className="mission-level-rate-value">{formatClearRate(def.clearRate)}</strong>
-      </div>
-
-      {/* 多人提示 */}
-      {def.minPlayers > 1 && (
-        <div className="mission-level-coop">
-          <Users className="h-3 w-3" />
-          <span>强制 {def.minPlayers} 人协同</span>
-        </div>
-      )}
-
-      {/* 锁定状态覆层 */}
-      {!unlocked && (
-        <div className="mission-level-lock-overlay">
-          <Lock className="h-5 w-5" />
-          <span>{def.levelId === 0 ? '仅碳基终端' : def.levelId === 6 ? `L5 通关 ${L6_UNLOCK_THRESHOLD} 次解锁` : '通关前一关解锁'}</span>
-        </div>
-      )}
-
-      {/* L6 危险闪烁层 */}
-      {isDanger && unlocked && (
-        <div className="mission-level-danger-badge">
-          <Zap className="h-3.5 w-3.5" />
-          <span>零域裁决 · 极度危险</span>
-        </div>
-      )}
+      {/* 右侧状态 */}
+      <span className="mission-row-right">
+        {!unlocked ? (
+          <>
+            <Lock className="h-3.5 w-3.5 shrink-0" />
+            <span className="mission-row-lock-hint">
+              {def.levelId === 0 ? '仅玩家' : def.levelId === 6 ? `L5×${L6_UNLOCK_THRESHOLD}` : '通关解锁'}
+            </span>
+          </>
+        ) : (
+          <>
+            {def.minPlayers > 1 && <Users className="h-3.5 w-3.5 shrink-0 text-amber-300" />}
+            {isDanger && <Zap className="h-3.5 w-3.5 shrink-0 text-red-400" />}
+            <span className={cx('mission-row-rate', isDanger && 'mission-row-rate-danger')}>
+              {formatClearRate(def.clearRate)}
+            </span>
+          </>
+        )}
+      </span>
     </button>
   )
 }
@@ -160,34 +149,29 @@ export function MissionBriefingModal({ isHost, playerKind, onSelectLevel, engine
   return (
     <div className="mission-briefing-backdrop">
       <div className="mission-briefing-panel">
-        {/* ── 头部 ─────────────────────────────────────────────────────── */}
+        {/* 标题行 */}
         <div className="mission-briefing-header">
-          <p className="mission-briefing-eyebrow">MISSION BRIEFING</p>
+          <p className="mission-briefing-eyebrow">SELECT DIFFICULTY</p>
           <h2 className="mission-briefing-title">
-            {isHost ? '选择目标战场' : '等待作战令'}
+            {isHost ? '选择难度' : '等待房主选择难度'}
           </h2>
-          <p className="mission-briefing-desc">
-            {isHost
-              ? '指定本轮交战协议难度等级。通关上一级即可解锁新战场。'
-              : '战场等待房主下发目标指令…'}
-          </p>
         </div>
 
-        {/* ── 错误提示 ─────────────────────────────────────────────────── */}
+        {/* 错误提示 */}
         {engineError && (
           <div className="mission-briefing-error">
-            <span className="mission-briefing-error-code">SYS_ERR</span>
+            <span className="mission-briefing-error-code">ERR</span>
             {engineError}
           </div>
         )}
 
-        {/* ── 房主：关卡选择网格 ───────────────────────────────────────── */}
+        {/* 房主：纵向关卡列表 */}
         {isHost && (
-          <div className="mission-level-grid">
+          <div className="mission-level-list">
             {LEVEL_DEFS.map((def) => {
               const unlocked = resolveUnlock(def, progress, playerKind)
               return (
-                <LevelCard
+                <LevelRow
                   key={def.levelId}
                   def={def}
                   unlocked={unlocked}
@@ -200,15 +184,12 @@ export function MissionBriefingModal({ isHost, playerKind, onSelectLevel, engine
           </div>
         )}
 
-        {/* ── 非房主：呼吸等待文字 ─────────────────────────────────────── */}
+        {/* 非房主：等待提示 */}
         {!isHost && (
-          <div className="mission-waiting-zone">
-            <p className="mission-waiting-text">
-              <span className="mission-waiting-cursor">&gt;_ </span>
-              等待主机 (Host) 覆写交战协议...
-            </p>
-            <p className="mission-waiting-hint">房主正在选择目标难度等级，请保持待命</p>
-          </div>
+          <p className="mission-waiting-hint mt-3">
+            <span className="mission-waiting-cursor">&gt;_ </span>
+            等待房主选择难度…
+          </p>
         )}
       </div>
     </div>
