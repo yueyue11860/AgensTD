@@ -113,6 +113,7 @@ export function getWaveStateForTick(
       startedAtTick: 0,
       endsAtTick: null,
       remainingSpawns: 0,
+      prepCountdownSec: 0,
     }
   }
 
@@ -129,5 +130,6 @@ export function getWaveStateForTick(
     startedAtTick: activeWave.startTick,
     endsAtTick: activeWave.endTick,
     remainingSpawns,
+    prepCountdownSec: 0,
   }
 }

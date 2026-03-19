@@ -206,6 +206,7 @@ export class GameEngine {
         startedAtTick: 0,
         endsAtTick: null,
         remainingSpawns: 0,
+        prepCountdownSec: 0,
       },
       players: [],
       enemies: [],

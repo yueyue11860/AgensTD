@@ -50,6 +50,12 @@ interface RoomRuntime {
   disconnectTimers: Map<string, NodeJS.Timeout>
 }
 
+interface JoinedRoomContext {
+  room: Room
+  runtime: RoomRuntime
+  identity: PlayerIdentity
+}
+
 interface SerializedRoomGameState {
   roomId: string
   phase: ReturnType<Room['getPhase']>
