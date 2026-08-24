@@ -36,6 +36,7 @@ interface EnemyView {
   glyphValue: string
   hp: number
   maxHp: number
+  invulnerable: boolean
 }
 
 export interface BattlefieldSceneUiState {
@@ -51,6 +52,10 @@ function coordKey(x: number, y: number) {
 
 function isCoreCell(x: number, y: number) {
   return x >= 13 && x <= 15 && y >= 13 && y <= 15
+}
+
+function isProtectedZoneCell(x: number, y: number) {
+  return x >= 10 && x <= 18 && y >= 10 && y <= 18
 }
 
 function gridToPixel(value: number) {
@@ -78,6 +83,7 @@ export class BattlefieldScene extends Phaser.Scene {
   private readonly pieceViews = new Map<string, PieceView>()
   private readonly enemyViews = new Map<string, EnemyView>()
   private lastHoveredCellKey: string | null = null
+  private pointerDownCell: BattlefieldGridPosition | null = null
 
   constructor(terrainMatrix: readonly (readonly number[])[], bridge: BattlefieldInteractionBridge) {
     super({ key: 'BattlefieldScene' })
@@ -131,6 +137,10 @@ export class BattlefieldScene extends Phaser.Scene {
           graphics.lineStyle(1, 0xfb923c, 0.45)
           graphics.strokeRoundedRect(left + 1, top + 1, size - 2, size - 2, 3)
         }
+        else if (isProtectedZoneCell(x, y)) {
+          graphics.fillStyle(0xfb923c, 0.035)
+          graphics.fillRoundedRect(left, top, size, size, 3)
+        }
         const gateLabel = GATE_LABELS.get(coordKey(x, y))
         if (gateLabel) this.add.text(left + size / 2, top + size / 2, gateLabel, { color: '#fb923c', fontFamily: 'ui-monospace, monospace', fontSize: '10px', fontStyle: 'bold' }).setOrigin(0.5).setAlpha(0.85).setDepth(5)
       }
@@ -148,10 +158,20 @@ export class BattlefieldScene extends Phaser.Scene {
     })
     this.inputZone.on('pointerdown', (_pointer: Phaser.Input.Pointer, localX: number, localY: number) => {
       const cell = this.positionToCell(localX, localY)
+      this.pointerDownCell = cell
       if (cell) this.bridge.onCellClick(cell.x, cell.y)
+    })
+    this.inputZone.on('pointerup', (_pointer: Phaser.Input.Pointer, localX: number, localY: number) => {
+      const cell = this.positionToCell(localX, localY)
+      const start = this.pointerDownCell
+      this.pointerDownCell = null
+      if (cell && start && (cell.x !== start.x || cell.y !== start.y)) {
+        this.bridge.onCellClick(cell.x, cell.y)
+      }
     })
     this.inputZone.on('pointerout', () => {
       this.lastHoveredCellKey = null
+      this.pointerDownCell = null
       this.bridge.onCellLeave()
     })
   }
@@ -234,7 +254,9 @@ export class BattlefieldScene extends Phaser.Scene {
         this.tweens.killTweensOf(view.container)
         this.tweens.add({ targets: view.container, x: targetX, y: targetY, duration: ENEMY_TWEEN_MS, ease: 'Linear' })
       }
-      if (view.glyphValue !== enemy.glyph) this.drawEnemyBody(view, enemy.glyph)
+      if (view.glyphValue !== enemy.glyph || view.invulnerable !== Boolean(enemy.invulnerable)) {
+        this.drawEnemyBody(view, enemy.glyph, Boolean(enemy.invulnerable))
+      }
       if (view.hp !== enemy.hp || view.maxHp !== enemy.maxHp) this.drawEnemyHealth(view, enemy.hp, enemy.maxHp)
     }
   }
@@ -245,20 +267,21 @@ export class BattlefieldScene extends Phaser.Scene {
     const health = this.add.graphics()
     const container = this.add.container(x, y, [body, glyph, health])
     this.enemyLayer.add(container)
-    const view: EnemyView = { container, body, glyph, health, glyphValue: '', hp: Number.NaN, maxHp: Number.NaN }
-    this.drawEnemyBody(view, enemy.glyph)
+    const view: EnemyView = { container, body, glyph, health, glyphValue: '', hp: Number.NaN, maxHp: Number.NaN, invulnerable: false }
+    this.drawEnemyBody(view, enemy.glyph, Boolean(enemy.invulnerable))
     this.drawEnemyHealth(view, enemy.hp, enemy.maxHp)
     return view
   }
 
-  private drawEnemyBody(view: EnemyView, glyph: string) {
+  private drawEnemyBody(view: EnemyView, glyph: string, invulnerable: boolean) {
     view.body.clear()
-    view.body.fillStyle(0x7f1d1d, 0.62)
+    view.body.fillStyle(invulnerable ? 0x78350f : 0x7f1d1d, 0.62)
     view.body.fillCircle(0, 0, 13)
-    view.body.lineStyle(1, 0xf87171, 0.9)
+    view.body.lineStyle(invulnerable ? 2 : 1, invulnerable ? 0xfbbf24 : 0xf87171, 0.9)
     view.body.strokeCircle(0, 0, 13)
-    view.glyph.setText(glyph)
+    view.glyph.setText(invulnerable ? `护${glyph}` : glyph).setFontSize(invulnerable ? '13px' : '20px')
     view.glyphValue = glyph
+    view.invulnerable = invulnerable
   }
 
   private drawEnemyHealth(view: EnemyView, hp: number, maxHp: number) {

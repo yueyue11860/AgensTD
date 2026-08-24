@@ -10,6 +10,7 @@ import {
 import {
   createPveLaneRoutes,
   isDefaultDeployableCell,
+  isInsidePveProtectedZoneMilli,
   PVE_LANE_SLOTS,
 } from './arena'
 import { DeterministicPrng } from './prng'
@@ -31,9 +32,13 @@ import type {
   SoldierLevel,
   SoldierPiece,
   SwapTrayBoardAction,
+  SwapReserveBoardAction,
+  ExileReserveAction,
+  SwapStoragePiecesAction,
 } from './types'
 
 const TRAY_SIZE = 5
+const RESERVE_SIZE = 2
 const POPULATION_CAP = 10
 const CHARACTER_BRANCH_BPS = 1000
 const ENEMY_CAPACITY_PER_PLAYER = 10
@@ -53,8 +58,10 @@ interface PlayerRuntime {
   recruitCount: number
   populationCap: number
   trayRevision: number
+  reserveRevision: number
   boardRevision: number
   tray: Array<PvePiece | null>
+  reserve: Array<PvePiece | null>
   board: Map<string, BoardEntry>
   remainingCharacterTokens: Map<string, number>
   clearedWaves: Set<number>
@@ -65,6 +72,7 @@ interface EnemyRuntime extends PveEnemySnapshot {
 }
 
 interface LaneWaveRuntime {
+  waveNumber: number
   playerId: string
   slot: PveLaneSlot
   spawnedCount: number
@@ -75,8 +83,9 @@ interface LaneWaveRuntime {
 }
 
 interface PieceLocation {
-  kind: 'tray' | 'board'
+  kind: 'tray' | 'reserve' | 'board'
   trayIndex?: number
+  reserveIndex?: number
   boardKey?: string
   boardX?: number
   boardY?: number
@@ -162,6 +171,8 @@ export class PveGameRuntime {
 
   private currentWaveNumber = 0
 
+  private pendingWaveNumber: number | null = null
+
   private wavePhase: PveRuntimeSnapshot['wave']['phase'] = 'idle'
 
   private prepRemainingTicks = 0
@@ -213,8 +224,10 @@ export class PveGameRuntime {
       recruitCount: 0,
       populationCap: POPULATION_CAP,
       trayRevision: 0,
+      reserveRevision: 0,
       boardRevision: 0,
       tray: Array<PvePiece | null>(TRAY_SIZE).fill(null),
+      reserve: Array<PvePiece | null>(RESERVE_SIZE).fill(null),
       board: new Map(),
       remainingCharacterTokens: new Map(this.initialCharacterTokens),
       clearedWaves: new Set(),
@@ -230,7 +243,11 @@ export class PveGameRuntime {
       return this.commandResult(false, 'PLAYER_NOT_FOUND')
     }
     if (this.status === 'running') {
-      const currentLane = this.laneWaves.find((lane) => lane.playerId === playerId && lane.slot === player.slot)
+      const currentLane = this.laneWaves.find((lane) => (
+        lane.waveNumber === this.currentWaveNumber
+        && lane.playerId === playerId
+        && lane.slot === player.slot
+      ))
       if (currentLane) {
         currentLane.totalCount = currentLane.spawnedCount
         currentLane.retired = true
@@ -259,7 +276,7 @@ export class PveGameRuntime {
       seed: this.seed,
     })
     if (this.prepRemainingTicks === 0) {
-      this.beginWaveSpawning()
+      this.beginPreparedWave()
     }
     return this.commandResult(true, 'MATCH_STARTED')
   }
@@ -297,6 +314,15 @@ export class PveGameRuntime {
           case 'MERGE_SOLDIERS':
             result = this.handleMergeSoldiers(player, action)
             break
+          case 'SWAP_RESERVE_BOARD':
+            result = this.handleSwapReserveBoard(player, action)
+            break
+          case 'EXILE_RESERVE':
+            result = this.handleExileReserve(player, action)
+            break
+          case 'SWAP_STORAGE_PIECES':
+            result = this.handleSwapStoragePieces(player, action)
+            break
         }
       }
     }
@@ -315,19 +341,17 @@ export class PveGameRuntime {
     if (this.wavePhase === 'prep') {
       this.prepRemainingTicks = Math.max(0, this.prepRemainingTicks - 1)
       if (this.prepRemainingTicks === 0) {
-        this.beginWaveSpawning()
+        this.beginPreparedWave()
       }
     }
 
-    if (this.wavePhase === 'spawning' || this.wavePhase === 'clearing') {
-      this.spawnDueEnemies()
-      this.moveEnemies()
-      this.resolveSoldierAttacks()
-      this.enemies = this.enemies.filter((enemy) => enemy.lifecycle === 'alive')
-      this.updateLaneClearRewards()
-      this.updateWavePhaseAndProgression()
-      this.evaluateOverload()
-    }
+    this.spawnDueEnemies()
+    this.moveEnemies()
+    this.resolveSoldierAttacks()
+    this.enemies = this.enemies.filter((enemy) => enemy.lifecycle === 'alive')
+    this.updateLaneClearRewards()
+    this.updateWavePhaseAndProgression()
+    this.evaluateOverload()
 
     return this.snapshot()
   }
@@ -357,7 +381,7 @@ export class PveGameRuntime {
         maxWaves: this.maxWaves,
         phase: this.wavePhase,
         prepRemainingTicks: this.prepRemainingTicks,
-        lanes: this.laneWaves
+        lanes: this.currentLaneWaves()
           .slice()
           .sort((left, right) => slotOrder(left.slot) - slotOrder(right.slot))
           .map((lane) => ({
@@ -476,6 +500,114 @@ export class PveGameRuntime {
     return this.actionResult(action, true, 'TRAY_BOARD_SWAPPED')
   }
 
+  private handleSwapReserveBoard(player: PlayerRuntime, action: SwapReserveBoardAction): PveRuntimeResult {
+    if (!this.revisionMatches(action.expectedReserveRevision, player.reserveRevision)) {
+      return this.actionResult(action, false, 'STALE_RESERVE_REVISION')
+    }
+    if (!this.revisionMatches(action.expectedBoardRevision, player.boardRevision)) {
+      return this.actionResult(action, false, 'STALE_BOARD_REVISION')
+    }
+    if (!Number.isInteger(action.reserveIndex) || action.reserveIndex < 0 || action.reserveIndex >= RESERVE_SIZE) {
+      return this.actionResult(action, false, 'INVALID_RESERVE_INDEX')
+    }
+    if (!this.canDeployAt(player.slot, action.boardX, action.boardY)) {
+      return this.actionResult(action, false, 'CELL_NOT_DEPLOYABLE')
+    }
+
+    const key = boardKey(action.boardX, action.boardY)
+    const reservePiece = player.reserve[action.reserveIndex]
+    const boardEntry = player.board.get(key)
+    const boardPiece = boardEntry?.piece ?? null
+    if (!reservePiece && !boardPiece) {
+      return this.actionResult(action, false, 'EMPTY_TO_EMPTY')
+    }
+
+    const nextPopulation = this.populationUsed(player)
+      - (isSoldier(boardPiece) ? 1 : 0)
+      + (isSoldier(reservePiece) ? 1 : 0)
+    if (nextPopulation > player.populationCap) {
+      return this.actionResult(action, false, 'POPULATION_LIMIT')
+    }
+
+    player.reserve[action.reserveIndex] = boardPiece
+    if (reservePiece) {
+      this.resetAttackCooldown(reservePiece)
+      player.board.set(key, { x: action.boardX, y: action.boardY, piece: reservePiece })
+    }
+    else {
+      player.board.delete(key)
+    }
+    player.reserveRevision += 1
+    player.boardRevision += 1
+    this.emit('RESERVE_BOARD_SWAPPED', {
+      playerId: player.playerId,
+      reserveIndex: action.reserveIndex,
+      boardX: action.boardX,
+      boardY: action.boardY,
+      reservePieceId: reservePiece?.id ?? null,
+      boardPieceId: boardPiece?.id ?? null,
+    })
+    return this.actionResult(action, true, 'RESERVE_BOARD_SWAPPED')
+  }
+
+  private handleExileReserve(player: PlayerRuntime, action: ExileReserveAction): PveRuntimeResult {
+    if (!this.revisionMatches(action.expectedReserveRevision, player.reserveRevision)) {
+      return this.actionResult(action, false, 'STALE_RESERVE_REVISION')
+    }
+    const exiledPieceIds = player.reserve.flatMap((piece) => piece ? [piece.id] : [])
+    player.reserve = Array<PvePiece | null>(RESERVE_SIZE).fill(null)
+    player.reserveRevision += 1
+    this.emit('RESERVE_EXILED', {
+      playerId: player.playerId,
+      exiledPieceIds,
+      exiledCount: exiledPieceIds.length,
+    })
+    return this.actionResult(action, true, 'RESERVE_EXILED', { exiledCount: exiledPieceIds.length })
+  }
+
+  private handleSwapStoragePieces(player: PlayerRuntime, action: SwapStoragePiecesAction): PveRuntimeResult {
+    if (!this.revisionMatches(action.expectedTrayRevision, player.trayRevision)) {
+      return this.actionResult(action, false, 'STALE_TRAY_REVISION')
+    }
+    if (!this.revisionMatches(action.expectedReserveRevision, player.reserveRevision)) {
+      return this.actionResult(action, false, 'STALE_RESERVE_REVISION')
+    }
+    if (!this.isStorageIndexValid(action.sourceZone, action.sourceIndex)
+      || !this.isStorageIndexValid(action.targetZone, action.targetIndex)) {
+      return this.actionResult(action, false, 'INVALID_STORAGE_INDEX')
+    }
+    if (action.sourceZone === action.targetZone && action.sourceIndex === action.targetIndex) {
+      return this.actionResult(action, false, 'SAME_LOCATION')
+    }
+
+    const sourceStorage = action.sourceZone === 'tray' ? player.tray : player.reserve
+    const targetStorage = action.targetZone === 'tray' ? player.tray : player.reserve
+    const sourcePiece = sourceStorage[action.sourceIndex]
+    const targetPiece = targetStorage[action.targetIndex]
+    if (!sourcePiece && !targetPiece) {
+      return this.actionResult(action, false, 'EMPTY_TO_EMPTY')
+    }
+
+    sourceStorage[action.sourceIndex] = targetPiece
+    targetStorage[action.targetIndex] = sourcePiece
+    if (action.sourceZone === 'tray' || action.targetZone === 'tray') {
+      player.trayRevision += 1
+    }
+    if (action.sourceZone === 'reserve' || action.targetZone === 'reserve') {
+      player.reserveRevision += 1
+    }
+    this.emit('STORAGE_PIECES_SWAPPED', {
+      playerId: player.playerId,
+      sourceZone: action.sourceZone,
+      sourceIndex: action.sourceIndex,
+      targetZone: action.targetZone,
+      targetIndex: action.targetIndex,
+      sourcePieceId: sourcePiece?.id ?? null,
+      targetPieceId: targetPiece?.id ?? null,
+    })
+    return this.actionResult(action, true, 'STORAGE_PIECES_SWAPPED')
+  }
+
   private handleMoveBoardPiece(player: PlayerRuntime, action: MoveBoardPieceAction): PveRuntimeResult {
     if (!this.revisionMatches(action.expectedBoardRevision, player.boardRevision)) {
       return this.actionResult(action, false, 'STALE_BOARD_REVISION')
@@ -519,7 +651,12 @@ export class PveGameRuntime {
   }
 
   private handleMergeSoldiers(player: PlayerRuntime, action: MergeSoldiersAction): PveRuntimeResult {
-    const revisionError = this.validateRevisions(player, action.expectedTrayRevision, action.expectedBoardRevision)
+    const revisionError = this.validateRevisions(
+      player,
+      action.expectedTrayRevision,
+      action.expectedBoardRevision,
+      action.expectedReserveRevision,
+    )
     if (revisionError) {
       return this.actionResult(action, false, revisionError)
     }
@@ -559,6 +696,9 @@ export class PveGameRuntime {
     }
     if (source.location.kind === 'board' || target.location.kind === 'board') {
       player.boardRevision += 1
+    }
+    if (source.location.kind === 'reserve' || target.location.kind === 'reserve') {
+      player.reserveRevision += 1
     }
     this.emit('SOLDIER_MERGED', {
       playerId: player.playerId,
@@ -629,10 +769,22 @@ export class PveGameRuntime {
   }
 
   private prepareWave(waveNumber: number): void {
-    this.currentWaveNumber = waveNumber
+    if (this.currentWaveNumber === 0) {
+      this.currentWaveNumber = waveNumber
+    }
+    else {
+      this.pendingWaveNumber = waveNumber
+    }
     this.wavePhase = 'prep'
     this.prepRemainingTicks = this.prepDurationTicks
-    this.laneWaves = []
+  }
+
+  private beginPreparedWave(): void {
+    if (this.pendingWaveNumber !== null) {
+      this.currentWaveNumber = this.pendingWaveNumber
+      this.pendingWaveNumber = null
+    }
+    this.beginWaveSpawning()
   }
 
   private beginWaveSpawning(): void {
@@ -648,7 +800,8 @@ export class PveGameRuntime {
     }
 
     this.wavePhase = 'spawning'
-    this.laneWaves = activePlayers.map((player) => ({
+    const nextLaneWaves = activePlayers.map((player) => ({
+      waveNumber: this.currentWaveNumber,
       playerId: player.playerId,
       slot: player.slot,
       spawnedCount: 0,
@@ -657,9 +810,10 @@ export class PveGameRuntime {
       clearRewardGranted: false,
       retired: false,
     }))
+    this.laneWaves.push(...nextLaneWaves)
     this.emit('WAVE_STARTED', {
       waveNumber: this.currentWaveNumber,
-      laneCount: this.laneWaves.length,
+      laneCount: nextLaneWaves.length,
       countPerLane: definition.countPerPlayer,
     })
   }
@@ -674,15 +828,13 @@ export class PveGameRuntime {
     }
     const intervalTicks = Math.max(1, Math.ceil(definition.spawnIntervalMs / this.tickRateMs))
 
-    for (const lane of this.laneWaves) {
+    const currentLanes = this.currentLaneWaves()
+    for (const lane of currentLanes) {
       while (lane.spawnedCount < lane.totalCount && this.currentTick >= lane.nextSpawnTick) {
         this.spawnEnemy(lane, definition)
         lane.spawnedCount += 1
         lane.nextSpawnTick += intervalTicks
       }
-    }
-    if (this.laneWaves.every((lane) => lane.spawnedCount >= lane.totalCount)) {
-      this.wavePhase = 'clearing'
     }
   }
 
@@ -814,7 +966,7 @@ export class PveGameRuntime {
   ): EnemyRuntime | null {
     const range = getSoldierLevelValue(definition.attackRangeMilliCellsByLevel, soldier.level)
     const candidates = this.enemies.filter((enemy) => {
-      if (enemy.lifecycle !== 'alive') {
+      if (enemy.lifecycle !== 'alive' || isInsidePveProtectedZoneMilli(enemy.xMilli, enemy.yMilli)) {
         return false
       }
       return this.distanceSquared(entry.x * 1000, entry.y * 1000, enemy.xMilli, enemy.yMilli) <= range * range
@@ -838,7 +990,11 @@ export class PveGameRuntime {
     const attackerX = entry.x * 1000
     const attackerY = entry.y * 1000
     const candidates = this.enemies.filter((enemy) => {
-      if (enemy.lifecycle !== 'alive' || enemy.id === primary.id) {
+      if (
+        enemy.lifecycle !== 'alive'
+        || enemy.id === primary.id
+        || isInsidePveProtectedZoneMilli(enemy.xMilli, enemy.yMilli)
+      ) {
         return false
       }
       if (this.distanceSquared(attackerX, attackerY, enemy.xMilli, enemy.yMilli) > range * range) {
@@ -884,6 +1040,9 @@ export class PveGameRuntime {
     target: EnemyRuntime,
     isSecondary: boolean,
   ): void {
+    if (isInsidePveProtectedZoneMilli(target.xMilli, target.yMilli)) {
+      return
+    }
     let rawDamage = getSoldierLevelValue(definition.attackByLevel, soldier.level)
     if (isSecondary) {
       const ratio = getSoldierLevelValue(definition.secondaryDamageBpsByLevel, soldier.level)
@@ -956,13 +1115,13 @@ export class PveGameRuntime {
       if (!owner) {
         continue
       }
-      const reward = 5 * this.currentWaveNumber
+      const reward = 5 * lane.waveNumber
       owner.rice += reward
-      owner.clearedWaves.add(this.currentWaveNumber)
+      owner.clearedWaves.add(lane.waveNumber)
       this.emit('LANE_WAVE_CLEARED', {
         playerId: owner.playerId,
         slot: owner.slot,
-        waveNumber: this.currentWaveNumber,
+        waveNumber: lane.waveNumber,
         riceReward: reward,
       })
       this.emit('RICE_GRANTED', {
@@ -975,25 +1134,26 @@ export class PveGameRuntime {
   }
 
   private updateWavePhaseAndProgression(): void {
-    if (this.laneWaves.length === 0) {
+    const currentLanes = this.currentLaneWaves()
+    if (currentLanes.length === 0 || this.wavePhase === 'prep') {
       return
     }
-    const allSpawned = this.laneWaves.every((lane) => lane.spawnedCount >= lane.totalCount)
-    if (allSpawned) {
-      this.wavePhase = 'clearing'
-    }
-    if (!allSpawned || this.enemies.some((enemy) => enemy.lifecycle === 'alive' && enemy.waveNumber === this.currentWaveNumber)) {
+    const allSpawned = currentLanes.every((lane) => lane.spawnedCount >= lane.totalCount)
+    if (!allSpawned) {
       return
     }
 
     if (this.currentWaveNumber >= this.maxWaves) {
-      this.wavePhase = 'complete'
-      this.finishMatch('victory', 'All configured waves cleared')
+      this.wavePhase = 'clearing'
+      if (this.enemies.every((enemy) => enemy.lifecycle !== 'alive')) {
+        this.wavePhase = 'complete'
+        this.finishMatch('victory', 'All configured waves cleared')
+      }
       return
     }
     this.prepareWave(this.currentWaveNumber + 1)
     if (this.prepRemainingTicks === 0) {
-      this.beginWaveSpawning()
+      this.beginPreparedWave()
     }
   }
 
@@ -1020,10 +1180,14 @@ export class PveGameRuntime {
   private hasAliveLaneEnemy(lane: LaneWaveRuntime): boolean {
     return this.enemies.some((enemy) => {
       return enemy.lifecycle === 'alive'
-        && enemy.waveNumber === this.currentWaveNumber
+        && enemy.waveNumber === lane.waveNumber
         && enemy.laneOwnerPlayerId === lane.playerId
         && enemy.laneSlot === lane.slot
     })
+  }
+
+  private currentLaneWaves(): LaneWaveRuntime[] {
+    return this.laneWaves.filter((lane) => lane.waveNumber === this.currentWaveNumber)
   }
 
   private playerSnapshot(player: PlayerRuntime): PvePlayerSnapshot {
@@ -1043,8 +1207,10 @@ export class PveGameRuntime {
       populationUsed: this.populationUsed(player),
       populationCap: player.populationCap,
       trayRevision: player.trayRevision,
+      reserveRevision: player.reserveRevision,
       boardRevision: player.boardRevision,
       tray: player.tray.map((piece) => piece ? clonePiece(piece) : null),
+      reserve: player.reserve.map((piece) => piece ? clonePiece(piece) : null),
       boardPieces,
       remainingCharacterTokens,
       clearedWaves: [...player.clearedWaves].sort((left, right) => left - right),
@@ -1080,6 +1246,11 @@ export class PveGameRuntime {
       const piece = player.tray[trayIndex]
       return piece ? { piece, location: { kind: 'tray', trayIndex } } : null
     }
+    const reserveIndex = player.reserve.findIndex((piece) => piece?.id === pieceId)
+    if (reserveIndex >= 0) {
+      const piece = player.reserve[reserveIndex]
+      return piece ? { piece, location: { kind: 'reserve', reserveIndex } } : null
+    }
     for (const [key, entry] of player.board.entries()) {
       if (entry.piece.id === pieceId) {
         return {
@@ -1095,6 +1266,9 @@ export class PveGameRuntime {
     if (location.kind === 'tray' && location.trayIndex !== undefined) {
       player.tray[location.trayIndex] = null
     }
+    else if (location.kind === 'reserve' && location.reserveIndex !== undefined) {
+      player.reserve[location.reserveIndex] = null
+    }
     else if (location.kind === 'board' && location.boardKey) {
       player.board.delete(location.boardKey)
     }
@@ -1103,6 +1277,9 @@ export class PveGameRuntime {
   private putPieceAt(player: PlayerRuntime, location: PieceLocation, piece: PvePiece): void {
     if (location.kind === 'tray' && location.trayIndex !== undefined) {
       player.tray[location.trayIndex] = piece
+    }
+    else if (location.kind === 'reserve' && location.reserveIndex !== undefined) {
+      player.reserve[location.reserveIndex] = piece
     }
     else if (
       location.kind === 'board'
@@ -1145,6 +1322,7 @@ export class PveGameRuntime {
     player: PlayerRuntime,
     expectedTrayRevision?: number,
     expectedBoardRevision?: number,
+    expectedReserveRevision?: number,
   ): string | null {
     if (!this.revisionMatches(expectedTrayRevision, player.trayRevision)) {
       return 'STALE_TRAY_REVISION'
@@ -1152,11 +1330,19 @@ export class PveGameRuntime {
     if (!this.revisionMatches(expectedBoardRevision, player.boardRevision)) {
       return 'STALE_BOARD_REVISION'
     }
+    if (!this.revisionMatches(expectedReserveRevision, player.reserveRevision)) {
+      return 'STALE_RESERVE_REVISION'
+    }
     return null
   }
 
   private revisionMatches(expected: number | undefined, actual: number): boolean {
     return expected === undefined || expected === actual
+  }
+
+  private isStorageIndexValid(zone: 'tray' | 'reserve', index: number): boolean {
+    const size = zone === 'tray' ? TRAY_SIZE : RESERVE_SIZE
+    return Number.isInteger(index) && index >= 0 && index < size
   }
 
   private canDeployAt(slot: PveLaneSlot, x: number, y: number): boolean {

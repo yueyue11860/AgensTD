@@ -81,8 +81,59 @@ function parseClientAction(payload) {
                     action: 'MERGE_SOLDIERS',
                     sourceEntityId: payload.sourceEntityId,
                     targetEntityId: payload.targetEntityId,
+                    ...(typeof payload.expectedTrayRevision === 'number'
+                        ? { expectedTrayRevision: payload.expectedTrayRevision }
+                        : {}),
                     ...(typeof payload.expectedBoardRevision === 'number'
                         ? { expectedBoardRevision: payload.expectedBoardRevision }
+                        : {}),
+                    ...(typeof payload.expectedReserveRevision === 'number'
+                        ? { expectedReserveRevision: payload.expectedReserveRevision }
+                        : {}),
+                }
+                : null;
+        case 'SWAP_RESERVE_BOARD':
+            return Number.isInteger(payload.reserveIndex)
+                && typeof payload.x === 'number'
+                && typeof payload.y === 'number'
+                ? {
+                    action: 'SWAP_RESERVE_BOARD',
+                    reserveIndex: payload.reserveIndex,
+                    x: payload.x,
+                    y: payload.y,
+                    ...(typeof payload.expectedReserveRevision === 'number'
+                        ? { expectedReserveRevision: payload.expectedReserveRevision }
+                        : {}),
+                    ...(typeof payload.expectedBoardRevision === 'number'
+                        ? { expectedBoardRevision: payload.expectedBoardRevision }
+                        : {}),
+                }
+                : null;
+        case 'EXILE_RESERVE':
+            return typeof payload.expectedReserveRevision === 'number' || payload.expectedReserveRevision === undefined
+                ? {
+                    action: 'EXILE_RESERVE',
+                    ...(typeof payload.expectedReserveRevision === 'number'
+                        ? { expectedReserveRevision: payload.expectedReserveRevision }
+                        : {}),
+                }
+                : null;
+        case 'SWAP_STORAGE_PIECES':
+            return (payload.sourceZone === 'tray' || payload.sourceZone === 'reserve')
+                && (payload.targetZone === 'tray' || payload.targetZone === 'reserve')
+                && Number.isInteger(payload.sourceIndex)
+                && Number.isInteger(payload.targetIndex)
+                ? {
+                    action: 'SWAP_STORAGE_PIECES',
+                    sourceZone: payload.sourceZone,
+                    sourceIndex: payload.sourceIndex,
+                    targetZone: payload.targetZone,
+                    targetIndex: payload.targetIndex,
+                    ...(typeof payload.expectedTrayRevision === 'number'
+                        ? { expectedTrayRevision: payload.expectedTrayRevision }
+                        : {}),
+                    ...(typeof payload.expectedReserveRevision === 'number'
+                        ? { expectedReserveRevision: payload.expectedReserveRevision }
                         : {}),
                 }
                 : null;

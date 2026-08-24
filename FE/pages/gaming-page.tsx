@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { Coins, OctagonX, RefreshCw, ShieldAlert, Skull, Users } from 'lucide-react'
+import { Coins, OctagonX, RefreshCw, ShieldAlert, Skull, Timer, Users } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { io, type Socket } from 'socket.io-client'
 import { GameOverOverlay } from '../components/game-over-overlay'
@@ -21,6 +21,7 @@ type RoomPhase = 'lobby' | 'countdown' | 'waiting_for_level' | 'playing'
 type MatchStatus = 'waiting' | 'running' | 'finished'
 type MatchOutcome = 'victory' | 'defeat'
 type PieceKind = 'soldier' | 'character'
+type StorageZone = 'tray' | 'reserve'
 
 interface ServerBoardPieceState {
   entityId: string
@@ -48,6 +49,7 @@ interface ServerEnemyState {
   y: number
   hp: number
   maxHp: number
+  invulnerable?: boolean
 }
 
 interface ServerWaveState {
@@ -73,11 +75,13 @@ interface ServerDrivenGameState {
   boardPieces: ServerBoardPieceState[]
   enemies: ServerEnemyState[]
   tray: Array<ServerTrayPieceState | null>
+  reserve: Array<ServerTrayPieceState | null>
   rice: number
   nextRecruitCost: number
   populationUsed: number
   populationCap: number
   trayRevision: number
+  reserveRevision: number
   boardRevision: number
   overloadTicks: number
   overloadCountdownSec: number
@@ -225,6 +229,7 @@ function normalizeEnemy(rawEnemy: unknown): ServerEnemyState | null {
     y,
     hp,
     maxHp: typeof rawEnemy.maxHp === 'number' ? rawEnemy.maxHp : Math.max(1, hp),
+    invulnerable: rawEnemy.invulnerable === true,
   }
 }
 
@@ -241,12 +246,20 @@ function normalizeSyncState(payload: unknown, playerId: string): ServerDrivenGam
   const rawEnemies = pve && Array.isArray(pve.enemies) ? pve.enemies : Array.isArray(candidate.enemies) ? candidate.enemies : []
   const enemies = rawEnemies.map(normalizeEnemy).filter((enemy): enemy is ServerEnemyState => enemy !== null)
   const tray = Array<ServerTrayPieceState | null>(5).fill(null)
+  const reserve = Array<ServerTrayPieceState | null>(2).fill(null)
 
   if (currentPlayer && Array.isArray(currentPlayer.tray)) {
     for (const [fallbackIndex, rawSlot] of currentPlayer.tray.entries()) {
       if (!isObject(rawSlot)) continue
       const index = typeof rawSlot.index === 'number' ? rawSlot.index : fallbackIndex
       if (index >= 0 && index < tray.length) tray[index] = normalizeTrayPiece(rawSlot.piece, index)
+    }
+  }
+  if (currentPlayer && Array.isArray(currentPlayer.reserve)) {
+    for (const [fallbackIndex, rawSlot] of currentPlayer.reserve.entries()) {
+      if (!isObject(rawSlot)) continue
+      const index = typeof rawSlot.index === 'number' ? rawSlot.index : fallbackIndex
+      if (index >= 0 && index < reserve.length) reserve[index] = normalizeTrayPiece(rawSlot.piece, index)
     }
   }
 
@@ -267,11 +280,13 @@ function normalizeSyncState(payload: unknown, playerId: string): ServerDrivenGam
     boardPieces,
     enemies,
     tray,
+    reserve,
     rice: readNumber(currentPlayer, 'rice', readNumber(resources, 'gold', 0)),
     nextRecruitCost: readNumber(currentPlayer, 'nextRecruitCost', 5),
     populationUsed: readNumber(currentPlayer, 'populationUsed', boardPieces.filter((piece) => piece.ownerPlayerId === playerId && piece.kind === 'soldier').length),
     populationCap: readNumber(currentPlayer, 'populationCap', 10),
     trayRevision: readNumber(currentPlayer, 'trayRevision', 0),
+    reserveRevision: readNumber(currentPlayer, 'reserveRevision', 0),
     boardRevision: readNumber(currentPlayer, 'boardRevision', 0),
     overloadTicks: readNumber(roomRuntime, 'overloadTicks', 0),
     overloadCountdownSec: pve ? readNumber(pve, 'overloadCountdownSec', 0) : readNumber(roomRuntime, 'overloadCountdownSec', 0),
@@ -341,14 +356,28 @@ function findPieceAtCell(pieces: ServerBoardPieceState[], x: number, y: number) 
   return pieces.find((piece) => piece.x === x && piece.y === y) ?? null
 }
 
-function isDeployableCell(pieces: ServerBoardPieceState[], x: number, y: number) {
+function canMergeSoldiers(
+  source: Pick<ServerTrayPieceState, 'kind' | 'soldierType' | 'level'> | null,
+  target: Pick<ServerTrayPieceState, 'kind' | 'soldierType' | 'level'> | null,
+) {
+  return Boolean(
+    source
+    && target
+    && source.kind === 'soldier'
+    && target.kind === 'soldier'
+    && source.soldierType === target.soldierType
+    && source.level === target.level
+    && (target.level ?? 1) < 5,
+  )
+}
+
+function isTerrainDeployableCell(x: number, y: number) {
   return x >= 0
     && x < BOARD_DIMENSION
     && y >= 0
     && y < BOARD_DIMENSION
     && ARENA_TERRAIN_MATRIX[y][x] === 1
     && !isReferenceCoreCell(x, y)
-    && !findPieceAtCell(pieces, x, y)
 }
 
 function CrisisWarning({ overloadTicks, overloadCountdownSec, enemyCount, maxCapacity }: { overloadTicks: number; overloadCountdownSec: number; enemyCount: number; maxCapacity: number }) {
@@ -379,7 +408,11 @@ function GamingBoard({ gameState, selectedPieceId, placementMode, hoveredCell, o
   onCellHover: (x: number, y: number) => void
   onCellLeave: () => void
 }) {
-  const canPreviewAtHoveredCell = Boolean(hoveredCell && placementMode && isDeployableCell(gameState?.boardPieces ?? [], hoveredCell.x, hoveredCell.y))
+  const canPreviewAtHoveredCell = Boolean(
+    hoveredCell
+    && placementMode
+    && isTerrainDeployableCell(hoveredCell.x, hoveredCell.y),
+  )
   return (
     <Suspense fallback={<section className="gaming-board-frame" aria-busy="true"><div className="gaming-board-viewport">正在加载战场引擎…</div></section>}>
       <PhaserBattlefield
@@ -410,6 +443,7 @@ export function GamingPage() {
   const [gameState, setGameState] = useState<ServerDrivenGameState | null>(null)
   const [roomPhase, setRoomPhase] = useState<RoomPhase>('lobby')
   const [selectedTrayIndex, setSelectedTrayIndex] = useState<number | null>(null)
+  const [selectedReserveIndex, setSelectedReserveIndex] = useState<number | null>(null)
   const [selectedPieceId, setSelectedPieceId] = useState<string | null>(null)
   const [hoveredCell, setHoveredCell] = useState<{ x: number; y: number } | null>(null)
   const [isLeaveConfirmOpen, setIsLeaveConfirmOpen] = useState(false)
@@ -428,6 +462,7 @@ export function GamingPage() {
     return level ? { levelId: level.levelId, label: level.label, description: level.subtitle, waveCount: 0, targetClearRate: level.clearRate, minPlayers: level.minPlayers } : null
   })() : null)
   const selectedPiece = gameState?.boardPieces.find((piece) => piece.entityId === selectedPieceId) ?? null
+  const selectedReservePiece = selectedReserveIndex === null ? null : gameState?.reserve[selectedReserveIndex] ?? null
   const recruitDisabled = !gameState || gameState.status !== 'running' || gameState.rice < gameState.nextRecruitCost
 
   useEffect(() => {
@@ -536,8 +571,9 @@ export function GamingPage() {
 
   useEffect(() => {
     if (selectedTrayIndex !== null && !gameState?.tray[selectedTrayIndex]) setSelectedTrayIndex(null)
+    if (selectedReserveIndex !== null && !gameState?.reserve[selectedReserveIndex]) setSelectedReserveIndex(null)
     if (selectedPieceId && !gameState?.boardPieces.some((piece) => piece.entityId === selectedPieceId)) setSelectedPieceId(null)
-  }, [gameState, selectedPieceId, selectedTrayIndex])
+  }, [gameState, selectedPieceId, selectedReserveIndex, selectedTrayIndex])
 
   function emitAction(payload: Record<string, unknown>) {
     const socket = socketRef.current
@@ -557,7 +593,123 @@ export function GamingPage() {
     if (recruitDisabled || !gameState) return
     if (emitAction({ action: 'RECRUIT_BATCH', expectedTrayRevision: gameState.trayRevision })) {
       setSelectedTrayIndex(null)
+      setSelectedReserveIndex(null)
       setSelectedPieceId(null)
+    }
+  }
+
+  function getStoragePiece(zone: StorageZone, index: number) {
+    return zone === 'tray' ? gameState?.tray[index] ?? null : gameState?.reserve[index] ?? null
+  }
+
+  function moveOrMergeStorage(sourceZone: StorageZone, sourceIndex: number, targetZone: StorageZone, targetIndex: number) {
+    if (!gameState || (sourceZone === targetZone && sourceIndex === targetIndex)) return false
+    const source = getStoragePiece(sourceZone, sourceIndex)
+    const target = getStoragePiece(targetZone, targetIndex)
+    if (!source) return false
+    if (target && canMergeSoldiers(source, target)) {
+      return emitAction({
+        action: 'MERGE_SOLDIERS',
+        sourceEntityId: source.entityId,
+        targetEntityId: target.entityId,
+        expectedTrayRevision: gameState.trayRevision,
+        expectedBoardRevision: gameState.boardRevision,
+        expectedReserveRevision: gameState.reserveRevision,
+      })
+    }
+    return emitAction({
+      action: 'SWAP_STORAGE_PIECES',
+      sourceZone,
+      sourceIndex,
+      targetZone,
+      targetIndex,
+      expectedTrayRevision: gameState.trayRevision,
+      expectedReserveRevision: gameState.reserveRevision,
+    })
+  }
+
+  function clearPieceSelection() {
+    setSelectedTrayIndex(null)
+    setSelectedReserveIndex(null)
+    setSelectedPieceId(null)
+  }
+
+  function handleTrayClick(index: number) {
+    if (!gameState) return
+    if (selectedPiece) {
+      if (selectedPiece.ownerPlayerId !== playerId) return
+      emitAction({
+        action: 'DEPLOY_TRAY_PIECE',
+        trayIndex: index,
+        x: selectedPiece.x,
+        y: selectedPiece.y,
+        expectedTrayRevision: gameState.trayRevision,
+        expectedBoardRevision: gameState.boardRevision,
+      })
+      clearPieceSelection()
+      return
+    }
+    if (selectedReserveIndex !== null) {
+      moveOrMergeStorage('reserve', selectedReserveIndex, 'tray', index)
+      clearPieceSelection()
+      return
+    }
+    if (selectedTrayIndex !== null) {
+      if (selectedTrayIndex === index) {
+        setSelectedTrayIndex(null)
+      }
+      else {
+        moveOrMergeStorage('tray', selectedTrayIndex, 'tray', index)
+        clearPieceSelection()
+      }
+      return
+    }
+    if (!gameState.tray[index]) return
+    setSelectedTrayIndex(index)
+    setSelectedReserveIndex(null)
+    setSelectedPieceId(null)
+  }
+
+  function handleReserveClick(index: number) {
+    if (!gameState) return
+    if (selectedPiece) {
+      if (selectedPiece.ownerPlayerId !== playerId) return
+      emitAction({
+        action: 'SWAP_RESERVE_BOARD',
+        reserveIndex: index,
+        x: selectedPiece.x,
+        y: selectedPiece.y,
+        expectedReserveRevision: gameState.reserveRevision,
+        expectedBoardRevision: gameState.boardRevision,
+      })
+      clearPieceSelection()
+      return
+    }
+    if (selectedTrayIndex !== null) {
+      moveOrMergeStorage('tray', selectedTrayIndex, 'reserve', index)
+      clearPieceSelection()
+      return
+    }
+    if (selectedReserveIndex !== null) {
+      if (selectedReserveIndex === index) {
+        setSelectedReserveIndex(null)
+      }
+      else {
+        moveOrMergeStorage('reserve', selectedReserveIndex, 'reserve', index)
+        clearPieceSelection()
+      }
+      return
+    }
+    if (!gameState.reserve[index]) return
+    setSelectedReserveIndex(index)
+    setSelectedTrayIndex(null)
+    setSelectedPieceId(null)
+  }
+
+  function handleExileReserve() {
+    if (!gameState || gameState.status !== 'running') return
+    if (emitAction({ action: 'EXILE_RESERVE', expectedReserveRevision: gameState.reserveRevision })) {
+      setSelectedReserveIndex(null)
     }
   }
 
@@ -566,15 +718,69 @@ export function GamingPage() {
     const target = findPieceAtCell(gameState.boardPieces, x, y)
 
     if (selectedTrayIndex !== null) {
-      if (!target && isDeployableCell(gameState.boardPieces, x, y)) {
-        emitAction({ action: 'DEPLOY_TRAY_PIECE', trayIndex: selectedTrayIndex, x, y, expectedTrayRevision: gameState.trayRevision, expectedBoardRevision: gameState.boardRevision })
-        setSelectedTrayIndex(null)
+      const trayPiece = gameState.tray[selectedTrayIndex]
+      if (!trayPiece || !isTerrainDeployableCell(x, y)) return
+
+      if (target) {
+        if (target.ownerPlayerId !== playerId) return
+        const canMerge = trayPiece.kind === 'soldier'
+          && target.kind === 'soldier'
+          && trayPiece.soldierType === target.soldierType
+          && trayPiece.level === target.level
+          && (target.level ?? 1) < 5
+
+        if (canMerge) {
+          emitAction({
+            action: 'MERGE_SOLDIERS',
+            sourceEntityId: trayPiece.entityId,
+            targetEntityId: target.entityId,
+            expectedTrayRevision: gameState.trayRevision,
+            expectedBoardRevision: gameState.boardRevision,
+          })
+        }
+        else {
+          emitAction({ action: 'DEPLOY_TRAY_PIECE', trayIndex: selectedTrayIndex, x, y, expectedTrayRevision: gameState.trayRevision, expectedBoardRevision: gameState.boardRevision })
+        }
       }
+      else {
+        emitAction({ action: 'DEPLOY_TRAY_PIECE', trayIndex: selectedTrayIndex, x, y, expectedTrayRevision: gameState.trayRevision, expectedBoardRevision: gameState.boardRevision })
+      }
+      setSelectedTrayIndex(null)
+      return
+    }
+
+    if (selectedReserveIndex !== null && selectedReservePiece) {
+      if (!isTerrainDeployableCell(x, y) || (target && target.ownerPlayerId !== playerId)) return
+      if (target && canMergeSoldiers(selectedReservePiece, target)) {
+        emitAction({
+          action: 'MERGE_SOLDIERS',
+          sourceEntityId: selectedReservePiece.entityId,
+          targetEntityId: target.entityId,
+          expectedTrayRevision: gameState.trayRevision,
+          expectedReserveRevision: gameState.reserveRevision,
+          expectedBoardRevision: gameState.boardRevision,
+        })
+      }
+      else {
+        emitAction({
+          action: 'SWAP_RESERVE_BOARD',
+          reserveIndex: selectedReserveIndex,
+          x,
+          y,
+          expectedReserveRevision: gameState.reserveRevision,
+          expectedBoardRevision: gameState.boardRevision,
+        })
+      }
+      setSelectedReserveIndex(null)
       return
     }
 
     if (selectedPiece) {
       if (target) {
+        if (target.entityId === selectedPiece.entityId) {
+          setSelectedPieceId(null)
+          return
+        }
         const canMerge = target.ownerPlayerId === playerId
           && selectedPiece.ownerPlayerId === playerId
           && target.entityId !== selectedPiece.entityId
@@ -583,18 +789,27 @@ export function GamingPage() {
           && target.soldierType === selectedPiece.soldierType
           && target.level === selectedPiece.level
           && (target.level ?? 1) < 5
-        if (canMerge) emitAction({ action: 'MERGE_SOLDIERS', sourceEntityId: selectedPiece.entityId, targetEntityId: target.entityId, expectedBoardRevision: gameState.boardRevision })
-        setSelectedPieceId(target.ownerPlayerId === playerId && !canMerge ? target.entityId : null)
+        if (canMerge) {
+          emitAction({ action: 'MERGE_SOLDIERS', sourceEntityId: selectedPiece.entityId, targetEntityId: target.entityId, expectedBoardRevision: gameState.boardRevision })
+        }
+        else if (target.ownerPlayerId === playerId && isTerrainDeployableCell(x, y)) {
+          emitAction({ action: 'MOVE_BOARD_PIECE', entityId: selectedPiece.entityId, x, y, expectedBoardRevision: gameState.boardRevision })
+        }
+        setSelectedPieceId(null)
         return
       }
-      if (selectedPiece.ownerPlayerId === playerId && isDeployableCell(gameState.boardPieces, x, y)) {
+      if (selectedPiece.ownerPlayerId === playerId && isTerrainDeployableCell(x, y)) {
         emitAction({ action: 'MOVE_BOARD_PIECE', entityId: selectedPiece.entityId, x, y, expectedBoardRevision: gameState.boardRevision })
       }
       setSelectedPieceId(null)
       return
     }
 
-    if (target?.ownerPlayerId === playerId) setSelectedPieceId(target.entityId)
+    if (target?.ownerPlayerId === playerId) {
+      setSelectedPieceId(target.entityId)
+      setSelectedTrayIndex(null)
+      setSelectedReserveIndex(null)
+    }
   }
 
   function leaveGame() {
@@ -630,7 +845,7 @@ export function GamingPage() {
               {error ? <section className="gaming-panel-card"><p className="gaming-error-text">{error}</p></section> : null}
               <section className="gaming-panel-card gaming-recruit-panel">
                 <p className="gaming-section-label">召唤托盘</p>
-                <p className="gaming-recruit-help">选中棋子，再点击棋盘空位部署</p>
+                <p className="gaming-recruit-help">可与备战席、棋盘互换；同类同级直接升级</p>
                 <div className="gaming-summon-tray">
                   {Array.from({ length: 5 }, (_, index) => {
                     const piece = gameState?.tray[index] ?? null
@@ -638,12 +853,41 @@ export function GamingPage() {
                       <button
                         key={index}
                         type="button"
-                        disabled={!piece}
+                        draggable={Boolean(piece)}
                         className={cx('gaming-tray-slot', selectedTrayIndex === index && 'gaming-tray-slot-active', piece?.kind === 'character' && 'gaming-tray-slot-character')}
-                        onClick={() => {
-                          if (!piece) return
-                          setSelectedTrayIndex((current) => current === index ? null : index)
+                        onClick={() => handleTrayClick(index)}
+                        onDragStart={(event) => {
+                          if (!piece) {
+                            event.preventDefault()
+                            return
+                          }
+                          event.dataTransfer.effectAllowed = 'move'
+                          event.dataTransfer.setData('application/x-agenstd-tray-index', String(index))
+                          event.dataTransfer.setData('application/x-agenstd-storage-piece', JSON.stringify({ zone: 'tray', index }))
+                          setSelectedTrayIndex(index)
+                          setSelectedReserveIndex(null)
                           setSelectedPieceId(null)
+                        }}
+                        onDragOver={(event) => {
+                          if (event.dataTransfer.types.includes('application/x-agenstd-storage-piece')) {
+                            event.preventDefault()
+                            event.dataTransfer.dropEffect = 'move'
+                          }
+                        }}
+                        onDrop={(event) => {
+                          const rawSource = event.dataTransfer.getData('application/x-agenstd-storage-piece')
+                          if (!rawSource) return
+                          event.preventDefault()
+                          try {
+                            const source = JSON.parse(rawSource) as { zone?: unknown, index?: unknown }
+                            if ((source.zone === 'tray' || source.zone === 'reserve') && Number.isInteger(source.index)) {
+                              moveOrMergeStorage(source.zone, source.index as number, 'tray', index)
+                              clearPieceSelection()
+                            }
+                          }
+                          catch {
+                            // Ignore malformed browser drag data.
+                          }
                         }}
                         aria-label={piece ? `${piece.glyph}${piece.level ? `${piece.level}级` : ''}` : `空托盘${index + 1}`}
                       >
@@ -658,6 +902,65 @@ export function GamingPage() {
                   <strong>{gameState?.nextRecruitCost ?? 5} 斋饭</strong>
                 </button>
                 <p className="gaming-recruit-rule">每次刷新全部5格；首次召唤必含天兵</p>
+                <div className="gaming-reserve-panel">
+                  <div className="gaming-reserve-heading">
+                    <div>
+                      <p className="gaming-section-label">备战席</p>
+                      <p className="gaming-recruit-help">不占人口 · 支持托盘、棋盘拖入或互换</p>
+                    </div>
+                    <button type="button" className="gaming-exile-button" disabled={!gameState || gameState.status !== 'running'} onClick={handleExileReserve}>流放</button>
+                  </div>
+                  <div className="gaming-reserve-row">
+                    {Array.from({ length: 2 }, (_, index) => {
+                      const piece = gameState?.reserve[index] ?? null
+                      return (
+                        <button
+                          key={index}
+                          type="button"
+                          draggable={Boolean(piece)}
+                          className={cx('gaming-tray-slot gaming-reserve-slot', selectedReserveIndex === index && 'gaming-tray-slot-active', piece?.kind === 'character' && 'gaming-tray-slot-character')}
+                          onClick={() => handleReserveClick(index)}
+                          onDragStart={(event) => {
+                            if (!piece) {
+                              event.preventDefault()
+                              return
+                            }
+                            event.dataTransfer.effectAllowed = 'move'
+                            event.dataTransfer.setData('application/x-agenstd-reserve-index', String(index))
+                            event.dataTransfer.setData('application/x-agenstd-storage-piece', JSON.stringify({ zone: 'reserve', index }))
+                            setSelectedReserveIndex(index)
+                            setSelectedTrayIndex(null)
+                            setSelectedPieceId(null)
+                          }}
+                          onDragOver={(event) => {
+                            if (event.dataTransfer.types.includes('application/x-agenstd-storage-piece')) {
+                              event.preventDefault()
+                              event.dataTransfer.dropEffect = 'move'
+                            }
+                          }}
+                          onDrop={(event) => {
+                            const rawSource = event.dataTransfer.getData('application/x-agenstd-storage-piece')
+                            if (!rawSource) return
+                            event.preventDefault()
+                            try {
+                              const source = JSON.parse(rawSource) as { zone?: unknown, index?: unknown }
+                              if ((source.zone === 'tray' || source.zone === 'reserve') && Number.isInteger(source.index)) {
+                                moveOrMergeStorage(source.zone, source.index as number, 'reserve', index)
+                                clearPieceSelection()
+                              }
+                            }
+                            catch {
+                              // Ignore malformed browser drag data.
+                            }
+                          }}
+                          aria-label={piece ? `备战席${index + 1}：${piece.glyph}${piece.level ? `${piece.level}级` : ''}` : `备战席空位${index + 1}`}
+                        >
+                          {piece ? <><span className="gaming-tray-glyph">{piece.glyph}</span>{piece.level ? <span className="gaming-tray-level">{piece.level}</span> : null}</> : <span className="gaming-tray-empty">空</span>}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
               </section>
 
               {selectedPiece ? (
@@ -677,7 +980,7 @@ export function GamingPage() {
           <GamingBoard
             gameState={gameState}
             selectedPieceId={selectedPieceId}
-            placementMode={selectedTrayIndex !== null || selectedPieceId !== null}
+            placementMode={selectedTrayIndex !== null || selectedReserveIndex !== null || selectedPieceId !== null}
             hoveredCell={hoveredCell}
             onCellClick={handleCellClick}
             onCellHover={(x, y) => setHoveredCell({ x, y })}
@@ -692,14 +995,18 @@ export function GamingPage() {
                 <div className="gaming-status-row"><Users className="h-4 w-4 text-cyan-300" /><span>人口</span><strong>{gameState?.populationUsed ?? 0}/{gameState?.populationCap ?? 10}</strong></div>
                 <div className="gaming-status-row"><Skull className="h-4 w-4 text-red-300" /><span>活跃小怪</span><strong>{gameState?.enemies.length ?? 0}</strong></div>
                 <div className="gaming-status-row"><ShieldAlert className="h-4 w-4 text-orange-300" /><span>当前波次</span><strong>{gameState?.currentWave.index ?? 0}{gameState?.maxWaves ? `/${gameState.maxWaves}` : ''}</strong></div>
+                {(gameState?.currentWave.prepCountdownSec ?? 0) > 0 ? (
+                  <div className="gaming-status-row"><Timer className="h-4 w-4 text-violet-300" /><span>出怪倒计时</span><strong>{gameState?.currentWave.prepCountdownSec}s</strong></div>
+                ) : null}
               </div>
             </section>
             <section className="gaming-panel-card">
               <p className="gaming-section-label">操作提示</p>
               <div className="gaming-operation-guide">
-                <p>托盘棋子 → 空地：部署</p>
-                <p>棋盘棋子 → 空地：迁移</p>
-                <p>同类同级天兵 → 天兵：合成升级</p>
+                <p>托盘天兵 → 同类同级天兵：直接升级</p>
+                <p>托盘、备战席、棋盘任意两处可交换或合成</p>
+                <p>备战席单位不占人口</p>
+                <p>流放：清空备战席中的全部单位</p>
               </div>
             </section>
             {selectedLevelPreview ? <section className="gaming-panel-card"><p className="gaming-section-label">已选关卡</p><h2 className="mt-2 text-lg font-semibold text-white">{selectedLevelPreview.label}</h2><p className="mt-2 text-sm leading-6 text-slate-300">{selectedLevelPreview.description}</p></section> : null}

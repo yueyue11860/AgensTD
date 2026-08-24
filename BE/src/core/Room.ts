@@ -207,6 +207,10 @@ export class Room {
   }
 
   getPhase(): RoomPhase {
+    if (this.phase === 'playing' && this.engine.isMatchFinished()) {
+      return 'lobby'
+    }
+
     return this.phase
   }
 
@@ -228,7 +232,7 @@ export class Room {
       hasPassword: this.hasPassword,
       players: this.slotAssignments.size,
       maxPlayers: ROOM_SLOT_ORDER.length,
-      phase: this.phase,
+      phase: this.getPhase(),
       slots: ROOM_SLOT_ORDER.map((slotId) => {
         const playerId = this.slotAssignments.get(slotId) ?? null
         const player = playerId
@@ -260,12 +264,16 @@ export class Room {
     requestorPlayerId: string,
     onComplete: () => void,
   ): 'ok' | 'wrong_phase' | 'forbidden' {
-    if (this.phase !== 'lobby') {
+    if (this.getPhase() !== 'lobby') {
       return 'wrong_phase'
     }
 
     if (requestorPlayerId !== this.hostPlayerId) {
       return 'forbidden'
+    }
+
+    if (this.phase === 'playing' && !this.engine.resetForRematch()) {
+      return 'wrong_phase'
     }
 
     this.phase = 'countdown'

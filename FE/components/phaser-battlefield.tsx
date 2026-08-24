@@ -50,5 +50,34 @@ export function PhaserBattlefield({ snapshot, terrainMatrix, hoveredCell, select
     sceneRef.current?.setUiState(uiState)
   }, [canPreviewAtHoveredCell, hoveredCell, placementMode, selectedPieceId])
 
-  return <section className="gaming-board-frame" aria-label="29×29西游汉字战场"><div className="gaming-board-viewport"><div ref={mountRef} className="gaming-phaser-surface" /></div></section>
+  return (
+    <section className="gaming-board-frame" aria-label="29×29西游汉字战场">
+      <div className="gaming-board-viewport">
+        <div
+          ref={mountRef}
+          className="gaming-phaser-surface"
+          onDragOver={(event) => {
+            if (
+              event.dataTransfer.types.includes('application/x-agenstd-tray-index')
+              || event.dataTransfer.types.includes('application/x-agenstd-reserve-index')
+            ) {
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'move'
+            }
+          }}
+          onDrop={(event) => {
+            if (
+              !event.dataTransfer.types.includes('application/x-agenstd-tray-index')
+              && !event.dataTransfer.types.includes('application/x-agenstd-reserve-index')
+            ) return
+            event.preventDefault()
+            const bounds = event.currentTarget.getBoundingClientRect()
+            const x = Math.floor((event.clientX - bounds.left) / bounds.width * 29)
+            const y = Math.floor((event.clientY - bounds.top) / bounds.height * 29)
+            if (x >= 0 && x < 29 && y >= 0 && y < 29) callbacksRef.current.onCellClick(x, y)
+          }}
+        />
+      </div>
+    </section>
+  )
 }

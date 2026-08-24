@@ -90,6 +90,7 @@ class GameEngine {
     waveManager;
     laneRoutes;
     pveRuntime;
+    matchSequence = 0;
     playerSlots = new Map();
     pveStarted = false;
     actionSequence = 0;
@@ -108,12 +109,7 @@ class GameEngine {
         this.maxCapacity = this.playerCount * 10;
         this.activeSlots = normalizeActiveSlots(options.activeSlots);
         this.laneRoutes = options.laneRoutes ?? createFallbackLaneRoutes();
-        this.pveRuntime = new pve_v2_1.PveGameRuntime({
-            seed: `${config.matchId}:pve-v2`,
-            tickRateMs: config.tickRateMs,
-            laneRoutes: createPveLaneRouteSnapshots(this.laneRoutes),
-            maxWaves: 5,
-        });
+        this.pveRuntime = this.createPveRuntime();
         const fallbackMap = createFallbackMapCells(config.mapWidth, config.mapHeight);
         const spawnPoint = options.spawnPoint ?? fallbackMap.spawnPoint;
         const basePoint = options.basePoint ?? fallbackMap.basePoint;
@@ -281,6 +277,69 @@ class GameEngine {
         this.syncRuntimeState();
         return this.cloneStateSnapshot();
     }
+    isMatchFinished() {
+        this.syncRuntimeState();
+        return this.state.status === 'finished';
+    }
+    resetForRematch() {
+        if (!this.isMatchFinished()) {
+            return false;
+        }
+        this.matchSequence += 1;
+        this.actionQueue.drain();
+        for (const tower of this.towers) {
+            this.gridMap.release(tower.x, tower.y, tower.width, tower.height);
+        }
+        this.towers = [];
+        this.enemies = [];
+        this.waveManager = this.createWaveManager(this.config.waveConfigs, this.playerCount);
+        this.pveRuntime = this.createPveRuntime();
+        for (const [playerId, slotId] of this.playerSlots.entries()) {
+            this.pveRuntime.registerPlayer(playerId, slotId);
+        }
+        this.pveStarted = false;
+        this.actionSequence = 0;
+        this.lastPveWaveNumber = 0;
+        this.pveWaveStartedAtTick = 0;
+        this.overloadTicks = 0;
+        this.maxCapacity = this.playerCount * 10;
+        this.spawnRotation = 0;
+        this.state.matchId = `${this.config.matchId}:rematch-${this.matchSequence}`;
+        this.state.tick = 0;
+        this.state.startedAt = Date.now();
+        this.state.status = 'waiting';
+        this.state.result = null;
+        this.state.playerCount = this.playerCount;
+        this.state.maxCapacity = this.maxCapacity;
+        this.state.overloadTicks = 0;
+        this.state.overloadCountdownSec = 0;
+        this.state.base.hp = this.state.base.maxHp;
+        this.state.wave = {
+            index: 0,
+            label: '无波次',
+            startedAtTick: 0,
+            endsAtTick: null,
+            remainingSpawns: 0,
+            prepCountdownSec: 0,
+        };
+        this.state.enemies = [];
+        this.state.towers = [];
+        this.state.pendingActions = 0;
+        this.state.logs = [];
+        this.state.pve = this.projectPveSnapshot(this.pveRuntime.snapshot());
+        for (const player of this.state.players) {
+            player.gold = this.config.playerStartingGold;
+            player.score = 0;
+            player.lastActionAt = null;
+        }
+        this.syncMapCells();
+        this.appendLog('info', 'GameEngine reset for rematch', {
+            roomId: this.roomId,
+            matchId: this.state.matchId,
+            playerCount: this.playerCount,
+        });
+        return true;
+    }
     tick() {
         const tickStartedAt = node_perf_hooks_1.performance.now();
         try {
@@ -402,6 +461,9 @@ class GameEngine {
             case 'DEPLOY_TRAY_PIECE':
             case 'MOVE_BOARD_PIECE':
             case 'MERGE_SOLDIERS':
+            case 'SWAP_RESERVE_BOARD':
+            case 'EXILE_RESERVE':
+            case 'SWAP_STORAGE_PIECES':
                 this.handlePveAction(queuedAction);
                 return;
         }
@@ -442,6 +504,33 @@ class GameEngine {
                     expectedTrayRevision: action.expectedTrayRevision,
                     expectedBoardRevision: action.expectedBoardRevision,
                 };
+            case 'SWAP_RESERVE_BOARD':
+                return {
+                    type: 'SWAP_RESERVE_BOARD',
+                    actionId: queuedAction.id,
+                    reserveIndex: action.reserveIndex,
+                    boardX: action.x,
+                    boardY: action.y,
+                    expectedReserveRevision: action.expectedReserveRevision,
+                    expectedBoardRevision: action.expectedBoardRevision,
+                };
+            case 'EXILE_RESERVE':
+                return {
+                    type: 'EXILE_RESERVE',
+                    actionId: queuedAction.id,
+                    expectedReserveRevision: action.expectedReserveRevision,
+                };
+            case 'SWAP_STORAGE_PIECES':
+                return {
+                    type: 'SWAP_STORAGE_PIECES',
+                    actionId: queuedAction.id,
+                    sourceZone: action.sourceZone,
+                    sourceIndex: action.sourceIndex,
+                    targetZone: action.targetZone,
+                    targetIndex: action.targetIndex,
+                    expectedTrayRevision: action.expectedTrayRevision,
+                    expectedReserveRevision: action.expectedReserveRevision,
+                };
             case 'MOVE_BOARD_PIECE':
                 return {
                     type: 'MOVE_BOARD_PIECE',
@@ -457,7 +546,9 @@ class GameEngine {
                     actionId: queuedAction.id,
                     sourcePieceId: action.sourceEntityId,
                     targetPieceId: action.targetEntityId,
+                    expectedTrayRevision: action.expectedTrayRevision,
                     expectedBoardRevision: action.expectedBoardRevision,
+                    expectedReserveRevision: action.expectedReserveRevision,
                 };
             default:
                 return null;
@@ -672,6 +763,15 @@ class GameEngine {
         this.pveRuntime.registerPlayer(playerId, slot);
         this.syncPveRuntimeState();
     }
+    createPveRuntime() {
+        const seedSuffix = this.matchSequence > 0 ? `:rematch-${this.matchSequence}` : '';
+        return new pve_v2_1.PveGameRuntime({
+            seed: `${this.config.matchId}:pve-v2${seedSuffix}`,
+            tickRateMs: this.config.tickRateMs,
+            laneRoutes: createPveLaneRouteSnapshots(this.laneRoutes),
+            maxWaves: 20,
+        });
+    }
     projectPveSnapshot(snapshot) {
         const players = snapshot.players.map((player) => ({
             playerId: player.playerId,
@@ -682,8 +782,22 @@ class GameEngine {
             populationUsed: player.populationUsed,
             populationCap: player.populationCap,
             trayRevision: player.trayRevision,
+            reserveRevision: player.reserveRevision,
             boardRevision: player.boardRevision,
             tray: player.tray.map((piece, index) => ({
+                index,
+                piece: piece
+                    ? {
+                        entityId: piece.id,
+                        kind: piece.kind,
+                        glyph: piece.kind === 'character' ? piece.glyph : this.getSoldierGlyph(piece.soldierType),
+                        ...(piece.kind === 'soldier'
+                            ? { soldierType: piece.soldierType, level: piece.level }
+                            : {}),
+                    }
+                    : null,
+            })),
+            reserve: player.reserve.map((piece, index) => ({
                 index,
                 piece: piece
                     ? {
@@ -730,6 +844,7 @@ class GameEngine {
                 pathIndex: enemy.routeWaypointIndex,
                 pathProgressMilli: enemy.pathProgressMilli,
                 lapCount: enemy.lapCount,
+                invulnerable: (0, pve_v2_1.isInsidePveProtectedZoneMilli)(enemy.xMilli, enemy.yMilli),
                 x: enemy.xMilli / 1000,
                 y: enemy.yMilli / 1000,
             };
@@ -1007,7 +1122,7 @@ class GameEngine {
     // ─────────────────────────────────────────────────────────────────────────
     /**
      * 保留旧关卡选择入口，但点火后只启动 PVE V2 运行时。
-     * 首个可玩切片固定为五波；旧 waves/startingGold 仅用于启动审计，
+     * 新版 PVE 关卡统一为二十波；旧 waves/startingGold 仅用于启动审计，
      * 不再驱动旧怪物、旧塔或覆盖新版初始斋饭。
      */
     ignite(waves, startingGold) {
@@ -1028,7 +1143,7 @@ class GameEngine {
         this.appendLog('info', 'Engine ignited with PVE V2 runtime', {
             selectedLegacyWaveCount: waves.length,
             ignoredLegacyStartingGold: startingGold ?? null,
-            runtimeMaxWaves: 5,
+            runtimeMaxWaves: 20,
             playerCount: this.playerCount,
         });
     }

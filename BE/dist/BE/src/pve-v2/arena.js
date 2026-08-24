@@ -1,11 +1,14 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEFAULT_PVE_LANE_ROUTES = exports.PVE_LANE_SLOTS = exports.PVE_ARENA_GRID_SIZE = void 0;
+exports.DEFAULT_PVE_LANE_ROUTES = exports.PVE_PROTECTED_ZONE_MAX = exports.PVE_PROTECTED_ZONE_MIN = exports.PVE_LANE_SLOTS = exports.PVE_ARENA_GRID_SIZE = void 0;
 exports.isDefaultDeployableCell = isDefaultDeployableCell;
+exports.isInsidePveProtectedZoneMilli = isInsidePveProtectedZoneMilli;
 exports.createPveLaneRoutes = createPveLaneRoutes;
 exports.getDefaultSoldierPlacement = getDefaultSoldierPlacement;
 exports.PVE_ARENA_GRID_SIZE = 29;
 exports.PVE_LANE_SLOTS = ['P1', 'P2', 'P3', 'P4'];
+exports.PVE_PROTECTED_ZONE_MIN = 10;
+exports.PVE_PROTECTED_ZONE_MAX = 18;
 const DEFAULT_WAYPOINTS = {
     P1: [
         { x: 13, y: 15 }, { x: 13, y: 18 }, { x: 7, y: 18 }, { x: 7, y: 21 },
@@ -95,6 +98,15 @@ function isDefaultDeployableCell(slot, x, y) {
     }
     return !DEFAULT_PATH_CELL_KEYS.has(positionKey(x, y));
 }
+/** 中央 9×9 出生区内的小怪不可成为攻击目标。坐标单位为千分之一格。 */
+function isInsidePveProtectedZoneMilli(xMilli, yMilli) {
+    const minMilli = exports.PVE_PROTECTED_ZONE_MIN * 1000;
+    const maxExclusiveMilli = (exports.PVE_PROTECTED_ZONE_MAX + 1) * 1000;
+    return xMilli >= minMilli
+        && xMilli < maxExclusiveMilli
+        && yMilli >= minMilli
+        && yMilli < maxExclusiveMilli;
+}
 function createPveLaneRoutes(overrides) {
     const routes = {};
     for (const slot of exports.PVE_LANE_SLOTS) {
@@ -129,9 +141,9 @@ function createPveLaneRoutes(overrides) {
 }
 function getDefaultSoldierPlacement(slot) {
     switch (slot) {
-        case 'P1': return { x: 12, y: 16 };
-        case 'P2': return { x: 16, y: 16 };
-        case 'P3': return { x: 16, y: 12 };
-        case 'P4': return { x: 12, y: 12 };
+        case 'P1': return { x: 9, y: 17 };
+        case 'P2': return { x: 17, y: 19 };
+        case 'P3': return { x: 19, y: 11 };
+        case 'P4': return { x: 9, y: 9 };
     }
 }

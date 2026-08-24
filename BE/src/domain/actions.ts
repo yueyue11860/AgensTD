@@ -6,7 +6,10 @@ import type {
   MoveBoardPieceAction,
   PlayerIdentity,
   RecruitBatchAction,
+  SwapReserveBoardAction,
   UpgradeTowerAction,
+  ExileReserveAction,
+  SwapStoragePiecesAction,
 } from '../../../shared/contracts/game'
 
 export type {
@@ -16,7 +19,10 @@ export type {
   MoveBoardPieceAction,
   PlayerIdentity,
   RecruitBatchAction,
+  SwapReserveBoardAction,
   UpgradeTowerAction,
+  ExileReserveAction,
+  SwapStoragePiecesAction,
 } from '../../../shared/contracts/game'
 
 export type ClientAction = GameAction
@@ -110,8 +116,59 @@ export function parseClientAction(payload: unknown): ClientAction | null {
             action: 'MERGE_SOLDIERS',
             sourceEntityId: payload.sourceEntityId,
             targetEntityId: payload.targetEntityId,
+            ...(typeof payload.expectedTrayRevision === 'number'
+              ? { expectedTrayRevision: payload.expectedTrayRevision }
+              : {}),
             ...(typeof payload.expectedBoardRevision === 'number'
               ? { expectedBoardRevision: payload.expectedBoardRevision }
+              : {}),
+            ...(typeof payload.expectedReserveRevision === 'number'
+              ? { expectedReserveRevision: payload.expectedReserveRevision }
+              : {}),
+          }
+        : null
+    case 'SWAP_RESERVE_BOARD':
+      return Number.isInteger(payload.reserveIndex)
+        && typeof payload.x === 'number'
+        && typeof payload.y === 'number'
+        ? {
+            action: 'SWAP_RESERVE_BOARD',
+            reserveIndex: payload.reserveIndex as number,
+            x: payload.x,
+            y: payload.y,
+            ...(typeof payload.expectedReserveRevision === 'number'
+              ? { expectedReserveRevision: payload.expectedReserveRevision }
+              : {}),
+            ...(typeof payload.expectedBoardRevision === 'number'
+              ? { expectedBoardRevision: payload.expectedBoardRevision }
+              : {}),
+          }
+        : null
+    case 'EXILE_RESERVE':
+      return typeof payload.expectedReserveRevision === 'number' || payload.expectedReserveRevision === undefined
+        ? {
+            action: 'EXILE_RESERVE',
+            ...(typeof payload.expectedReserveRevision === 'number'
+              ? { expectedReserveRevision: payload.expectedReserveRevision }
+              : {}),
+          }
+        : null
+    case 'SWAP_STORAGE_PIECES':
+      return (payload.sourceZone === 'tray' || payload.sourceZone === 'reserve')
+        && (payload.targetZone === 'tray' || payload.targetZone === 'reserve')
+        && Number.isInteger(payload.sourceIndex)
+        && Number.isInteger(payload.targetIndex)
+        ? {
+            action: 'SWAP_STORAGE_PIECES',
+            sourceZone: payload.sourceZone,
+            sourceIndex: payload.sourceIndex as number,
+            targetZone: payload.targetZone,
+            targetIndex: payload.targetIndex as number,
+            ...(typeof payload.expectedTrayRevision === 'number'
+              ? { expectedTrayRevision: payload.expectedTrayRevision }
+              : {}),
+            ...(typeof payload.expectedReserveRevision === 'number'
+              ? { expectedReserveRevision: payload.expectedReserveRevision }
               : {}),
           }
         : null

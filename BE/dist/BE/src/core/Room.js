@@ -126,6 +126,9 @@ class Room {
         return this.slotAssignments.size === 0;
     }
     getPhase() {
+        if (this.phase === 'playing' && this.engine.isMatchFinished()) {
+            return 'lobby';
+        }
         return this.phase;
     }
     getHostPlayerId() {
@@ -143,7 +146,7 @@ class Room {
             hasPassword: this.hasPassword,
             players: this.slotAssignments.size,
             maxPlayers: exports.ROOM_SLOT_ORDER.length,
-            phase: this.phase,
+            phase: this.getPhase(),
             slots: exports.ROOM_SLOT_ORDER.map((slotId) => {
                 const playerId = this.slotAssignments.get(slotId) ?? null;
                 const player = playerId
@@ -169,11 +172,14 @@ class Room {
      * @returns 'ok' | 'wrong_phase' | 'forbidden'
      */
     beginCountdown(requestorPlayerId, onComplete) {
-        if (this.phase !== 'lobby') {
+        if (this.getPhase() !== 'lobby') {
             return 'wrong_phase';
         }
         if (requestorPlayerId !== this.hostPlayerId) {
             return 'forbidden';
+        }
+        if (this.phase === 'playing' && !this.engine.resetForRematch()) {
+            return 'wrong_phase';
         }
         this.phase = 'countdown';
         this.countdownTimer = setTimeout(() => {

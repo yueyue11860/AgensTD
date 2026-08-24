@@ -71,8 +71,10 @@ export interface PvePlayerSnapshot {
   populationUsed: number
   populationCap: number
   trayRevision: number
+  reserveRevision: number
   boardRevision: number
   tray: Array<PvePiece | null>
+  reserve: Array<PvePiece | null>
   boardPieces: PveBoardPiece[]
   remainingCharacterTokens: Record<string, number>
   clearedWaves: number[]
@@ -85,6 +87,9 @@ export interface PveRuntimeEvent {
     | 'MATCH_STARTED'
     | 'RECRUITED'
     | 'TRAY_BOARD_SWAPPED'
+    | 'RESERVE_BOARD_SWAPPED'
+    | 'RESERVE_EXILED'
+    | 'STORAGE_PIECES_SWAPPED'
     | 'BOARD_PIECE_MOVED'
     | 'SOLDIER_MERGED'
     | 'WAVE_STARTED'
@@ -167,6 +172,34 @@ export interface MergeSoldiersAction {
   targetPieceId: string
   expectedTrayRevision?: number
   expectedBoardRevision?: number
+  expectedReserveRevision?: number
+}
+
+export interface SwapReserveBoardAction {
+  type: 'SWAP_RESERVE_BOARD'
+  actionId: string
+  reserveIndex: number
+  boardX: number
+  boardY: number
+  expectedReserveRevision?: number
+  expectedBoardRevision?: number
+}
+
+export interface ExileReserveAction {
+  type: 'EXILE_RESERVE'
+  actionId: string
+  expectedReserveRevision?: number
+}
+
+export interface SwapStoragePiecesAction {
+  type: 'SWAP_STORAGE_PIECES'
+  actionId: string
+  sourceZone: 'tray' | 'reserve'
+  sourceIndex: number
+  targetZone: 'tray' | 'reserve'
+  targetIndex: number
+  expectedTrayRevision?: number
+  expectedReserveRevision?: number
 }
 
 export type PveRuntimeAction =
@@ -174,6 +207,9 @@ export type PveRuntimeAction =
   | SwapTrayBoardAction
   | MoveBoardPieceAction
   | MergeSoldiersAction
+  | SwapReserveBoardAction
+  | ExileReserveAction
+  | SwapStoragePiecesAction
 
 export interface PveRuntimeResult {
   ok: boolean

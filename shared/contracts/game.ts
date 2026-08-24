@@ -96,7 +96,33 @@ export interface MergeSoldiersAction {
   action: 'MERGE_SOLDIERS'
   sourceEntityId: string
   targetEntityId: string
+  expectedTrayRevision?: number
   expectedBoardRevision?: number
+  expectedReserveRevision?: number
+}
+
+export interface SwapReserveBoardAction extends GridPosition {
+  action: 'SWAP_RESERVE_BOARD'
+  reserveIndex: number
+  expectedReserveRevision?: number
+  expectedBoardRevision?: number
+}
+
+export interface ExileReserveAction {
+  action: 'EXILE_RESERVE'
+  expectedReserveRevision?: number
+}
+
+export type PveStorageZone = 'tray' | 'reserve'
+
+export interface SwapStoragePiecesAction {
+  action: 'SWAP_STORAGE_PIECES'
+  sourceZone: PveStorageZone
+  sourceIndex: number
+  targetZone: PveStorageZone
+  targetIndex: number
+  expectedTrayRevision?: number
+  expectedReserveRevision?: number
 }
 
 export type PveGameAction =
@@ -104,6 +130,9 @@ export type PveGameAction =
   | DeployTrayPieceAction
   | MoveBoardPieceAction
   | MergeSoldiersAction
+  | SwapReserveBoardAction
+  | ExileReserveAction
+  | SwapStoragePiecesAction
 
 export type GameAction =
   | BuildTowerAction
@@ -178,6 +207,11 @@ export interface PveTraySlotState {
   piece: PveTrayPieceState | null
 }
 
+export interface PveReserveSlotState {
+  index: number
+  piece: PveTrayPieceState | null
+}
+
 export interface PveBoardPieceState extends GridPosition {
   entityId: string
   ownerPlayerId: string
@@ -203,6 +237,7 @@ export interface PveEnemyState extends GridPosition {
   pathIndex: number
   pathProgressMilli: number
   lapCount: number
+  invulnerable: boolean
 }
 
 export interface PvePlayerState {
@@ -214,8 +249,10 @@ export interface PvePlayerState {
   populationUsed: number
   populationCap: number
   trayRevision: number
+  reserveRevision: number
   boardRevision: number
   tray: PveTraySlotState[]
+  reserve: PveReserveSlotState[]
   highestCompletedWave: number
 }
 

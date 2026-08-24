@@ -101,24 +101,33 @@ export function useRoomLobbyData() {
 
   const createRoom = useEffectEvent(async ({ name, password }: CreateRoomInput) => {
     if (!apiBaseUrl) {
-      throw new Error('未解析到房间 API 地址。')
+      const error = new Error('未解析到房间 API 地址。')
+      setRoomsError(error.message)
+      throw error
     }
 
-    const payload = await requestJson<CreateRoomResponse>(`${apiBaseUrl}/rooms`, {
-      method: 'POST',
-      headers: createAuthHeaders(gatewayToken),
-      body: JSON.stringify({ name, password }),
-    })
-
-    startTransition(() => {
-      setRooms((current) => {
-        const nextRooms = current.filter((room) => room.id !== payload.room.id)
-        return [payload.room, ...nextRooms]
+    try {
+      const payload = await requestJson<CreateRoomResponse>(`${apiBaseUrl}/rooms`, {
+        method: 'POST',
+        headers: createAuthHeaders(gatewayToken),
+        body: JSON.stringify({ name, password }),
       })
-    })
-    setRoomsError(null)
 
-    return payload.room
+      startTransition(() => {
+        setRooms((current) => {
+          const nextRooms = current.filter((room) => room.id !== payload.room.id)
+          return [payload.room, ...nextRooms]
+        })
+      })
+      setRoomsError(null)
+
+      return payload.room
+    }
+    catch (requestError) {
+      const error = requestError instanceof Error ? requestError : new Error('创建房间失败。')
+      setRoomsError(error.message)
+      throw error
+    }
   })
 
   useEffect(() => {

@@ -17,6 +17,7 @@ export interface BattlefieldEnemyState extends BattlefieldGridPosition {
   glyph: string
   hp: number
   maxHp: number
+  invulnerable?: boolean
 }
 
 export interface BattlefieldSnapshot {

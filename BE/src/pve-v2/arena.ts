@@ -2,6 +2,8 @@ import type { PveLaneRoute, PveLaneSlot, PvePosition } from './types'
 
 export const PVE_ARENA_GRID_SIZE = 29
 export const PVE_LANE_SLOTS: readonly PveLaneSlot[] = ['P1', 'P2', 'P3', 'P4']
+export const PVE_PROTECTED_ZONE_MIN = 10
+export const PVE_PROTECTED_ZONE_MAX = 18
 
 const DEFAULT_WAYPOINTS: Readonly<Record<PveLaneSlot, readonly PvePosition[]>> = {
   P1: [
@@ -103,6 +105,16 @@ export function isDefaultDeployableCell(slot: PveLaneSlot, x: number, y: number)
   return !DEFAULT_PATH_CELL_KEYS.has(positionKey(x, y))
 }
 
+/** 中央 9×9 出生区内的小怪不可成为攻击目标。坐标单位为千分之一格。 */
+export function isInsidePveProtectedZoneMilli(xMilli: number, yMilli: number): boolean {
+  const minMilli = PVE_PROTECTED_ZONE_MIN * 1000
+  const maxExclusiveMilli = (PVE_PROTECTED_ZONE_MAX + 1) * 1000
+  return xMilli >= minMilli
+    && xMilli < maxExclusiveMilli
+    && yMilli >= minMilli
+    && yMilli < maxExclusiveMilli
+}
+
 export function createPveLaneRoutes(
   overrides?: Partial<Record<PveLaneSlot, PveLaneRoute>>,
 ): Record<PveLaneSlot, PveLaneRoute> {
@@ -144,9 +156,9 @@ export function createPveLaneRoutes(
 
 export function getDefaultSoldierPlacement(slot: PveLaneSlot): PvePosition {
   switch (slot) {
-    case 'P1': return { x: 12, y: 16 }
-    case 'P2': return { x: 16, y: 16 }
-    case 'P3': return { x: 16, y: 12 }
-    case 'P4': return { x: 12, y: 12 }
+    case 'P1': return { x: 9, y: 17 }
+    case 'P2': return { x: 17, y: 19 }
+    case 'P3': return { x: 19, y: 11 }
+    case 'P4': return { x: 9, y: 9 }
   }
 }

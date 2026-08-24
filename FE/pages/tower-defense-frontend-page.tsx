@@ -299,6 +299,8 @@ function CreateRoomModal({
   open,
   roomName,
   password,
+  isCreating,
+  error,
   onClose,
   onChangeRoomName,
   onChangePassword,
@@ -307,6 +309,8 @@ function CreateRoomModal({
   open: boolean
   roomName: string
   password: string
+  isCreating: boolean
+  error: string | null
   onClose: () => void
   onChangeRoomName: (value: string) => void
   onChangePassword: (value: string) => void
@@ -316,11 +320,11 @@ function CreateRoomModal({
     if (!open) return
     function handleKey(event: KeyboardEvent) {
       if (event.key === 'Escape') onClose()
-      if (event.key === 'Enter') onCreate()
+      if (event.key === 'Enter' && !isCreating) onCreate()
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [open, onClose, onCreate])
+  }, [isCreating, open, onClose, onCreate])
 
   if (!open) {
     return null
@@ -372,10 +376,14 @@ function CreateRoomModal({
         {/* 底部 */}
         <div className="term-divider" />
         <div className="term-modal-foot">
-          <span className="term-sys-msg">&gt; SYS_MSG: 节点算力已就绪...</span>
+          <span className="term-sys-msg" role={error ? 'alert' : undefined}>
+            &gt; SYS_MSG: {error ?? (isCreating ? '正在部署节点...' : '节点算力已就绪...')}
+          </span>
           <div className="term-modal-actions">
             <button type="button" onClick={onClose} className="term-btn term-btn-cancel">[ 终止进程 (ESC) ]</button>
-            <button type="button" onClick={onCreate} className="term-btn term-btn-confirm">[ 部署节点 (ENT) ]</button>
+            <button type="button" onClick={onCreate} disabled={isCreating} className="term-btn term-btn-confirm">
+              {isCreating ? '[ 部署中... ]' : '[ 部署节点 (ENT) ]'}
+            </button>
           </div>
         </div>
 
@@ -589,6 +597,8 @@ export function TowerDefenseFrontendPage() {
   const [isCreateRoomOpen, setIsCreateRoomOpen] = useState(false)
   const [newRoomName, setNewRoomName] = useState('')
   const [newRoomPassword, setNewRoomPassword] = useState('')
+  const [isCreatingRoom, setIsCreatingRoom] = useState(false)
+  const [createRoomError, setCreateRoomError] = useState<string | null>(null)
   const [countdownValue, setCountdownValue] = useState<number | null>(null)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const activeRoomId = routeRoomId ? decodeURIComponent(routeRoomId) : selectedRoomId
@@ -787,7 +797,13 @@ export function TowerDefenseFrontendPage() {
   }
 
   async function handleCreateRoom() {
+    if (isCreatingRoom) {
+      return
+    }
+
     const normalizedName = newRoomName.trim() || `房间${rooms.length + 1}`
+    setIsCreatingRoom(true)
+    setCreateRoomError(null)
 
     try {
       const createdRoom = await createRoom({
@@ -801,8 +817,11 @@ export function TowerDefenseFrontendPage() {
       setIsCreateRoomOpen(false)
       navigate(withCurrentSearch(getRoomDetailPath(createdRoom.id), location.search))
     }
-    catch {
-      // 错误通过 roomsError 呈现，这里避免重复 toast
+    catch (requestError) {
+      setCreateRoomError(requestError instanceof Error ? requestError.message : '创建房间失败，请稍后重试。')
+    }
+    finally {
+      setIsCreatingRoom(false)
     }
   }
 
@@ -1024,7 +1043,14 @@ export function TowerDefenseFrontendPage() {
                           <RefreshCcw className="h-4 w-4" />
                           <span>刷新房间</span>
                         </button>
-                        <button type="button" onClick={() => setIsCreateRoomOpen(true)} className="cyber-primary-button shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCreateRoomError(null)
+                            setIsCreateRoomOpen(true)
+                          }}
+                          className="cyber-primary-button shrink-0"
+                        >
                           <Plus className="h-4 w-4" />
                           <span>新建战区</span>
                         </button>
@@ -1444,7 +1470,12 @@ export function TowerDefenseFrontendPage() {
         open={isCreateRoomOpen}
         roomName={newRoomName}
         password={newRoomPassword}
-        onClose={() => setIsCreateRoomOpen(false)}
+        isCreating={isCreatingRoom}
+        error={createRoomError}
+        onClose={() => {
+          setCreateRoomError(null)
+          setIsCreateRoomOpen(false)
+        }}
         onChangeRoomName={setNewRoomName}
         onChangePassword={setNewRoomPassword}
         onCreate={handleCreateRoom}

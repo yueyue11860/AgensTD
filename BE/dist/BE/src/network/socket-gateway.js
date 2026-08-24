@@ -264,10 +264,6 @@ class SocketGateway {
             this.emitEngineError(socket, 'LEVEL_LOCKED', '当前玩家类型不允许进入该关卡');
             return;
         }
-        if (payload.levelId === 6 && joinedContext.room.getPlayerCount() < 2) {
-            this.emitEngineError(socket, 'COOP_REQUIRED', '零域裁决需至少两名物理终端协同');
-            return;
-        }
         const currentPhase = joinedContext.room.getPhase();
         if (currentPhase === 'playing') {
             this.emitEngineError(socket, 'WRONG_PHASE', '当前对局已开始，不能再次选择难度');

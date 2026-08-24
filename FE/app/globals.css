@@ -2187,6 +2187,58 @@ body.crisis-overload-active {
   white-space: nowrap;
 }
 
+.gaming-reserve-panel {
+  margin-top: 0.9rem;
+  border-top: 1px solid rgba(103, 232, 249, 0.14);
+  padding-top: 0.85rem;
+}
+
+.gaming-reserve-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.gaming-reserve-heading .gaming-recruit-help {
+  margin-top: 0.32rem;
+}
+
+.gaming-reserve-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.48rem;
+  margin-top: 0.65rem;
+}
+
+.gaming-reserve-slot {
+  aspect-ratio: 1.75;
+  border-style: dashed;
+  border-color: rgba(167, 139, 250, 0.42);
+  background: linear-gradient(180deg, rgba(46, 16, 101, 0.34), rgba(5, 12, 24, 0.96));
+}
+
+.gaming-exile-button {
+  flex: none;
+  border-radius: 8px;
+  border: 1px solid rgba(248, 113, 113, 0.42);
+  background: rgba(127, 29, 29, 0.5);
+  padding: 0.35rem 0.58rem;
+  color: #fecaca;
+  font-size: 0.68rem;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.gaming-exile-button:not(:disabled):hover {
+  border-color: rgba(252, 165, 165, 0.8);
+  background: rgba(153, 27, 27, 0.7);
+}
+
+.gaming-exile-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
 .gaming-piece-summary {
   display: flex;
   align-items: center;
