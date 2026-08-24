@@ -20,7 +20,8 @@
 		"src/core/**/*.ts",
 		"src/data/**/*.ts",
 		"src/domain/**/*.ts",
-		"src/network/**/*.ts"
+		"src/network/**/*.ts",
+		"src/synergy-v1/**/*.ts"
 	],
 	"exclude": ["dist", "node_modules", "scripts", "src/game", "src/gateway", "src/supabase"]
 }

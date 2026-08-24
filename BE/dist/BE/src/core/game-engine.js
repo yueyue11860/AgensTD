@@ -7,6 +7,8 @@ const tower_builder_1 = require("./tower-builder");
 const grid_map_1 = require("./grid-map");
 const WaveManager_1 = require("./WaveManager");
 const node_perf_hooks_1 = require("node:perf_hooks");
+const pve_stage_config_1 = require("../../../shared/contracts/pve-stage-config");
+const hero_v1_1 = require("./hero-v1");
 const pve_v2_1 = require("../pve-v2");
 const arena_layout_1 = require("../config/arena-layout");
 const SLOT_ORDER = ['P1', 'P2', 'P3', 'P4'];
@@ -464,6 +466,8 @@ class GameEngine {
             case 'SWAP_RESERVE_BOARD':
             case 'EXILE_RESERVE':
             case 'SWAP_STORAGE_PIECES':
+            case 'SET_GENERAL_FIXED':
+            case 'MOVE_FIXED_GENERAL':
                 this.handlePveAction(queuedAction);
                 return;
         }
@@ -549,6 +553,23 @@ class GameEngine {
                     expectedTrayRevision: action.expectedTrayRevision,
                     expectedBoardRevision: action.expectedBoardRevision,
                     expectedReserveRevision: action.expectedReserveRevision,
+                };
+            case 'SET_GENERAL_FIXED':
+                return {
+                    type: 'SET_GENERAL_FIXED',
+                    actionId: queuedAction.id,
+                    formationId: action.formationId,
+                    fixed: action.fixed,
+                    expectedBoardRevision: action.expectedBoardRevision,
+                };
+            case 'MOVE_FIXED_GENERAL':
+                return {
+                    type: 'MOVE_FIXED_GENERAL',
+                    actionId: queuedAction.id,
+                    formationId: action.formationId,
+                    targetStartX: action.x,
+                    targetStartY: action.y,
+                    expectedBoardRevision: action.expectedBoardRevision,
                 };
             default:
                 return null;
@@ -763,16 +784,29 @@ class GameEngine {
         this.pveRuntime.registerPlayer(playerId, slot);
         this.syncPveRuntimeState();
     }
-    createPveRuntime() {
+    createPveRuntime(levelId) {
         const seedSuffix = this.matchSequence > 0 ? `:rematch-${this.matchSequence}` : '';
+        const stageDefinition = levelId === undefined ? null : (0, pve_stage_config_1.getPveStageDefinition)(levelId);
+        const characterTokens = Object.values(hero_v1_1.GENERAL_CATALOG).flatMap((definition) => definition.recipe.glyphs)
+            .reduce((counts, glyph) => {
+            counts[glyph] = (counts[glyph] ?? 0) + 1;
+            return counts;
+        }, {});
         return new pve_v2_1.PveGameRuntime({
             seed: `${this.config.matchId}:pve-v2${seedSuffix}`,
             tickRateMs: this.config.tickRateMs,
+            prepDurationMs: pve_v2_1.PVE_WAVE_PREP_DURATION_MS,
             laneRoutes: createPveLaneRouteSnapshots(this.laneRoutes),
             maxWaves: 20,
+            characterTokens,
+            waveGlyphPools: stageDefinition?.waveGlyphPools,
         });
     }
     projectPveSnapshot(snapshot) {
+        const formationByPieceId = new Map(snapshot.players.flatMap((player) => (player.generalFormations.flatMap((formation) => formation.characterPieceIds.map((pieceId) => [
+            pieceId,
+            formation,
+        ])))));
         const players = snapshot.players.map((player) => ({
             playerId: player.playerId,
             slotId: player.slot,
@@ -810,23 +844,46 @@ class GameEngine {
                     }
                     : null,
             })),
+            generalFormations: player.generalFormations.map((formation) => ({
+                formationId: formation.formationId,
+                generalId: formation.generalId,
+                name: formation.name,
+                characterEntityIds: [...formation.characterPieceIds],
+                cells: formation.cells.map((cell) => ({ ...cell })),
+                anchor: { x: formation.anchorXMilli / 1000, y: formation.anchorYMilli / 1000 },
+                fixed: formation.fixed,
+            })),
+            generalProgress: player.generalProgress.map((progress) => ({ ...progress })),
+            activeSynergies: player.activeSynergies.map((synergy) => ({
+                ...synergy,
+                contributingGeneralIds: [...synergy.contributingGeneralIds],
+            })),
             highestCompletedWave: player.clearedWaves.length > 0 ? Math.max(...player.clearedWaves) : 0,
         }));
-        const boardPieces = snapshot.players.flatMap((player) => player.boardPieces.map(({ piece, x, y }) => ({
-            entityId: piece.id,
-            ownerPlayerId: piece.ownerPlayerId,
-            kind: piece.kind,
-            glyph: piece.kind === 'character' ? piece.glyph : this.getSoldierGlyph(piece.soldierType),
-            ...(piece.kind === 'soldier'
-                ? {
-                    soldierType: piece.soldierType,
-                    level: piece.level,
-                    nextAttackTick: piece.nextAttackTick,
-                }
-                : {}),
-            x,
-            y,
-        })));
+        const boardPieces = snapshot.players.flatMap((player) => player.boardPieces.map(({ piece, x, y }) => {
+            const formation = formationByPieceId.get(piece.id);
+            return {
+                entityId: piece.id,
+                ownerPlayerId: piece.ownerPlayerId,
+                kind: piece.kind,
+                glyph: piece.kind === 'character' ? piece.glyph : this.getSoldierGlyph(piece.soldierType),
+                ...(piece.kind === 'soldier'
+                    ? {
+                        soldierType: piece.soldierType,
+                        level: piece.level,
+                        nextAttackTick: piece.nextAttackTick,
+                    }
+                    : formation
+                        ? {
+                            formationId: formation.formationId,
+                            generalId: formation.generalId,
+                            generalFixed: formation.fixed,
+                        }
+                        : {}),
+                x,
+                y,
+            };
+        }));
         const enemies = snapshot.enemies.map((enemy) => {
             const loopStartIndex = this.laneRoutes[enemy.laneSlot]?.loopStartIndex ?? 0;
             return {
@@ -844,7 +901,8 @@ class GameEngine {
                 pathIndex: enemy.routeWaypointIndex,
                 pathProgressMilli: enemy.pathProgressMilli,
                 lapCount: enemy.lapCount,
-                invulnerable: (0, pve_v2_1.isInsidePveProtectedZoneMilli)(enemy.xMilli, enemy.yMilli),
+                spawnProtected: enemy.spawnProtected,
+                invulnerable: enemy.invulnerable,
                 x: enemy.xMilli / 1000,
                 y: enemy.yMilli / 1000,
             };
@@ -1125,7 +1183,7 @@ class GameEngine {
      * 新版 PVE 关卡统一为二十波；旧 waves/startingGold 仅用于启动审计，
      * 不再驱动旧怪物、旧塔或覆盖新版初始斋饭。
      */
-    ignite(waves, startingGold) {
+    ignite(waves, startingGold, levelId) {
         if (this.state.status !== 'waiting') {
             // 防止重复点火
             return;
@@ -1137,12 +1195,17 @@ class GameEngine {
         this.enemies = [];
         this.overloadTicks = 0;
         this.syncMapCells();
+        this.pveRuntime = this.createPveRuntime(levelId);
+        for (const [playerId, slotId] of this.playerSlots.entries()) {
+            this.pveRuntime.registerPlayer(playerId, slotId);
+        }
         this.pveStarted = true;
         this.pveRuntime.start();
         this.syncPveRuntimeState();
         this.appendLog('info', 'Engine ignited with PVE V2 runtime', {
             selectedLegacyWaveCount: waves.length,
             ignoredLegacyStartingGold: startingGold ?? null,
+            selectedLevelId: levelId ?? null,
             runtimeMaxWaves: 20,
             playerCount: this.playerCount,
         });

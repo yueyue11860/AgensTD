@@ -193,10 +193,10 @@ class Room {
      * 校验通过后点火引擎：加载关卡波次配置并启动刷怪。
      * 应由 SocketGateway 在所有校验通过后调用。
      */
-    igniteWithLevel(waves, startingGold) {
+    igniteWithLevel(waves, startingGold, levelId) {
         this.pendingLevelId = null;
         this.phase = 'playing';
-        this.engine.ignite(waves, startingGold);
+        this.engine.ignite(waves, startingGold, levelId);
     }
     setPendingLevelSelection(levelId) {
         this.pendingLevelId = levelId;

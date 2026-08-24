@@ -125,6 +125,19 @@ export interface SwapStoragePiecesAction {
   expectedReserveRevision?: number
 }
 
+export interface SetGeneralFixedAction {
+  action: 'SET_GENERAL_FIXED'
+  formationId: string
+  fixed: boolean
+  expectedBoardRevision?: number
+}
+
+export interface MoveFixedGeneralAction extends GridPosition {
+  action: 'MOVE_FIXED_GENERAL'
+  formationId: string
+  expectedBoardRevision?: number
+}
+
 export type PveGameAction =
   | RecruitBatchAction
   | DeployTrayPieceAction
@@ -133,6 +146,8 @@ export type PveGameAction =
   | SwapReserveBoardAction
   | ExileReserveAction
   | SwapStoragePiecesAction
+  | SetGeneralFixedAction
+  | MoveFixedGeneralAction
 
 export type GameAction =
   | BuildTowerAction
@@ -220,6 +235,46 @@ export interface PveBoardPieceState extends GridPosition {
   soldierType?: SoldierType
   level?: 1 | 2 | 3 | 4 | 5
   nextAttackTick?: number
+  formationId?: string
+  generalId?: string
+  generalFixed?: boolean
+}
+
+export interface PveGeneralFormationState {
+  formationId: string
+  generalId: string
+  name: string
+  characterEntityIds: string[]
+  cells: GridPosition[]
+  anchor: GridPosition
+  fixed: boolean
+}
+
+export interface PveGeneralProgressState {
+  generalId: string
+  name: string
+  quality: 'purple' | 'orange' | 'red'
+  archetype: 'physical' | 'magic' | 'summon' | 'control'
+  level: 1 | 2 | 3 | 4 | 5
+  maxLevel: 1 | 2 | 3 | 4 | 5
+  experiencePoints: number
+  experienceToNextLevel: number | null
+  nextBasicAttackTick: number
+  activeSkillReadyAtTick: number
+  activeSkillName: string
+  attack: number
+  attackIntervalMs: number
+  attackRangeMilliCells: number
+  critChanceBps: number
+  critDamageBps: number
+  activeSkillCooldownMs: number
+}
+
+export interface PveActiveSynergyState {
+  synergyId: string
+  name: string
+  level: number
+  contributingGeneralIds: string[]
 }
 
 export interface PveEnemyState extends GridPosition {
@@ -237,6 +292,7 @@ export interface PveEnemyState extends GridPosition {
   pathIndex: number
   pathProgressMilli: number
   lapCount: number
+  spawnProtected: boolean
   invulnerable: boolean
 }
 
@@ -253,6 +309,9 @@ export interface PvePlayerState {
   boardRevision: number
   tray: PveTraySlotState[]
   reserve: PveReserveSlotState[]
+  generalFormations: PveGeneralFormationState[]
+  generalProgress: PveGeneralProgressState[]
+  activeSynergies: PveActiveSynergyState[]
   highestCompletedWave: number
 }
 

@@ -42,6 +42,44 @@ export interface PveBoardPiece extends PvePosition {
   piece: PvePiece
 }
 
+export interface PveGeneralFormationSnapshot {
+  formationId: string
+  generalId: string
+  name: string
+  characterPieceIds: string[]
+  cells: PvePosition[]
+  anchorXMilli: number
+  anchorYMilli: number
+  fixed: boolean
+}
+
+export interface PveGeneralProgressSnapshot {
+  generalId: string
+  name: string
+  quality: 'purple' | 'orange' | 'red'
+  archetype: 'physical' | 'magic' | 'summon' | 'control'
+  level: 1 | 2 | 3 | 4 | 5
+  maxLevel: 1 | 2 | 3 | 4 | 5
+  experiencePoints: number
+  experienceToNextLevel: number | null
+  nextBasicAttackTick: number
+  activeSkillReadyAtTick: number
+  activeSkillName: string
+  attack: number
+  attackIntervalMs: number
+  attackRangeMilliCells: number
+  critChanceBps: number
+  critDamageBps: number
+  activeSkillCooldownMs: number
+}
+
+export interface PveActiveSynergySnapshot {
+  synergyId: string
+  name: string
+  level: number
+  contributingGeneralIds: string[]
+}
+
 export interface PveEnemySnapshot {
   id: string
   glyph: string
@@ -60,6 +98,10 @@ export interface PveEnemySnapshot {
   magicResistance: number
   moveSpeedMilliCellsPerSecond: number
   lastDamagePlayerId: string | null
+  /** 圆形身体尚未完全离开中央 3×3 出生方格；只会从 true 变为 false。 */
+  spawnProtected: boolean
+  /** 预留给未来 Boss/技能的战斗无敌，与空间入场锁分离。 */
+  invulnerable: boolean
 }
 
 export interface PvePlayerSnapshot {
@@ -76,6 +118,9 @@ export interface PvePlayerSnapshot {
   tray: Array<PvePiece | null>
   reserve: Array<PvePiece | null>
   boardPieces: PveBoardPiece[]
+  generalFormations: PveGeneralFormationSnapshot[]
+  generalProgress: PveGeneralProgressSnapshot[]
+  activeSynergies: PveActiveSynergySnapshot[]
   remainingCharacterTokens: Record<string, number>
   clearedWaves: number[]
 }
@@ -92,8 +137,19 @@ export interface PveRuntimeEvent {
     | 'STORAGE_PIECES_SWAPPED'
     | 'BOARD_PIECE_MOVED'
     | 'SOLDIER_MERGED'
+    | 'GENERAL_ACTIVATED'
+    | 'GENERAL_DEACTIVATED'
+    | 'GENERAL_FIXED_CHANGED'
+    | 'FIXED_GENERAL_MOVED'
+    | 'GENERAL_BASIC_ATTACK_STARTED'
+    | 'GENERAL_SKILL_CAST'
+    | 'GENERAL_XP_GRANTED'
+    | 'GENERAL_LEVEL_UP'
+    | 'SYNERGY_ACTIVATED'
+    | 'SYNERGY_DEACTIVATED'
     | 'WAVE_STARTED'
     | 'ENEMY_SPAWNED'
+    | 'ENEMY_ENTERED_BATTLEFIELD'
     | 'BASIC_ATTACK_STARTED'
     | 'DAMAGE_APPLIED'
     | 'ENEMY_DIED'
@@ -202,6 +258,23 @@ export interface SwapStoragePiecesAction {
   expectedReserveRevision?: number
 }
 
+export interface SetGeneralFixedAction {
+  type: 'SET_GENERAL_FIXED'
+  actionId: string
+  formationId: string
+  fixed: boolean
+  expectedBoardRevision?: number
+}
+
+export interface MoveFixedGeneralAction {
+  type: 'MOVE_FIXED_GENERAL'
+  actionId: string
+  formationId: string
+  targetStartX: number
+  targetStartY: number
+  expectedBoardRevision?: number
+}
+
 export type PveRuntimeAction =
   | RecruitBatchAction
   | SwapTrayBoardAction
@@ -210,6 +283,8 @@ export type PveRuntimeAction =
   | SwapReserveBoardAction
   | ExileReserveAction
   | SwapStoragePiecesAction
+  | SetGeneralFixedAction
+  | MoveFixedGeneralAction
 
 export interface PveRuntimeResult {
   ok: boolean
@@ -227,5 +302,7 @@ export interface PveGameRuntimeOptions {
   laneRoutes?: Partial<Record<PveLaneSlot, PveLaneRoute>>
   isDeployableCell?: (slot: PveLaneSlot, x: number, y: number) => boolean
   characterTokens?: Record<string, number>
+  /** 可选的关卡每波字池；数量由波次数值表统一控制。 */
+  waveGlyphPools?: readonly (readonly string[])[]
   eventHistoryLimit?: number
 }

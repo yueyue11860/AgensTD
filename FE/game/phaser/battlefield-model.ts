@@ -10,6 +10,9 @@ export interface BattlefieldPieceState extends BattlefieldGridPosition {
   glyph: string
   soldierType?: string
   level?: number
+  formationId?: string
+  generalId?: string
+  generalFixed?: boolean
 }
 
 export interface BattlefieldEnemyState extends BattlefieldGridPosition {
@@ -17,6 +20,7 @@ export interface BattlefieldEnemyState extends BattlefieldGridPosition {
   glyph: string
   hp: number
   maxHp: number
+  spawnProtected?: boolean
   invulnerable?: boolean
 }
 

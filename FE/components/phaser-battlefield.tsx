@@ -1,18 +1,20 @@
 import { useEffect, useRef } from 'react'
 import Phaser from 'phaser'
+import type { PveSceneTheme } from '../../shared/contracts/pve-stage-config'
 import { BATTLEFIELD_SIZE, BattlefieldScene, type BattlefieldSceneUiState } from '../game/phaser/battlefield-scene'
 import type { BattlefieldGridPosition, BattlefieldInteractionBridge, BattlefieldSnapshot } from '../game/phaser/battlefield-model'
 
 interface PhaserBattlefieldProps extends BattlefieldInteractionBridge {
   snapshot: BattlefieldSnapshot | null
   terrainMatrix: readonly (readonly number[])[]
+  sceneTheme?: PveSceneTheme | null
   hoveredCell: BattlefieldGridPosition | null
   selectedPieceId: string | null
   placementMode: boolean
   canPreviewAtHoveredCell: boolean
 }
 
-export function PhaserBattlefield({ snapshot, terrainMatrix, hoveredCell, selectedPieceId, placementMode, canPreviewAtHoveredCell, onCellClick, onCellHover, onCellLeave }: PhaserBattlefieldProps) {
+export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hoveredCell, selectedPieceId, placementMode, canPreviewAtHoveredCell, onCellClick, onCellHover, onCellLeave }: PhaserBattlefieldProps) {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const sceneRef = useRef<BattlefieldScene | null>(null)
   const callbacksRef = useRef<BattlefieldInteractionBridge>({ onCellClick, onCellHover, onCellLeave })
@@ -26,7 +28,7 @@ export function PhaserBattlefield({ snapshot, terrainMatrix, hoveredCell, select
       onCellHover: (x, y) => callbacksRef.current.onCellHover(x, y),
       onCellLeave: () => callbacksRef.current.onCellLeave(),
     }
-    const scene = new BattlefieldScene(terrainMatrix, bridge)
+    const scene = new BattlefieldScene(terrainMatrix, bridge, sceneTheme)
     sceneRef.current = scene
     const game = new Phaser.Game({
       type: Phaser.AUTO,
@@ -42,7 +44,7 @@ export function PhaserBattlefield({ snapshot, terrainMatrix, hoveredCell, select
       sceneRef.current = null
       game.destroy(true)
     }
-  }, [terrainMatrix])
+  }, [sceneTheme, terrainMatrix])
 
   useEffect(() => sceneRef.current?.setSnapshot(snapshot), [snapshot])
   useEffect(() => {

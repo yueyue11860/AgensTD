@@ -443,7 +443,7 @@ export class SocketGateway {
   }
 
   private activateRoomLevel(room: Room, levelConfig: (typeof LEVEL_CONFIGS)[number]) {
-    room.igniteWithLevel(levelConfig.waves, levelConfig.startingGold)
+    room.igniteWithLevel(levelConfig.waves, levelConfig.startingGold, levelConfig.levelId)
 
     const levelSelectedPayload = {
       levelId: levelConfig.levelId,

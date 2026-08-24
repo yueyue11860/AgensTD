@@ -14,6 +14,7 @@ function LevelRow({ def, onClick }: { def: LevelDef; onClick: () => void }) {
       <span className="mission-row-info">
         <span className="mission-row-name">{def.label}</span>
         <span className="mission-row-sub">{def.subtitle}</span>
+        <span className="mission-row-sub">{`小怪：${def.minionGlyphs.join('·')}`}</span>
       </span>
       <span className="mission-row-right">
         <span className="mission-row-rate">20 波</span>

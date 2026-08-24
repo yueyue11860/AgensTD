@@ -137,6 +137,31 @@ function parseClientAction(payload) {
                         : {}),
                 }
                 : null;
+        case 'SET_GENERAL_FIXED':
+            return typeof payload.formationId === 'string' && typeof payload.fixed === 'boolean'
+                ? {
+                    action: 'SET_GENERAL_FIXED',
+                    formationId: payload.formationId,
+                    fixed: payload.fixed,
+                    ...(typeof payload.expectedBoardRevision === 'number'
+                        ? { expectedBoardRevision: payload.expectedBoardRevision }
+                        : {}),
+                }
+                : null;
+        case 'MOVE_FIXED_GENERAL':
+            return typeof payload.formationId === 'string'
+                && typeof payload.x === 'number'
+                && typeof payload.y === 'number'
+                ? {
+                    action: 'MOVE_FIXED_GENERAL',
+                    formationId: payload.formationId,
+                    x: payload.x,
+                    y: payload.y,
+                    ...(typeof payload.expectedBoardRevision === 'number'
+                        ? { expectedBoardRevision: payload.expectedBoardRevision }
+                        : {}),
+                }
+                : null;
         default:
             return null;
     }

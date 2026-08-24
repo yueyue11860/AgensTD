@@ -9,11 +9,33 @@ import {
 } from './catalogs'
 import {
   createPveLaneRoutes,
+  hasEnemyBodyFullyExitedPveSpawnSquareMilli,
   isDefaultDeployableCell,
-  isInsidePveProtectedZoneMilli,
   PVE_LANE_SLOTS,
 } from './arena'
 import { DeterministicPrng } from './prng'
+import {
+  cumulativeExperienceRequiredForLevel,
+  GENERAL_CATALOG,
+  getGeneralDefinition,
+  getGeneralLevelValue,
+  resolveGeneralStats,
+} from '../core/hero-v1/catalog'
+import { planGeneralCombatFrame } from '../core/hero-v1/combat-engine'
+import { GeneralFormationManager } from '../core/hero-v1/formation-manager'
+import type {
+  GeneralFormationState,
+  GeneralStatModifier,
+  PlannedGeneralAttack,
+} from '../core/hero-v1/types'
+import {
+  GENERAL_SYNERGY_PROFILES,
+  SYNERGY_V1_CATALOG,
+  evaluatePlayerSynergies,
+  reconcilePlayerSynergies,
+  toHeroV1GeneralStatModifiers,
+  type PlayerSynergyEvaluation,
+} from '../synergy-v1'
 import type {
   CharacterPiece,
   MergeSoldiersAction,
@@ -35,6 +57,8 @@ import type {
   SwapReserveBoardAction,
   ExileReserveAction,
   SwapStoragePiecesAction,
+  SetGeneralFixedAction,
+  MoveFixedGeneralAction,
 } from './types'
 
 const TRAY_SIZE = 5
@@ -44,6 +68,9 @@ const CHARACTER_BRANCH_BPS = 1000
 const ENEMY_CAPACITY_PER_PLAYER = 10
 const OVERLOAD_DURATION_MS = 10000
 const XP_REWARD_POINTS = 1000
+
+/** 选关并开始对局后，首波与后续波次统一使用的准备时间。 */
+export const PVE_WAVE_PREP_DURATION_MS = 5000
 
 interface BoardEntry {
   x: number
@@ -69,6 +96,12 @@ interface PlayerRuntime {
 
 interface EnemyRuntime extends PveEnemySnapshot {
   lifecycle: 'alive' | 'dead'
+  generalContributions: Map<string, {
+    ownerPlayerId: string
+    generalId: string
+    category: 'physical' | 'magic' | 'summon' | 'control'
+    lastContributionTick: number
+  }>
 }
 
 interface LaneWaveRuntime {
@@ -78,6 +111,7 @@ interface LaneWaveRuntime {
   spawnedCount: number
   totalCount: number
   nextSpawnTick: number
+  lastSpawnedEnemyId: string | null
   clearRewardGranted: boolean
   retired: boolean
 }
@@ -120,11 +154,37 @@ function sanitizeCharacterTokens(tokens?: Record<string, number>): Map<string, n
   return result
 }
 
+function sanitizeWaveGlyphPools(
+  pools: readonly (readonly string[])[] | undefined,
+  maxWaves: number,
+): readonly (readonly string[])[] | null {
+  if (pools === undefined) {
+    return null
+  }
+  if (pools.length < maxWaves) {
+    throw new Error(`waveGlyphPools must define at least ${maxWaves} waves`)
+  }
+  return pools.slice(0, maxWaves).map((pool, index) => {
+    const uniqueGlyphs = [...new Set(pool)]
+    if (
+      uniqueGlyphs.length < 1
+      || uniqueGlyphs.length > 4
+      || uniqueGlyphs.some((glyph) => [...glyph].length !== 1)
+    ) {
+      throw new Error(`Invalid wave glyph pool at wave ${index + 1}`)
+    }
+    return uniqueGlyphs
+  })
+}
+
 function validateRuntimeOptions(options: PveGameRuntimeOptions): void {
   if (!Number.isInteger(options.tickRateMs ?? 100) || (options.tickRateMs ?? 100) <= 0) {
     throw new Error('tickRateMs must be a positive integer')
   }
-  if (!Number.isInteger(options.prepDurationMs ?? 5000) || (options.prepDurationMs ?? 5000) < 0) {
+  if (
+    !Number.isInteger(options.prepDurationMs ?? PVE_WAVE_PREP_DURATION_MS)
+    || (options.prepDurationMs ?? PVE_WAVE_PREP_DURATION_MS) < 0
+  ) {
     throw new Error('prepDurationMs must be a non-negative integer')
   }
   if (!Number.isInteger(options.maxWaves ?? 20) || (options.maxWaves ?? 20) < 1 || (options.maxWaves ?? 20) > 20) {
@@ -149,6 +209,8 @@ export class PveGameRuntime {
 
   private readonly initialCharacterTokens: Map<string, number>
 
+  private readonly waveGlyphPools: readonly (readonly string[])[] | null
+
   private readonly eventHistoryLimit: number
 
   private readonly players = new Map<string, PlayerRuntime>()
@@ -158,6 +220,10 @@ export class PveGameRuntime {
   private readonly processedActions = new Map<string, PveRuntimeResult>()
 
   private readonly recentEvents: PveRuntimeEvent[] = []
+
+  private readonly generalFormations = new GeneralFormationManager()
+
+  private readonly synergyByPlayer = new Map<string, PlayerSynergyEvaluation>()
 
   private enemies: EnemyRuntime[] = []
 
@@ -195,11 +261,14 @@ export class PveGameRuntime {
     this.tickRateMs = options.tickRateMs ?? 100
     this.seed = String(options.seed)
     this.prng = new DeterministicPrng(options.seed)
-    this.prepDurationTicks = Math.ceil((options.prepDurationMs ?? 5000) / this.tickRateMs)
+    this.prepDurationTicks = Math.ceil(
+      (options.prepDurationMs ?? PVE_WAVE_PREP_DURATION_MS) / this.tickRateMs,
+    )
     this.maxWaves = options.maxWaves ?? 20
     this.laneRoutes = createPveLaneRoutes(options.laneRoutes)
     this.isDeployableCell = options.isDeployableCell ?? isDefaultDeployableCell
     this.initialCharacterTokens = sanitizeCharacterTokens(options.characterTokens)
+    this.waveGlyphPools = sanitizeWaveGlyphPools(options.waveGlyphPools, this.maxWaves)
     this.eventHistoryLimit = Math.max(20, options.eventHistoryLimit ?? 300)
   }
 
@@ -323,6 +392,12 @@ export class PveGameRuntime {
           case 'SWAP_STORAGE_PIECES':
             result = this.handleSwapStoragePieces(player, action)
             break
+          case 'SET_GENERAL_FIXED':
+            result = this.handleSetGeneralFixed(player, action)
+            break
+          case 'MOVE_FIXED_GENERAL':
+            result = this.handleMoveFixedGeneral(player, action)
+            break
         }
       }
     }
@@ -348,6 +423,7 @@ export class PveGameRuntime {
     this.spawnDueEnemies()
     this.moveEnemies()
     this.resolveSoldierAttacks()
+    this.resolveGeneralAttacks()
     this.enemies = this.enemies.filter((enemy) => enemy.lifecycle === 'alive')
     this.updateLaneClearRewards()
     this.updateWavePhaseAndProgression()
@@ -399,7 +475,7 @@ export class PveGameRuntime {
         .filter((enemy) => enemy.lifecycle === 'alive')
         .slice()
         .sort((left, right) => left.spawnSequence - right.spawnSequence)
-        .map(({ lifecycle: _lifecycle, ...enemy }) => ({ ...enemy })),
+        .map(({ lifecycle: _lifecycle, generalContributions: _generalContributions, ...enemy }) => ({ ...enemy })),
       recentEvents: this.recentEvents.map((event) => ({
         ...event,
         data: structuredClone(event.data),
@@ -470,13 +546,11 @@ export class PveGameRuntime {
       return this.actionResult(action, false, 'EMPTY_TO_EMPTY')
     }
 
-    const nextPopulation = this.populationUsed(player)
-      - (isSoldier(boardPiece) ? 1 : 0)
-      + (isSoldier(trayPiece) ? 1 : 0)
-    if (nextPopulation > player.populationCap) {
-      return this.actionResult(action, false, 'POPULATION_LIMIT')
+    if (boardPiece && this.isPieceInFixedFormation(player.playerId, boardPiece.id)) {
+      return this.actionResult(action, false, 'GENERAL_FIXED')
     }
 
+    const previousBoard = this.cloneBoard(player.board)
     player.tray[action.trayIndex] = boardPiece
     if (trayPiece) {
       if (isSoldier(trayPiece)) {
@@ -486,6 +560,12 @@ export class PveGameRuntime {
     }
     else {
       player.board.delete(key)
+    }
+    const formationResult = this.reconcileGeneralFormations(player)
+    if (!formationResult.ok) {
+      player.board = previousBoard
+      player.tray[action.trayIndex] = trayPiece
+      return this.actionResult(action, false, formationResult.code)
     }
     player.trayRevision += 1
     player.boardRevision += 1
@@ -522,13 +602,11 @@ export class PveGameRuntime {
       return this.actionResult(action, false, 'EMPTY_TO_EMPTY')
     }
 
-    const nextPopulation = this.populationUsed(player)
-      - (isSoldier(boardPiece) ? 1 : 0)
-      + (isSoldier(reservePiece) ? 1 : 0)
-    if (nextPopulation > player.populationCap) {
-      return this.actionResult(action, false, 'POPULATION_LIMIT')
+    if (boardPiece && this.isPieceInFixedFormation(player.playerId, boardPiece.id)) {
+      return this.actionResult(action, false, 'GENERAL_FIXED')
     }
 
+    const previousBoard = this.cloneBoard(player.board)
     player.reserve[action.reserveIndex] = boardPiece
     if (reservePiece) {
       this.resetAttackCooldown(reservePiece)
@@ -536,6 +614,12 @@ export class PveGameRuntime {
     }
     else {
       player.board.delete(key)
+    }
+    const formationResult = this.reconcileGeneralFormations(player)
+    if (!formationResult.ok) {
+      player.board = previousBoard
+      player.reserve[action.reserveIndex] = reservePiece
+      return this.actionResult(action, false, formationResult.code)
     }
     player.reserveRevision += 1
     player.boardRevision += 1
@@ -608,6 +692,82 @@ export class PveGameRuntime {
     return this.actionResult(action, true, 'STORAGE_PIECES_SWAPPED')
   }
 
+  private handleSetGeneralFixed(player: PlayerRuntime, action: SetGeneralFixedAction): PveRuntimeResult {
+    if (!this.revisionMatches(action.expectedBoardRevision, player.boardRevision)) {
+      return this.actionResult(action, false, 'STALE_BOARD_REVISION')
+    }
+    const current = this.generalFormations.getFormation(action.formationId)
+    if (!current || current.ownerPlayerId !== player.playerId) {
+      return this.actionResult(action, false, 'FORMATION_NOT_FOUND')
+    }
+    if (current.fixed === action.fixed) {
+      return this.actionResult(action, true, 'GENERAL_FIXED_UNCHANGED', { fixed: action.fixed })
+    }
+    const next = this.generalFormations.setFixed(player.playerId, action.formationId, action.fixed)
+    if (!next) {
+      return this.actionResult(action, false, 'FORMATION_NOT_FOUND')
+    }
+    player.boardRevision += 1
+    this.emit('GENERAL_FIXED_CHANGED', {
+      playerId: player.playerId,
+      generalId: next.generalId,
+      formationId: next.formationId,
+      fixed: next.fixed,
+    })
+    return this.actionResult(action, true, 'GENERAL_FIXED_CHANGED', { fixed: next.fixed })
+  }
+
+  private handleMoveFixedGeneral(player: PlayerRuntime, action: MoveFixedGeneralAction): PveRuntimeResult {
+    if (!this.revisionMatches(action.expectedBoardRevision, player.boardRevision)) {
+      return this.actionResult(action, false, 'STALE_BOARD_REVISION')
+    }
+    if (!Number.isInteger(action.targetStartX) || !Number.isInteger(action.targetStartY)) {
+      return this.actionResult(action, false, 'INVALID_TARGET')
+    }
+    const plan = this.generalFormations.planFixedFormationMove(
+      player.playerId,
+      action.formationId,
+      { x: action.targetStartX, y: action.targetStartY },
+      (x, y) => this.canDeployAt(player.slot, x, y),
+      (x, y) => player.board.has(boardKey(x, y)),
+    )
+    if (!plan.ok) {
+      return this.actionResult(action, false, plan.code)
+    }
+
+    const movedEntries = plan.tokenMoves.map((move) => {
+      const entry = player.board.get(boardKey(move.from.x, move.from.y))
+      return entry && entry.piece.id === move.tokenId ? { move, piece: entry.piece } : null
+    })
+    if (movedEntries.some((entry) => entry === null)) {
+      return this.actionResult(action, false, 'FORMATION_PIECE_MISSING')
+    }
+    for (const entry of movedEntries) {
+      if (entry) player.board.delete(boardKey(entry.move.from.x, entry.move.from.y))
+    }
+    for (const entry of movedEntries) {
+      if (!entry) continue
+      player.board.set(boardKey(entry.move.to.x, entry.move.to.y), {
+        x: entry.move.to.x,
+        y: entry.move.to.y,
+        piece: entry.piece,
+      })
+    }
+    const formationResult = this.reconcileGeneralFormations(player)
+    if (!formationResult.ok) {
+      throw new Error(`Fixed general move produced invalid formation state: ${formationResult.code}`)
+    }
+    player.boardRevision += 1
+    this.emit('FIXED_GENERAL_MOVED', {
+      playerId: player.playerId,
+      formationId: action.formationId,
+      targetStartX: action.targetStartX,
+      targetStartY: action.targetStartY,
+      pieceIds: movedEntries.flatMap((entry) => entry ? [entry.piece.id] : []),
+    })
+    return this.actionResult(action, true, 'FIXED_GENERAL_MOVED')
+  }
+
   private handleMoveBoardPiece(player: PlayerRuntime, action: MoveBoardPieceAction): PveRuntimeResult {
     if (!this.revisionMatches(action.expectedBoardRevision, player.boardRevision)) {
       return this.actionResult(action, false, 'STALE_BOARD_REVISION')
@@ -626,12 +786,24 @@ export class PveGameRuntime {
     }
 
     const target = player.board.get(targetKey)
+    if (
+      this.isPieceInFixedFormation(player.playerId, source.piece.id)
+      || (target && this.isPieceInFixedFormation(player.playerId, target.piece.id))
+    ) {
+      return this.actionResult(action, false, 'GENERAL_FIXED')
+    }
+    const previousBoard = this.cloneBoard(player.board)
     player.board.set(targetKey, { x: action.targetX, y: action.targetY, piece: source.piece })
     if (target) {
       player.board.set(sourceKey, { x: source.x, y: source.y, piece: target.piece })
     }
     else {
       player.board.delete(sourceKey)
+    }
+    const formationResult = this.reconcileGeneralFormations(player)
+    if (!formationResult.ok) {
+      player.board = previousBoard
+      return this.actionResult(action, false, formationResult.code)
     }
     this.resetAttackCooldown(source.piece)
     if (target) {
@@ -788,7 +960,7 @@ export class PveGameRuntime {
   }
 
   private beginWaveSpawning(): void {
-    const definition = getWaveMinionCatalogEntry(this.currentWaveNumber)
+    const definition = this.getWaveDefinition(this.currentWaveNumber)
     if (!definition || this.currentWaveNumber > this.maxWaves) {
       this.finishMatch('victory', 'All configured waves cleared')
       return
@@ -807,6 +979,7 @@ export class PveGameRuntime {
       spawnedCount: 0,
       totalCount: definition.countPerPlayer,
       nextSpawnTick: this.currentTick,
+      lastSpawnedEnemyId: null,
       clearRewardGranted: false,
       retired: false,
     }))
@@ -822,7 +995,7 @@ export class PveGameRuntime {
     if (this.wavePhase !== 'spawning') {
       return
     }
-    const definition = getWaveMinionCatalogEntry(this.currentWaveNumber)
+    const definition = this.getWaveDefinition(this.currentWaveNumber)
     if (!definition) {
       return
     }
@@ -830,15 +1003,28 @@ export class PveGameRuntime {
 
     const currentLanes = this.currentLaneWaves()
     for (const lane of currentLanes) {
-      while (lane.spawnedCount < lane.totalCount && this.currentTick >= lane.nextSpawnTick) {
-        this.spawnEnemy(lane, definition)
-        lane.spawnedCount += 1
-        lane.nextSpawnTick += intervalTicks
-      }
+      if (
+        lane.spawnedCount >= lane.totalCount
+        || this.currentTick < lane.nextSpawnTick
+        || !this.hasPreviousSpawnFullyExited(lane)
+      ) continue
+
+      const enemy = this.spawnEnemy(lane, definition)
+      lane.spawnedCount += 1
+      lane.lastSpawnedEnemyId = enemy.id
+      // 以实际生成 Tick 为基准，禁止因历史积压在同一 Tick 连续补刷多个单位。
+      lane.nextSpawnTick = this.currentTick + intervalTicks
     }
   }
 
-  private spawnEnemy(lane: LaneWaveRuntime, definition: WaveMinionCatalogEntry): void {
+  private hasPreviousSpawnFullyExited(lane: LaneWaveRuntime): boolean {
+    if (!lane.lastSpawnedEnemyId) return true
+    const previous = this.enemies.find((enemy) => enemy.id === lane.lastSpawnedEnemyId)
+    // 普通小怪在出生方格内不可死亡；找不到表示它已离场后死亡并被清理。
+    return !previous || !previous.spawnProtected
+  }
+
+  private spawnEnemy(lane: LaneWaveRuntime, definition: WaveMinionCatalogEntry): EnemyRuntime {
     const route = this.laneRoutes[lane.slot]
     const spawn = route.waypoints[0]
     const glyph = definition.glyphPool[this.prng.pickIndex(definition.glyphPool.length)]
@@ -861,7 +1047,11 @@ export class PveGameRuntime {
       magicResistance: definition.magicResistance,
       moveSpeedMilliCellsPerSecond: definition.moveSpeedMilliCellsPerSecond,
       lastDamagePlayerId: null,
+      // 这是空间入场锁，不是护盾或定时无敌；整个身体离开中央出生方格后解除。
+      spawnProtected: true,
+      invulnerable: false,
       lifecycle: 'alive',
+      generalContributions: new Map(),
     }
     this.enemies.push(enemy)
     this.emit('ENEMY_SPAWNED', {
@@ -871,6 +1061,7 @@ export class PveGameRuntime {
       laneOwnerPlayerId: lane.playerId,
       laneSlot: lane.slot,
     })
+    return enemy
   }
 
   private moveEnemies(): void {
@@ -880,6 +1071,20 @@ export class PveGameRuntime {
         continue
       }
       this.moveEnemy(enemy, distancePerTick)
+      if (
+        enemy.spawnProtected
+        && hasEnemyBodyFullyExitedPveSpawnSquareMilli(enemy.xMilli, enemy.yMilli)
+      ) {
+        enemy.spawnProtected = false
+        this.emit('ENEMY_ENTERED_BATTLEFIELD', {
+          enemyId: enemy.id,
+          waveNumber: enemy.waveNumber,
+          laneOwnerPlayerId: enemy.laneOwnerPlayerId,
+          laneSlot: enemy.laneSlot,
+          xMilli: enemy.xMilli,
+          yMilli: enemy.yMilli,
+        })
+      }
     }
   }
 
@@ -918,6 +1123,131 @@ export class PveGameRuntime {
         enemy.routeWaypointIndex = nextIndex
       }
     }
+  }
+
+  private resolveGeneralAttacks(): void {
+    const formations = [...this.players.values()]
+      .flatMap((player) => this.generalFormations.getActiveFormations(player.playerId).map((formation) => ({
+        player,
+        formation,
+      })))
+      .sort((left, right) => slotOrder(left.player.slot) - slotOrder(right.player.slot)
+        || left.formation.generalId.localeCompare(right.formation.generalId))
+
+    for (const { player, formation } of formations) {
+      const definition = getGeneralDefinition(formation.generalId)
+      const progress = this.generalFormations.getProgress(player.playerId, formation.generalId)
+      if (!definition || !progress) continue
+
+      const combatPlan = planGeneralCombatFrame({
+        definition,
+        formation,
+        progress,
+        currentTick: this.currentTick,
+        tickRateMs: this.tickRateMs,
+        modifiers: this.generalSynergyModifiers(player.playerId, formation.generalId),
+        enemies: this.enemies.map((enemy) => ({
+          id: enemy.id,
+          xMilli: enemy.xMilli,
+          yMilli: enemy.yMilli,
+          currentHp: enemy.currentHp,
+          pathProgressMilli: enemy.pathProgressMilli,
+          spawnSequence: enemy.spawnSequence,
+          targetable: enemy.lifecycle === 'alive' && this.isEnemyTargetable(enemy),
+          tags: [],
+        })),
+      })
+      this.generalFormations.replaceProgress(combatPlan.nextProgress)
+      const executedActionIds = new Set<string>()
+      for (const action of combatPlan.actions) {
+        const target = this.enemies.find((enemy) => enemy.id === action.targetEnemyId)
+        if (
+          (!target || target.lifecycle !== 'alive' || !this.isEnemyTargetable(target))
+          && !executedActionIds.has(action.actionId)
+        ) {
+          const currentProgress = this.generalFormations.getProgress(player.playerId, formation.generalId)
+          if (currentProgress) {
+            this.generalFormations.replaceProgress({
+              ...currentProgress,
+              ...(action.actionKind === 'active_skill'
+                ? { activeSkillReadyAtTick: this.currentTick }
+                : { nextBasicAttackTick: this.currentTick }),
+            })
+          }
+          continue
+        }
+        if (!target || target.lifecycle !== 'alive' || !this.isEnemyTargetable(target)) continue
+        if (action.actionKind === 'active_skill') {
+          this.emit('GENERAL_SKILL_CAST', {
+            playerId: player.playerId,
+            generalId: action.sourceGeneralId,
+            formationId: action.sourceFormationId,
+            skillId: definition.activeSkill.skillId,
+            skillName: definition.activeSkill.skillName,
+            targetEnemyId: target.id,
+          })
+        }
+        else {
+          this.emit('GENERAL_BASIC_ATTACK_STARTED', {
+            playerId: player.playerId,
+            generalId: action.sourceGeneralId,
+            formationId: action.sourceFormationId,
+            targetEnemyId: target.id,
+          })
+        }
+        this.applyGeneralDamage(player, formation, progress.level, action, target)
+        executedActionIds.add(action.actionId)
+      }
+    }
+  }
+
+  private applyGeneralDamage(
+    player: PlayerRuntime,
+    formation: GeneralFormationState,
+    level: 1 | 2 | 3 | 4 | 5,
+    action: PlannedGeneralAttack,
+    target: EnemyRuntime,
+  ): void {
+    const definition = getGeneralDefinition(action.sourceGeneralId)
+    if (!definition || !this.isEnemyTargetable(target)) return
+    let rawDamage = Math.max(1, Math.floor(
+      (action.damage.baseAttack * action.damage.coefficientBps / 10000 + action.damage.flatDamage)
+      * action.damage.damageDealtRatioBps / 10000,
+    ))
+    const stats = resolveGeneralStats(
+      definition,
+      level,
+      this.generalSynergyModifiers(player.playerId, action.sourceGeneralId),
+      [],
+    )
+    const isCritical = action.damage.criticalPolicy === 'can_crit' && this.prng.rollBps(stats.critChanceBps)
+    if (isCritical) rawDamage = Math.floor(rawDamage * stats.critDamageBps / 10000)
+    const defense = action.damage.damageType === 'physical' ? target.armor : target.magicResistance
+    const finalDamage = Math.max(1, Math.floor(rawDamage * 100 / (100 + Math.max(0, defense))))
+    const hpBefore = target.currentHp
+    target.currentHp = Math.max(0, target.currentHp - finalDamage)
+    target.lastDamagePlayerId = player.playerId
+    target.generalContributions.set(`${player.playerId}:${action.sourceGeneralId}`, {
+      ownerPlayerId: player.playerId,
+      generalId: action.sourceGeneralId,
+      category: definition.archetype,
+      lastContributionTick: this.currentTick,
+    })
+    this.emit('DAMAGE_APPLIED', {
+      attackerId: formation.formationId,
+      playerId: player.playerId,
+      generalId: action.sourceGeneralId,
+      sourceKind: action.actionKind,
+      effectId: action.damage.effectId,
+      enemyId: target.id,
+      rawDamage,
+      finalDamage,
+      hpBefore,
+      hpAfter: target.currentHp,
+      isCritical,
+      isSecondary: false,
+    })
+    if (target.currentHp <= 0) this.settleEnemyDeath(target)
   }
 
   private resolveSoldierAttacks(): void {
@@ -966,7 +1296,7 @@ export class PveGameRuntime {
   ): EnemyRuntime | null {
     const range = getSoldierLevelValue(definition.attackRangeMilliCellsByLevel, soldier.level)
     const candidates = this.enemies.filter((enemy) => {
-      if (enemy.lifecycle !== 'alive' || isInsidePveProtectedZoneMilli(enemy.xMilli, enemy.yMilli)) {
+      if (enemy.lifecycle !== 'alive' || !this.isEnemyTargetable(enemy)) {
         return false
       }
       return this.distanceSquared(entry.x * 1000, entry.y * 1000, enemy.xMilli, enemy.yMilli) <= range * range
@@ -993,7 +1323,7 @@ export class PveGameRuntime {
       if (
         enemy.lifecycle !== 'alive'
         || enemy.id === primary.id
-        || isInsidePveProtectedZoneMilli(enemy.xMilli, enemy.yMilli)
+        || !this.isEnemyTargetable(enemy)
       ) {
         return false
       }
@@ -1040,7 +1370,7 @@ export class PveGameRuntime {
     target: EnemyRuntime,
     isSecondary: boolean,
   ): void {
-    if (isInsidePveProtectedZoneMilli(target.xMilli, target.yMilli)) {
+    if (!this.isEnemyTargetable(target)) {
       return
     }
     let rawDamage = getSoldierLevelValue(definition.attackByLevel, soldier.level)
@@ -1102,6 +1432,63 @@ export class PveGameRuntime {
         enemyId: enemy.id,
         xpPoints: XP_REWARD_POINTS,
       })
+      this.settleGeneralExperience(killer, enemy)
+    }
+  }
+
+  private settleGeneralExperience(player: PlayerRuntime, enemy: EnemyRuntime): void {
+    const contributionWindowTicks = Math.ceil(5000 / this.tickRateMs)
+    const weights = { physical: 3, magic: 3, summon: 3, control: 1 } as const
+    const eligible = [...enemy.generalContributions.values()]
+      .filter((entry) => entry.ownerPlayerId === player.playerId
+        && this.currentTick - entry.lastContributionTick <= contributionWindowTicks
+        && this.generalFormations.getProgress(player.playerId, entry.generalId) !== null)
+      .sort((left, right) => left.generalId.localeCompare(right.generalId))
+    if (eligible.length === 0) return
+
+    const totalWeight = eligible.reduce((sum, entry) => sum + weights[entry.category], 0)
+    const allocations = eligible.map((entry) => {
+      const weightedPoints = XP_REWARD_POINTS * weights[entry.category]
+      return {
+        entry,
+        points: Math.floor(weightedPoints / totalWeight),
+        remainder: weightedPoints % totalWeight,
+      }
+    })
+    let unallocated = XP_REWARD_POINTS - allocations.reduce((sum, allocation) => sum + allocation.points, 0)
+    allocations.sort((left, right) => right.remainder - left.remainder
+      || left.entry.generalId.localeCompare(right.entry.generalId))
+    for (const allocation of allocations) {
+      if (unallocated <= 0) break
+      allocation.points += 1
+      unallocated -= 1
+    }
+
+    for (const allocation of allocations.sort((left, right) => (
+      left.entry.generalId.localeCompare(right.entry.generalId)
+    ))) {
+      const previous = this.generalFormations.getProgress(player.playerId, allocation.entry.generalId)
+      const next = this.generalFormations.addExperience(
+        player.playerId,
+        allocation.entry.generalId,
+        allocation.points,
+      )
+      if (!previous || !next) continue
+      this.emit('GENERAL_XP_GRANTED', {
+        playerId: player.playerId,
+        enemyId: enemy.id,
+        generalId: allocation.entry.generalId,
+        xpPoints: allocation.points,
+        experiencePoints: next.experiencePoints,
+      })
+      if (next.level > previous.level) {
+        this.emit('GENERAL_LEVEL_UP', {
+          playerId: player.playerId,
+          generalId: allocation.entry.generalId,
+          previousLevel: previous.level,
+          level: next.level,
+        })
+      }
     }
   }
 
@@ -1190,6 +1577,99 @@ export class PveGameRuntime {
     return this.laneWaves.filter((lane) => lane.waveNumber === this.currentWaveNumber)
   }
 
+  private reconcileGeneralFormations(player: PlayerRuntime) {
+    const result = this.generalFormations.reconcilePlayer(
+      player.playerId,
+      [...player.board.values()].flatMap((entry) => entry.piece.kind === 'character'
+        ? [{
+            tokenId: entry.piece.id,
+            ownerPlayerId: entry.piece.ownerPlayerId,
+            glyph: entry.piece.glyph,
+            x: entry.x,
+            y: entry.y,
+          }]
+        : []),
+      [...player.board.values()].filter((entry) => isSoldier(entry.piece)).length,
+      player.populationCap,
+      this.currentTick,
+    )
+    if (!result.ok) return result
+
+    for (const generalId of result.activatedGeneralIds) {
+      const formation = result.activeFormations.find((candidate) => candidate.generalId === generalId)
+      this.emit('GENERAL_ACTIVATED', {
+        playerId: player.playerId,
+        generalId,
+        formationId: formation?.formationId ?? null,
+        characterPieceIds: formation?.characterTokenIds ?? [],
+      })
+    }
+    for (const generalId of result.deactivatedGeneralIds) {
+      this.emit('GENERAL_DEACTIVATED', { playerId: player.playerId, generalId })
+    }
+    this.reconcilePlayerSynergies(player.playerId)
+    return result
+  }
+
+  private reconcilePlayerSynergies(playerId: string): void {
+    const next = evaluatePlayerSynergies({
+      ownerPlayerId: playerId,
+      formations: this.generalFormations.getActiveFormations(playerId).map((formation) => ({
+        ownerPlayerId: playerId,
+        generalId: formation.generalId,
+        zone: 'board' as const,
+        isFormed: true,
+        isFixed: formation.fixed,
+        constituentTokenIds: formation.characterTokenIds,
+      })),
+      profiles: GENERAL_SYNERGY_PROFILES,
+      definitions: SYNERGY_V1_CATALOG,
+    })
+    const previous = this.synergyByPlayer.get(playerId) ?? {
+      ownerPlayerId: playerId,
+      activeGeneralIds: [],
+      activeSynergies: [],
+    }
+    const reconciliation = reconcilePlayerSynergies({
+      previous,
+      next,
+      definitions: SYNERGY_V1_CATALOG,
+    })
+    this.synergyByPlayer.set(playerId, next)
+    for (const synergy of reconciliation.activated) {
+      this.emit('SYNERGY_ACTIVATED', {
+        playerId,
+        synergyId: synergy.synergyId,
+        level: synergy.level,
+        contributingGeneralIds: [...synergy.contributingGeneralIds],
+      })
+    }
+    for (const synergy of reconciliation.deactivated) {
+      this.emit('SYNERGY_DEACTIVATED', {
+        playerId,
+        synergyId: synergy.synergyId,
+        level: synergy.level,
+      })
+    }
+  }
+
+  private generalSynergyModifiers(playerId: string, generalId: string): GeneralStatModifier[] {
+    const active = this.synergyByPlayer.get(playerId)?.activeSynergies ?? []
+    const modifiers: GeneralStatModifier[] = []
+    for (const activeSynergy of active) {
+      if (!activeSynergy.contributingGeneralIds.includes(generalId)) continue
+      const definition = SYNERGY_V1_CATALOG.find((candidate) => candidate.synergyId === activeSynergy.synergyId)
+      const level = definition?.levels.find((candidate) => candidate.level === activeSynergy.level)
+      if (!level) continue
+      modifiers.push(...toHeroV1GeneralStatModifiers({
+        sourceSynergyId: activeSynergy.synergyId,
+        contributingGeneralIds: activeSynergy.contributingGeneralIds,
+        effects: level.effects,
+      }))
+    }
+    return modifiers
+  }
+
   private playerSnapshot(player: PlayerRuntime): PvePlayerSnapshot {
     const remainingCharacterTokens: Record<string, number> = {}
     for (const [glyph, count] of [...player.remainingCharacterTokens.entries()].sort(([left], [right]) => left.localeCompare(right))) {
@@ -1198,6 +1678,63 @@ export class PveGameRuntime {
     const boardPieces: PveBoardPiece[] = [...player.board.values()]
       .sort((left, right) => left.y - right.y || left.x - right.x || left.piece.id.localeCompare(right.piece.id))
       .map((entry) => ({ x: entry.x, y: entry.y, piece: clonePiece(entry.piece) }))
+    const generalFormations = this.generalFormations.getActiveFormations(player.playerId).map((formation) => {
+      const definition = getGeneralDefinition(formation.generalId)
+      return {
+        formationId: formation.formationId,
+        generalId: formation.generalId,
+        name: definition?.name ?? formation.generalId,
+        characterPieceIds: [...formation.characterTokenIds],
+        cells: formation.cells.map((cell) => ({ ...cell })),
+        anchorXMilli: formation.anchorMilli.x,
+        anchorYMilli: formation.anchorMilli.y,
+        fixed: formation.fixed,
+      }
+    })
+    const generalProgress = this.generalFormations.getAllProgress(player.playerId).flatMap((progress) => {
+      const definition = getGeneralDefinition(progress.generalId)
+      if (!definition) return []
+      const experienceToNextLevel = progress.level >= progress.maxLevel
+        ? null
+        : Math.max(0, cumulativeExperienceRequiredForLevel(
+            definition,
+            (progress.level + 1) as 2 | 3 | 4 | 5,
+          ) - progress.experiencePoints)
+      const stats = resolveGeneralStats(
+        definition,
+        progress.level,
+        this.generalSynergyModifiers(player.playerId, progress.generalId),
+      )
+      return [{
+        generalId: progress.generalId,
+        name: definition.name,
+        quality: definition.quality,
+        archetype: definition.archetype,
+        level: progress.level,
+        maxLevel: progress.maxLevel,
+        experiencePoints: progress.experiencePoints,
+        experienceToNextLevel,
+        nextBasicAttackTick: progress.nextBasicAttackTick,
+        activeSkillReadyAtTick: progress.activeSkillReadyAtTick,
+        activeSkillName: definition.activeSkill.skillName,
+        attack: stats.attack,
+        attackIntervalMs: stats.attackIntervalMs,
+        attackRangeMilliCells: stats.attackRangeMilliCells,
+        critChanceBps: stats.critChanceBps,
+        critDamageBps: stats.critDamageBps,
+        activeSkillCooldownMs: getGeneralLevelValue(
+          definition.activeSkill.cooldownMsByLevel,
+          progress.level,
+        ),
+      }]
+    })
+    const activeSynergies = (this.synergyByPlayer.get(player.playerId)?.activeSynergies ?? []).map((synergy) => ({
+      synergyId: synergy.synergyId,
+      name: SYNERGY_V1_CATALOG.find((definition) => definition.synergyId === synergy.synergyId)?.displayName
+        ?? synergy.synergyId,
+      level: synergy.level,
+      contributingGeneralIds: [...synergy.contributingGeneralIds],
+    }))
     return {
       playerId: player.playerId,
       slot: player.slot,
@@ -1212,6 +1749,9 @@ export class PveGameRuntime {
       tray: player.tray.map((piece) => piece ? clonePiece(piece) : null),
       reserve: player.reserve.map((piece) => piece ? clonePiece(piece) : null),
       boardPieces,
+      generalFormations,
+      generalProgress,
+      activeSynergies,
       remainingCharacterTokens,
       clearedWaves: [...player.clearedWaves].sort((left, right) => left - right),
     }
@@ -1228,7 +1768,21 @@ export class PveGameRuntime {
         used += 1
       }
     }
-    return used
+    return used + this.generalFormations.getActiveFormations(player.playerId).length
+  }
+
+  private cloneBoard(board: Map<string, BoardEntry>): Map<string, BoardEntry> {
+    return new Map([...board.entries()].map(([key, entry]) => [key, {
+      x: entry.x,
+      y: entry.y,
+      piece: entry.piece,
+    }]))
+  }
+
+  private isPieceInFixedFormation(playerId: string, pieceId: string): boolean {
+    return this.generalFormations.getActiveFormations(playerId).some((formation) => (
+      formation.fixed && formation.characterTokenIds.includes(pieceId)
+    ))
   }
 
   private findBoardEntryByPieceId(player: PlayerRuntime, pieceId: string): BoardEntry | null {
@@ -1338,6 +1892,18 @@ export class PveGameRuntime {
 
   private revisionMatches(expected: number | undefined, actual: number): boolean {
     return expected === undefined || expected === actual
+  }
+
+  private isEnemyTargetable(enemy: Pick<PveEnemySnapshot, 'spawnProtected' | 'invulnerable'>): boolean {
+    return !enemy.spawnProtected && !enemy.invulnerable
+  }
+
+  private getWaveDefinition(waveNumber: number): WaveMinionCatalogEntry | null {
+    const definition = getWaveMinionCatalogEntry(waveNumber)
+    const stageGlyphPool = this.waveGlyphPools?.[waveNumber - 1]
+    return definition && stageGlyphPool
+      ? { ...definition, glyphPool: stageGlyphPool }
+      : definition
   }
 
   private isStorageIndexValid(zone: 'tray' | 'reserve', index: number): boolean {

@@ -1,4 +1,5 @@
 import Phaser from 'phaser'
+import type { PveSceneTheme } from '../../../shared/contracts/pve-stage-config'
 import type { BattlefieldEnemyState, BattlefieldGridPosition, BattlefieldInteractionBridge, BattlefieldPieceState, BattlefieldSnapshot } from './battlefield-model'
 
 export const BATTLEFIELD_DIMENSION = 29
@@ -7,6 +8,7 @@ export const BATTLEFIELD_SIZE = BATTLEFIELD_DIMENSION * BATTLEFIELD_CELL_SIZE
 
 const CELL_GAP = 1
 const ENTITY_INSET = 3
+const ENEMY_BODY_RADIUS_PX = 13
 const ENEMY_TWEEN_MS = 220
 const HAN_FONT = '"Noto Serif SC", "Songti SC", "STSong", serif'
 
@@ -26,6 +28,8 @@ interface PieceView {
   kind: string
   glyphValue: string
   levelValue: number
+  generalIdValue: string
+  fixedValue: boolean
 }
 
 interface EnemyView {
@@ -36,6 +40,7 @@ interface EnemyView {
   glyphValue: string
   hp: number
   maxHp: number
+  spawnProtected: boolean
   invulnerable: boolean
 }
 
@@ -62,17 +67,12 @@ function gridToPixel(value: number) {
   return value * BATTLEFIELD_CELL_SIZE
 }
 
-function soldierColor(type?: string) {
-  if (type === 'blade') return 0xfbbf24
-  if (type === 'spear') return 0x34d399
-  if (type === 'bow') return 0x60a5fa
-  if (type === 'cavalry') return 0xc084fc
-  return 0x67e8f9
-}
+const SOLDIER_BLUE = 0x60a5fa
 
 export class BattlefieldScene extends Phaser.Scene {
   private readonly terrainMatrix: readonly (readonly number[])[]
   private readonly bridge: BattlefieldInteractionBridge
+  private readonly sceneTheme: PveSceneTheme | null
   private latestSnapshot: BattlefieldSnapshot | null = null
   private latestUiState: BattlefieldSceneUiState = { hoveredCell: null, selectedPieceId: null, placementMode: false, canPreviewAtHoveredCell: false }
   private terrainLayer!: Phaser.GameObjects.Graphics
@@ -85,10 +85,15 @@ export class BattlefieldScene extends Phaser.Scene {
   private lastHoveredCellKey: string | null = null
   private pointerDownCell: BattlefieldGridPosition | null = null
 
-  constructor(terrainMatrix: readonly (readonly number[])[], bridge: BattlefieldInteractionBridge) {
+  constructor(
+    terrainMatrix: readonly (readonly number[])[],
+    bridge: BattlefieldInteractionBridge,
+    sceneTheme?: PveSceneTheme | null,
+  ) {
     super({ key: 'BattlefieldScene' })
     this.terrainMatrix = terrainMatrix
     this.bridge = bridge
+    this.sceneTheme = sceneTheme ?? null
   }
 
   create() {
@@ -116,8 +121,12 @@ export class BattlefieldScene extends Phaser.Scene {
 
   private drawTerrain() {
     const graphics = this.terrainLayer
+    const [backgroundHex, groundHex, accentHex] = this.sceneTheme?.palette ?? ['#0b1121', '#1a233a', '#fb923c']
+    const backgroundColor = Phaser.Display.Color.HexStringToColor(backgroundHex).color
+    const groundColor = Phaser.Display.Color.HexStringToColor(groundHex).color
+    const accentColor = Phaser.Display.Color.HexStringToColor(accentHex).color
     graphics.clear()
-    graphics.fillStyle(0x0b1121, 1)
+    graphics.fillStyle(backgroundColor, 1)
     graphics.fillRect(0, 0, BATTLEFIELD_SIZE, BATTLEFIELD_SIZE)
     for (let y = 0; y < BATTLEFIELD_DIMENSION; y += 1) {
       for (let x = 0; x < BATTLEFIELD_DIMENSION; x += 1) {
@@ -125,24 +134,24 @@ export class BattlefieldScene extends Phaser.Scene {
         const top = gridToPixel(y) + CELL_GAP
         const size = BATTLEFIELD_CELL_SIZE - CELL_GAP * 2
         const isGround = this.terrainMatrix[y]?.[x] === 1
-        graphics.fillStyle(isGround ? 0x1a233a : 0x0f172a, 1)
+        graphics.fillStyle(isGround ? groundColor : 0x0f172a, isGround ? 0.72 : 0.9)
         graphics.fillRoundedRect(left, top, size, size, 3)
         if (isGround) {
           graphics.lineStyle(1, 0xffffff, 0.05)
           graphics.strokeRoundedRect(left + 0.5, top + 0.5, size - 1, size - 1, 3)
         }
         if (isCoreCell(x, y)) {
-          graphics.fillStyle(0xfb923c, 0.2)
+          graphics.fillStyle(accentColor, 0.2)
           graphics.fillRoundedRect(left, top, size, size, 3)
-          graphics.lineStyle(1, 0xfb923c, 0.45)
+          graphics.lineStyle(1, accentColor, 0.45)
           graphics.strokeRoundedRect(left + 1, top + 1, size - 2, size - 2, 3)
         }
         else if (isProtectedZoneCell(x, y)) {
-          graphics.fillStyle(0xfb923c, 0.035)
+          graphics.fillStyle(accentColor, 0.055)
           graphics.fillRoundedRect(left, top, size, size, 3)
         }
         const gateLabel = GATE_LABELS.get(coordKey(x, y))
-        if (gateLabel) this.add.text(left + size / 2, top + size / 2, gateLabel, { color: '#fb923c', fontFamily: 'ui-monospace, monospace', fontSize: '10px', fontStyle: 'bold' }).setOrigin(0.5).setAlpha(0.85).setDepth(5)
+        if (gateLabel) this.add.text(left + size / 2, top + size / 2, gateLabel, { color: accentHex, fontFamily: 'ui-monospace, monospace', fontSize: '10px', fontStyle: 'bold' }).setOrigin(0.5).setAlpha(0.85).setDepth(5)
       }
     }
   }
@@ -203,7 +212,11 @@ export class BattlefieldScene extends Phaser.Scene {
         this.pieceViews.set(piece.entityId, view)
       }
       view.container.setPosition(gridToPixel(piece.x), gridToPixel(piece.y))
-      if (view.kind !== piece.kind || view.glyphValue !== piece.glyph || view.levelValue !== (piece.level ?? 0)) this.drawPiece(view, piece)
+      if (view.kind !== piece.kind
+        || view.glyphValue !== piece.glyph
+        || view.levelValue !== (piece.level ?? 0)
+        || view.generalIdValue !== (piece.generalId ?? '')
+        || view.fixedValue !== Boolean(piece.generalFixed)) this.drawPiece(view, piece)
     }
   }
 
@@ -214,24 +227,39 @@ export class BattlefieldScene extends Phaser.Scene {
     const level = this.add.text(BATTLEFIELD_CELL_SIZE - 5, BATTLEFIELD_CELL_SIZE - 4, '', { fontFamily: 'ui-monospace, monospace', fontSize: '8px', fontStyle: 'bold', backgroundColor: '#020617', padding: { x: 2, y: 0 } }).setOrigin(1)
     const container = this.add.container(gridToPixel(piece.x), gridToPixel(piece.y), [selection, body, glyph, level])
     this.pieceLayer.add(container)
-    const view: PieceView = { container, body, selection, glyph, level, kind: '', glyphValue: '', levelValue: -1 }
+    const view: PieceView = {
+      container,
+      body,
+      selection,
+      glyph,
+      level,
+      kind: '',
+      glyphValue: '',
+      levelValue: -1,
+      generalIdValue: '',
+      fixedValue: false,
+    }
     this.drawPiece(view, piece)
     return view
   }
 
   private drawPiece(view: PieceView, piece: BattlefieldPieceState) {
     const size = BATTLEFIELD_CELL_SIZE - ENTITY_INSET * 2
-    const color = piece.kind === 'character' ? 0xfb7185 : soldierColor(piece.soldierType)
+    const color = piece.generalId ? 0xa78bfa : piece.kind === 'character' ? 0x67e8f9 : SOLDIER_BLUE
     view.body.clear()
     view.body.fillStyle(0x07111f, 0.94)
     view.body.fillRoundedRect(ENTITY_INSET, ENTITY_INSET, size, size, 5)
-    view.body.lineStyle(2, color, 0.95)
+    view.body.lineStyle(piece.generalFixed ? 3 : 2, color, 0.95)
     view.body.strokeRoundedRect(ENTITY_INSET + 1, ENTITY_INSET + 1, size - 2, size - 2, 5)
     view.glyph.setText(piece.glyph).setColor(Phaser.Display.Color.IntegerToColor(color).rgba)
-    view.level.setText(piece.kind === 'soldier' ? `${piece.level ?? 1}` : '').setVisible(piece.kind === 'soldier')
+    view.level
+      .setText(piece.kind === 'soldier' ? `${piece.level ?? 1}` : piece.generalId ? piece.generalFixed ? '固' : '将' : '')
+      .setVisible(piece.kind === 'soldier' || Boolean(piece.generalId))
     view.kind = piece.kind
     view.glyphValue = piece.glyph
     view.levelValue = piece.level ?? 0
+    view.generalIdValue = piece.generalId ?? ''
+    view.fixedValue = Boolean(piece.generalFixed)
   }
 
   private syncEnemies(enemies: BattlefieldEnemyState[]) {
@@ -252,10 +280,19 @@ export class BattlefieldScene extends Phaser.Scene {
         this.enemyViews.set(enemy.entityId, view)
       } else {
         this.tweens.killTweensOf(view.container)
-        this.tweens.add({ targets: view.container, x: targetX, y: targetY, duration: ENEMY_TWEEN_MS, ease: 'Linear' })
+        if (view.spawnProtected && !Boolean(enemy.spawnProtected)) {
+          // 解除攻击锁的同帧对齐到服务端越线位置，避免补间滞后造成“身体还在出生格里就掉血”。
+          view.container.setPosition(targetX, targetY)
+        } else {
+          this.tweens.add({ targets: view.container, x: targetX, y: targetY, duration: ENEMY_TWEEN_MS, ease: 'Linear' })
+        }
       }
-      if (view.glyphValue !== enemy.glyph || view.invulnerable !== Boolean(enemy.invulnerable)) {
-        this.drawEnemyBody(view, enemy.glyph, Boolean(enemy.invulnerable))
+      if (
+        view.glyphValue !== enemy.glyph
+        || view.spawnProtected !== Boolean(enemy.spawnProtected)
+        || view.invulnerable !== Boolean(enemy.invulnerable)
+      ) {
+        this.drawEnemyBody(view, enemy.glyph, Boolean(enemy.spawnProtected), Boolean(enemy.invulnerable))
       }
       if (view.hp !== enemy.hp || view.maxHp !== enemy.maxHp) this.drawEnemyHealth(view, enemy.hp, enemy.maxHp)
     }
@@ -267,20 +304,34 @@ export class BattlefieldScene extends Phaser.Scene {
     const health = this.add.graphics()
     const container = this.add.container(x, y, [body, glyph, health])
     this.enemyLayer.add(container)
-    const view: EnemyView = { container, body, glyph, health, glyphValue: '', hp: Number.NaN, maxHp: Number.NaN, invulnerable: false }
-    this.drawEnemyBody(view, enemy.glyph, Boolean(enemy.invulnerable))
+    const view: EnemyView = {
+      container,
+      body,
+      glyph,
+      health,
+      glyphValue: '',
+      hp: Number.NaN,
+      maxHp: Number.NaN,
+      spawnProtected: false,
+      invulnerable: false,
+    }
+    this.drawEnemyBody(view, enemy.glyph, Boolean(enemy.spawnProtected), Boolean(enemy.invulnerable))
     this.drawEnemyHealth(view, enemy.hp, enemy.maxHp)
     return view
   }
 
-  private drawEnemyBody(view: EnemyView, glyph: string, invulnerable: boolean) {
+  private drawEnemyBody(view: EnemyView, glyph: string, spawnProtected: boolean, invulnerable: boolean) {
     view.body.clear()
     view.body.fillStyle(invulnerable ? 0x78350f : 0x7f1d1d, 0.62)
-    view.body.fillCircle(0, 0, 13)
+    view.body.fillCircle(0, 0, ENEMY_BODY_RADIUS_PX)
     view.body.lineStyle(invulnerable ? 2 : 1, invulnerable ? 0xfbbf24 : 0xf87171, 0.9)
-    view.body.strokeCircle(0, 0, 13)
-    view.glyph.setText(invulnerable ? `护${glyph}` : glyph).setFontSize(invulnerable ? '13px' : '20px')
+    view.body.strokeCircle(0, 0, ENEMY_BODY_RADIUS_PX)
+    view.glyph
+      .setText(invulnerable ? `护${glyph}` : glyph)
+      .setFontSize(invulnerable ? '13px' : '20px')
+      .setColor(invulnerable ? '#fde68a' : '#fecaca')
     view.glyphValue = glyph
+    view.spawnProtected = spawnProtected
     view.invulnerable = invulnerable
   }
 
@@ -288,9 +339,9 @@ export class BattlefieldScene extends Phaser.Scene {
     const ratio = maxHp > 0 ? Phaser.Math.Clamp(hp / maxHp, 0, 1) : 0
     view.health.clear()
     view.health.fillStyle(0x020617, 0.95)
-    view.health.fillRoundedRect(-13, 13, 26, 4, 1)
+    view.health.fillRoundedRect(-ENEMY_BODY_RADIUS_PX, ENEMY_BODY_RADIUS_PX, ENEMY_BODY_RADIUS_PX * 2, 4, 1)
     view.health.fillStyle(ratio > 0.4 ? 0x22c55e : ratio > 0.2 ? 0xf59e0b : 0xef4444, 1)
-    view.health.fillRoundedRect(-13, 13, 26 * ratio, 4, 1)
+    view.health.fillRoundedRect(-ENEMY_BODY_RADIUS_PX, ENEMY_BODY_RADIUS_PX, ENEMY_BODY_RADIUS_PX * 2 * ratio, 4, 1)
     view.hp = hp
     view.maxHp = maxHp
   }

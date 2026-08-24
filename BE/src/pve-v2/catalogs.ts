@@ -104,7 +104,6 @@ export const SOLDIER_CATALOG: Readonly<Record<SoldierType, SoldierCatalogEntry>>
 const wave = (
   waveNumber: number,
   glyphPool: readonly string[],
-  countPerPlayer: number,
   maxHp: number,
   armor: number,
   magicResistance: number,
@@ -112,7 +111,7 @@ const wave = (
 ): WaveMinionCatalogEntry => ({
   waveNumber,
   glyphPool,
-  countPerPlayer,
+  countPerPlayer: 10,
   maxHp,
   armor,
   magicResistance,
@@ -123,26 +122,26 @@ const wave = (
 })
 
 export const WAVE_MINION_CATALOG: readonly WaveMinionCatalogEntry[] = [
-  wave(1, ['鬼'], 4, 28, 0, 0, 2500),
-  wave(2, ['鬼', '怪'], 8, 28, 0, 0, 2000),
-  wave(3, ['怪', '妖'], 9, 40, 2, 2, 1800),
-  wave(4, ['妖', '魅'], 10, 55, 4, 3, 1700),
-  wave(5, ['妖', '魔'], 14, 75, 6, 5, 1500),
-  wave(6, ['魅', '妖'], 16, 90, 8, 7, 1400),
-  wave(7, ['妖', '怪'], 18, 120, 10, 9, 1300),
-  wave(8, ['魔', '魅'], 20, 160, 13, 12, 1200),
-  wave(9, ['魔', '妖'], 22, 220, 16, 15, 1100),
-  wave(10, ['魔', '怪'], 24, 320, 20, 18, 1000),
-  wave(11, ['魔', '魅'], 30, 3500, 25, 22, 500),
-  wave(12, ['魔', '妖'], 32, 4100, 28, 25, 500),
-  wave(13, ['鬼', '魅'], 34, 4800, 31, 28, 500),
-  wave(14, ['妖', '魔'], 36, 5600, 34, 31, 500),
-  wave(15, ['魔', '魅'], 38, 6500, 38, 35, 400),
-  wave(16, ['魔', '妖'], 40, 7550, 42, 39, 400),
-  wave(17, ['鬼', '魔'], 42, 8750, 46, 43, 400),
-  wave(18, ['妖', '魅'], 44, 10150, 50, 47, 400),
-  wave(19, ['魔', '鬼'], 46, 11750, 55, 52, 300),
-  wave(20, ['魔', '魅'], 50, 13600, 60, 58, 300),
+  wave(1, ['鬼'], 28, 0, 0, 2500),
+  wave(2, ['鬼', '怪'], 28, 0, 0, 2000),
+  wave(3, ['怪', '妖'], 40, 2, 2, 1800),
+  wave(4, ['妖', '魅'], 55, 4, 3, 1700),
+  wave(5, ['妖', '魔'], 75, 6, 5, 1500),
+  wave(6, ['魅', '妖'], 90, 8, 7, 1400),
+  wave(7, ['妖', '怪'], 120, 10, 9, 1300),
+  wave(8, ['魔', '魅'], 160, 13, 12, 1200),
+  wave(9, ['魔', '妖'], 220, 16, 15, 1100),
+  wave(10, ['魔', '怪'], 320, 20, 18, 1000),
+  wave(11, ['魔', '魅'], 3500, 25, 22, 500),
+  wave(12, ['魔', '妖'], 4100, 28, 25, 500),
+  wave(13, ['鬼', '魅'], 4800, 31, 28, 500),
+  wave(14, ['妖', '魔'], 5600, 34, 31, 500),
+  wave(15, ['魔', '魅'], 6500, 38, 35, 400),
+  wave(16, ['魔', '妖'], 7550, 42, 39, 400),
+  wave(17, ['鬼', '魔'], 8750, 46, 43, 400),
+  wave(18, ['妖', '魅'], 10150, 50, 47, 400),
+  wave(19, ['魔', '鬼'], 11750, 55, 52, 300),
+  wave(20, ['魔', '魅'], 13600, 60, 58, 300),
 ]
 
 export function getSoldierCatalogEntry(type: SoldierType): SoldierCatalogEntry {
@@ -182,7 +181,11 @@ export function validatePveV2Catalogs(): void {
 
   for (let index = 0; index < WAVE_MINION_CATALOG.length; index += 1) {
     const entry = WAVE_MINION_CATALOG[index]
-    if (entry.waveNumber !== index + 1 || entry.moveSpeedMilliCellsPerSecond !== 1000) {
+    if (
+      entry.waveNumber !== index + 1
+      || entry.countPerPlayer !== 10
+      || entry.moveSpeedMilliCellsPerSecond !== 1000
+    ) {
       throw new Error(`Invalid wave catalog entry at index ${index}`)
     }
   }

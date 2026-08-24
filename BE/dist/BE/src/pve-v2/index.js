@@ -1,7 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.runPveV2SmokeChecks = exports.isDefaultDeployableCell = exports.isInsidePveProtectedZoneMilli = exports.getDefaultSoldierPlacement = exports.PVE_PROTECTED_ZONE_MIN = exports.PVE_PROTECTED_ZONE_MAX = exports.PVE_LANE_SLOTS = exports.PVE_ARENA_GRID_SIZE = exports.DEFAULT_PVE_LANE_ROUTES = exports.validatePveV2Catalogs = exports.getWaveMinionCatalogEntry = exports.getSoldierCatalogEntry = exports.WAVE_MINION_CATALOG = exports.SOLDIER_TYPES = exports.SOLDIER_CATALOG = exports.DeterministicPrng = exports.PveGameRuntime = void 0;
+exports.runPveV2SmokeChecks = exports.isPveBoardDeployableCell = exports.isDefaultDeployableCell = exports.hasEnemyBodyFullyExitedPveSpawnSquareMilli = exports.belongsToSlotQuadrant = exports.getDefaultSoldierPlacement = exports.PVE_SPAWN_SQUARE_MIN = exports.PVE_SPAWN_SQUARE_MAX = exports.PVE_LANE_SLOTS = exports.PVE_ENEMY_BODY_RADIUS_MILLI = exports.PVE_ARENA_GRID_SIZE = exports.DEFAULT_PVE_LANE_ROUTES = exports.validatePveV2Catalogs = exports.getWaveMinionCatalogEntry = exports.getSoldierCatalogEntry = exports.WAVE_MINION_CATALOG = exports.SOLDIER_TYPES = exports.SOLDIER_CATALOG = exports.DeterministicPrng = exports.PveGameRuntime = exports.PVE_WAVE_PREP_DURATION_MS = void 0;
 var runtime_1 = require("./runtime");
+Object.defineProperty(exports, "PVE_WAVE_PREP_DURATION_MS", { enumerable: true, get: function () { return runtime_1.PVE_WAVE_PREP_DURATION_MS; } });
 Object.defineProperty(exports, "PveGameRuntime", { enumerable: true, get: function () { return runtime_1.PveGameRuntime; } });
 var prng_1 = require("./prng");
 Object.defineProperty(exports, "DeterministicPrng", { enumerable: true, get: function () { return prng_1.DeterministicPrng; } });
@@ -15,11 +16,14 @@ Object.defineProperty(exports, "validatePveV2Catalogs", { enumerable: true, get:
 var arena_1 = require("./arena");
 Object.defineProperty(exports, "DEFAULT_PVE_LANE_ROUTES", { enumerable: true, get: function () { return arena_1.DEFAULT_PVE_LANE_ROUTES; } });
 Object.defineProperty(exports, "PVE_ARENA_GRID_SIZE", { enumerable: true, get: function () { return arena_1.PVE_ARENA_GRID_SIZE; } });
+Object.defineProperty(exports, "PVE_ENEMY_BODY_RADIUS_MILLI", { enumerable: true, get: function () { return arena_1.PVE_ENEMY_BODY_RADIUS_MILLI; } });
 Object.defineProperty(exports, "PVE_LANE_SLOTS", { enumerable: true, get: function () { return arena_1.PVE_LANE_SLOTS; } });
-Object.defineProperty(exports, "PVE_PROTECTED_ZONE_MAX", { enumerable: true, get: function () { return arena_1.PVE_PROTECTED_ZONE_MAX; } });
-Object.defineProperty(exports, "PVE_PROTECTED_ZONE_MIN", { enumerable: true, get: function () { return arena_1.PVE_PROTECTED_ZONE_MIN; } });
+Object.defineProperty(exports, "PVE_SPAWN_SQUARE_MAX", { enumerable: true, get: function () { return arena_1.PVE_SPAWN_SQUARE_MAX; } });
+Object.defineProperty(exports, "PVE_SPAWN_SQUARE_MIN", { enumerable: true, get: function () { return arena_1.PVE_SPAWN_SQUARE_MIN; } });
 Object.defineProperty(exports, "getDefaultSoldierPlacement", { enumerable: true, get: function () { return arena_1.getDefaultSoldierPlacement; } });
-Object.defineProperty(exports, "isInsidePveProtectedZoneMilli", { enumerable: true, get: function () { return arena_1.isInsidePveProtectedZoneMilli; } });
+Object.defineProperty(exports, "belongsToSlotQuadrant", { enumerable: true, get: function () { return arena_1.belongsToSlotQuadrant; } });
+Object.defineProperty(exports, "hasEnemyBodyFullyExitedPveSpawnSquareMilli", { enumerable: true, get: function () { return arena_1.hasEnemyBodyFullyExitedPveSpawnSquareMilli; } });
 Object.defineProperty(exports, "isDefaultDeployableCell", { enumerable: true, get: function () { return arena_1.isDefaultDeployableCell; } });
+Object.defineProperty(exports, "isPveBoardDeployableCell", { enumerable: true, get: function () { return arena_1.isPveBoardDeployableCell; } });
 var smoke_1 = require("./smoke");
 Object.defineProperty(exports, "runPveV2SmokeChecks", { enumerable: true, get: function () { return smoke_1.runPveV2SmokeChecks; } });

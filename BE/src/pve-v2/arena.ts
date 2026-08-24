@@ -2,8 +2,14 @@ import type { PveLaneRoute, PveLaneSlot, PvePosition } from './types'
 
 export const PVE_ARENA_GRID_SIZE = 29
 export const PVE_LANE_SLOTS: readonly PveLaneSlot[] = ['P1', 'P2', 'P3', 'P4']
-export const PVE_PROTECTED_ZONE_MIN = 10
-export const PVE_PROTECTED_ZONE_MAX = 18
+/** 中央标有 P1/P2/P3/P4 的 3×3（共 9 格）小怪出生方格。 */
+export const PVE_SPAWN_SQUARE_MIN = 13
+export const PVE_SPAWN_SQUARE_MAX = 15
+/** 与前端 13px / 32px 的小怪圆形体积对应。 */
+export const PVE_ENEMY_BODY_RADIUS_MILLI = 406
+
+const PVE_SPAWN_SQUARE_MIN_BOUNDARY_MILLI = PVE_SPAWN_SQUARE_MIN * 1000 - 500
+const PVE_SPAWN_SQUARE_MAX_BOUNDARY_MILLI = PVE_SPAWN_SQUARE_MAX * 1000 + 500
 
 const DEFAULT_WAYPOINTS: Readonly<Record<PveLaneSlot, readonly PvePosition[]>> = {
   P1: [
@@ -83,7 +89,8 @@ function buildPathCellKeys(routes: Readonly<Record<PveLaneSlot, PveLaneRoute>>):
 
 const DEFAULT_PATH_CELL_KEYS = buildPathCellKeys(DEFAULT_PVE_LANE_ROUTES)
 
-function belongsToSlotQuadrant(slot: PveLaneSlot, x: number, y: number): boolean {
+/** 保留给未来需要领地规则的模式（例如 PVP）；当前 PVE 不使用该限制。 */
+export function belongsToSlotQuadrant(slot: PveLaneSlot, x: number, y: number): boolean {
   switch (slot) {
     case 'P1': return x <= 13 && y >= 15
     case 'P2': return x >= 15 && y >= 15
@@ -92,11 +99,8 @@ function belongsToSlotQuadrant(slot: PveLaneSlot, x: number, y: number): boolean
   }
 }
 
-export function isDefaultDeployableCell(slot: PveLaneSlot, x: number, y: number): boolean {
+export function isPveBoardDeployableCell(x: number, y: number): boolean {
   if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= PVE_ARENA_GRID_SIZE || y >= PVE_ARENA_GRID_SIZE) {
-    return false
-  }
-  if (!belongsToSlotQuadrant(slot, x, y)) {
     return false
   }
   if (x >= 13 && x <= 15 && y >= 13 && y <= 15) {
@@ -105,14 +109,23 @@ export function isDefaultDeployableCell(slot: PveLaneSlot, x: number, y: number)
   return !DEFAULT_PATH_CELL_KEYS.has(positionKey(x, y))
 }
 
-/** 中央 9×9 出生区内的小怪不可成为攻击目标。坐标单位为千分之一格。 */
-export function isInsidePveProtectedZoneMilli(xMilli: number, yMilli: number): boolean {
-  const minMilli = PVE_PROTECTED_ZONE_MIN * 1000
-  const maxExclusiveMilli = (PVE_PROTECTED_ZONE_MAX + 1) * 1000
-  return xMilli >= minMilli
-    && xMilli < maxExclusiveMilli
-    && yMilli >= minMilli
-    && yMilli < maxExclusiveMilli
+export function isDefaultDeployableCell(_slot: PveLaneSlot, x: number, y: number): boolean {
+  return isPveBoardDeployableCell(x, y)
+}
+
+/**
+ * 小怪的整个圆形身体是否已完全离开中央 3×3 出生方格。
+ * 不能只用中心点或身体前缘判断；必须让身体后缘也越过方格外沿。
+ */
+export function hasEnemyBodyFullyExitedPveSpawnSquareMilli(
+  xMilli: number,
+  yMilli: number,
+  radiusMilli = PVE_ENEMY_BODY_RADIUS_MILLI,
+): boolean {
+  return xMilli + radiusMilli < PVE_SPAWN_SQUARE_MIN_BOUNDARY_MILLI
+    || xMilli - radiusMilli > PVE_SPAWN_SQUARE_MAX_BOUNDARY_MILLI
+    || yMilli + radiusMilli < PVE_SPAWN_SQUARE_MIN_BOUNDARY_MILLI
+    || yMilli - radiusMilli > PVE_SPAWN_SQUARE_MAX_BOUNDARY_MILLI
 }
 
 export function createPveLaneRoutes(

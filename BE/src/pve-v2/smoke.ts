@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
-import { getDefaultSoldierPlacement, isDefaultDeployableCell, isInsidePveProtectedZoneMilli } from './arena'
-import { PveGameRuntime } from './runtime'
+import { PVE_MINION_GLYPHS, PVE_STAGE_DEFINITIONS } from '../../../shared/contracts/pve-stage-config'
+import {
+  getDefaultSoldierPlacement,
+  hasEnemyBodyFullyExitedPveSpawnSquareMilli,
+  isDefaultDeployableCell,
+  PVE_ENEMY_BODY_RADIUS_MILLI,
+} from './arena'
+import { PVE_WAVE_PREP_DURATION_MS, PveGameRuntime } from './runtime'
 import type { PveRuntimeSnapshot, SoldierPiece } from './types'
 
 function firstSoldier(snapshot: PveRuntimeSnapshot): { index: number, piece: SoldierPiece } {
@@ -39,11 +45,12 @@ export function runPveV2SmokeChecks(): {
   deployment: true
   merge: true
   reserve: true
+  hero: true
   waveTiming: true
   combat: true
 } {
   assert.equal(isDefaultDeployableCell('P1', 12, 16), true)
-  assert.equal(isDefaultDeployableCell('P1', 16, 16), false)
+  assert.equal(isDefaultDeployableCell('P1', 17, 19), true)
   assert.equal(isDefaultDeployableCell('P1', 13, 15), false)
 
   const runtime = createPreparedRuntime('smoke-combat')
@@ -63,27 +70,33 @@ export function runPveV2SmokeChecks(): {
   const placement = getDefaultSoldierPlacement('P1')
   assert.equal(runtime.handleAction('player-1', {
     type: 'SWAP_TRAY_BOARD',
-    actionId: 'deploy-1',
+    actionId: 'cross-territory-deploy',
     trayIndex: soldier.index,
-    boardX: placement.x,
-    boardY: placement.y,
+    boardX: 17,
+    boardY: 19,
   }).ok, true)
   assert.equal(runtime.snapshot().players[0].populationUsed, 1)
   assert.equal(runtime.handleAction('player-1', {
     type: 'MOVE_BOARD_PIECE',
-    actionId: 'invalid-foreign-zone',
+    actionId: 'move-to-home-side',
     pieceId: soldier.piece.id,
-    targetX: 16,
-    targetY: 16,
+    targetX: placement.x,
+    targetY: placement.y,
+  }).ok, true)
+  assert.equal(runtime.handleAction('player-1', {
+    type: 'MOVE_BOARD_PIECE',
+    actionId: 'invalid-core-cell',
+    pieceId: soldier.piece.id,
+    targetX: 13,
+    targetY: 15,
   }).code, 'CELL_NOT_DEPLOYABLE')
-
   assert.equal(runtime.start().ok, true)
   for (let tick = 0; tick < 12000 && runtime.snapshot().status !== 'finished'; tick += 1) {
     runtime.tick()
   }
   snapshot = runtime.snapshot()
   assert.equal(snapshot.result?.outcome, 'victory')
-  assert.equal(snapshot.players[0].rice, 14)
+  assert.equal(snapshot.players[0].rice, 20)
   assert.deepEqual(snapshot.players[0].clearedWaves, [1])
 
   const mergeRuntime = new PveGameRuntime({ seed: 'smoke-merge', characterTokens: {} })
@@ -312,6 +325,103 @@ export function runPveV2SmokeChecks(): {
     type: 'EXILE_RESERVE', actionId: 'reserve-exile-empty', expectedReserveRevision: reserveSnapshot.players[0].reserveRevision,
   }).details?.exiledCount, 0)
 
+  let houyiRuntime: PveGameRuntime | null = null
+  for (let seedIndex = 0; seedIndex < 5000 && !houyiRuntime; seedIndex += 1) {
+    const candidate = new PveGameRuntime({
+      seed: `houyi-integration-${seedIndex}`,
+      prepDurationMs: 0,
+      maxWaves: 1,
+      characterTokens: { 后: 1, 羿: 1 },
+    })
+    candidate.registerPlayer('houyi-player', 'P1')
+    candidate.handleAction('houyi-player', { type: 'RECRUIT_BATCH', actionId: 'houyi-recruit' })
+    const glyphs = candidate.snapshot().players[0].tray.flatMap((piece) => (
+      piece?.kind === 'character' ? [piece.glyph] : []
+    ))
+    if (glyphs.includes('后') && glyphs.includes('羿')) houyiRuntime = candidate
+  }
+  assert.ok(houyiRuntime, 'A deterministic seed should recruit both Houyi glyphs in the first batch')
+  const houyiTray = houyiRuntime.snapshot().players[0].tray
+  const houIndex = houyiTray.findIndex((piece) => piece?.kind === 'character' && piece.glyph === '后')
+  const yiIndex = houyiTray.findIndex((piece) => piece?.kind === 'character' && piece.glyph === '羿')
+  assert.equal(houyiRuntime.handleAction('houyi-player', {
+    type: 'SWAP_TRAY_BOARD', actionId: 'deploy-hou', trayIndex: houIndex, boardX: 11, boardY: 17,
+  }).ok, true)
+  assert.equal(houyiRuntime.handleAction('houyi-player', {
+    type: 'SWAP_TRAY_BOARD', actionId: 'deploy-yi', trayIndex: yiIndex, boardX: 12, boardY: 17,
+  }).ok, true)
+  let houyiSnapshot = houyiRuntime.snapshot()
+  assert.equal(houyiSnapshot.players[0].populationUsed, 1)
+  assert.equal(houyiSnapshot.players[0].generalFormations[0]?.generalId, 'houyi')
+  assert.equal(houyiSnapshot.players[0].generalProgress[0]?.attack, 34)
+  assert.equal(houyiSnapshot.players[0].generalProgress[0]?.attackRangeMilliCells, 3000)
+  const firstFormationId = houyiSnapshot.players[0].generalFormations[0]?.formationId
+  assert.ok(firstFormationId)
+  assert.equal(houyiRuntime.handleAction('houyi-player', {
+    type: 'SET_GENERAL_FIXED', actionId: 'fix-houyi', formationId: firstFormationId, fixed: true,
+  }).ok, true)
+  const yiPieceId = houyiSnapshot.players[0].boardPieces.find(({ piece }) => (
+    piece.kind === 'character' && piece.glyph === '羿'
+  ))?.piece.id
+  assert.ok(yiPieceId)
+  assert.equal(houyiRuntime.handleAction('houyi-player', {
+    type: 'MOVE_BOARD_PIECE', actionId: 'fixed-single-move-rejected', pieceId: yiPieceId, targetX: 8, targetY: 17,
+  }).code, 'GENERAL_FIXED')
+  assert.equal(houyiRuntime.handleAction('houyi-player', {
+    type: 'MOVE_FIXED_GENERAL', actionId: 'move-fixed-houyi', formationId: firstFormationId,
+    targetStartX: 10, targetStartY: 17,
+  }).ok, true)
+  assert.equal(houyiRuntime.start().ok, true)
+  for (let tick = 0; tick < 150; tick += 1) {
+    houyiRuntime.tick()
+    if ((houyiRuntime.snapshot().players[0].generalProgress[0]?.experiencePoints ?? 0) > 0) break
+  }
+  houyiSnapshot = houyiRuntime.snapshot()
+  const experienceBeforeDisband = houyiSnapshot.players[0].generalProgress[0]?.experiencePoints ?? 0
+  assert.ok(experienceBeforeDisband > 0, 'Houyi should deal a killing contribution and receive experience')
+  assert.equal(houyiRuntime.handleAction('houyi-player', {
+    type: 'SET_GENERAL_FIXED', actionId: 'unfix-houyi', formationId: firstFormationId, fixed: false,
+  }).ok, true)
+  assert.equal(houyiRuntime.handleAction('houyi-player', {
+    type: 'MOVE_BOARD_PIECE', actionId: 'disband-houyi', pieceId: yiPieceId, targetX: 8, targetY: 17,
+  }).ok, true)
+  houyiSnapshot = houyiRuntime.snapshot()
+  assert.equal(houyiSnapshot.players[0].generalFormations.length, 0)
+  assert.equal(houyiSnapshot.players[0].populationUsed, 0)
+  assert.equal(houyiSnapshot.players[0].generalProgress[0]?.experiencePoints, experienceBeforeDisband)
+  assert.equal(houyiRuntime.handleAction('houyi-player', {
+    type: 'MOVE_BOARD_PIECE', actionId: 'reform-houyi', pieceId: yiPieceId, targetX: 11, targetY: 17,
+  }).ok, true)
+  houyiSnapshot = houyiRuntime.snapshot()
+  assert.equal(houyiSnapshot.players[0].generalFormations[0]?.generalId, 'houyi')
+  assert.equal(houyiSnapshot.players[0].generalProgress[0]?.experiencePoints, experienceBeforeDisband)
+
+  const firstWavePrepRuntime = new PveGameRuntime({
+    seed: 'first-wave-five-second-prep',
+    tickRateMs: 100,
+    maxWaves: 1,
+  })
+  assert.equal(firstWavePrepRuntime.registerPlayer('first-wave-player', 'P1').ok, true)
+  assert.equal(firstWavePrepRuntime.start().ok, true)
+  let firstWavePrepSnapshot = firstWavePrepRuntime.snapshot()
+  assert.equal(firstWavePrepSnapshot.wave.number, 1)
+  assert.equal(firstWavePrepSnapshot.wave.phase, 'prep')
+  assert.equal(firstWavePrepSnapshot.wave.prepRemainingTicks, PVE_WAVE_PREP_DURATION_MS / 100)
+  assert.equal(firstWavePrepSnapshot.enemies.length, 0)
+  for (let tick = 0; tick < (PVE_WAVE_PREP_DURATION_MS / 100) - 1; tick += 1) {
+    firstWavePrepSnapshot = firstWavePrepRuntime.tick()
+    assert.equal(firstWavePrepSnapshot.enemies.length, 0)
+  }
+  assert.equal(firstWavePrepSnapshot.wave.phase, 'prep')
+  assert.equal(firstWavePrepSnapshot.wave.prepRemainingTicks, 1)
+  firstWavePrepSnapshot = firstWavePrepRuntime.tick()
+  assert.equal(firstWavePrepSnapshot.wave.phase, 'spawning')
+  assert.equal(firstWavePrepSnapshot.enemies.length, 1)
+  assert.equal(
+    firstWavePrepSnapshot.recentEvents.find((event) => event.type === 'ENEMY_SPAWNED')?.tick,
+    PVE_WAVE_PREP_DURATION_MS / 100,
+  )
+
   const timedWaveRuntime = new PveGameRuntime({
     seed: 'timed-overlapping-waves',
     tickRateMs: 100,
@@ -346,29 +456,142 @@ export function runPveV2SmokeChecks(): {
   assert.ok(timedSnapshot.enemies.some((enemy) => enemy.waveNumber === 1))
   assert.ok(timedSnapshot.enemies.some((enemy) => enemy.waveNumber === 2))
 
-  const protectedRuntime = new PveGameRuntime({ seed: 'protected-zone', prepDurationMs: 0, maxWaves: 1 })
-  assert.equal(protectedRuntime.registerPlayer('protected-player', 'P1').ok, true)
-  assert.equal(protectedRuntime.handleAction('protected-player', { type: 'RECRUIT_BATCH', actionId: 'protected-recruit' }).ok, true)
-  const protectedSoldier = firstSoldier(protectedRuntime.snapshot())
-  assert.equal(protectedRuntime.handleAction('protected-player', {
-    type: 'SWAP_TRAY_BOARD', actionId: 'protected-deploy', trayIndex: protectedSoldier.index, boardX: 9, boardY: 17,
-  }).ok, true)
-  assert.equal(protectedRuntime.start().ok, true)
-  for (let tick = 0; tick < 55; tick += 1) protectedRuntime.tick()
-  const protectedSnapshot = protectedRuntime.snapshot()
-  assert.ok(protectedSnapshot.enemies.length > 0)
-  assert.ok(protectedSnapshot.enemies.every((enemy) => (
-    !isInsidePveProtectedZoneMilli(enemy.xMilli, enemy.yMilli) || enemy.currentHp === enemy.maxHp
-  )))
-  let damageAfterExit = false
-  for (let tick = 0; tick < 80 && !damageAfterExit; tick += 1) {
-    const next = protectedRuntime.tick()
-    damageAfterExit = next.players[0].rice > 5
-      || next.enemies.some((enemy) => (
-        !isInsidePveProtectedZoneMilli(enemy.xMilli, enemy.yMilli) && enemy.currentHp < enemy.maxHp
-      ))
+  // 出生方格真实边界是 12.5～15.5；半径 0.406 的身体后缘必须严格越线。
+  assert.equal(hasEnemyBodyFullyExitedPveSpawnSquareMilli(12094, 14000), false)
+  assert.equal(hasEnemyBodyFullyExitedPveSpawnSquareMilli(12093, 14000), true)
+  assert.equal(hasEnemyBodyFullyExitedPveSpawnSquareMilli(15906, 14000), false)
+  assert.equal(hasEnemyBodyFullyExitedPveSpawnSquareMilli(15907, 14000), true)
+  assert.equal(hasEnemyBodyFullyExitedPveSpawnSquareMilli(14000, 12094), false)
+  assert.equal(hasEnemyBodyFullyExitedPveSpawnSquareMilli(14000, 12093), true)
+  assert.equal(hasEnemyBodyFullyExitedPveSpawnSquareMilli(14000, 15906), false)
+  assert.equal(hasEnemyBodyFullyExitedPveSpawnSquareMilli(14000, 15907), true)
+  assert.equal(PVE_ENEMY_BODY_RADIUS_MILLI, 406)
+
+  assert.equal(PVE_STAGE_DEFINITIONS.length, 10)
+  assert.deepEqual(PVE_STAGE_DEFINITIONS.map(({ levelId }) => levelId), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+  const configuredMinionGlyphs = new Set<string>()
+  for (const stageDefinition of PVE_STAGE_DEFINITIONS) {
+    assert.ok(stageDefinition.minionGlyphs.length >= 1 && stageDefinition.minionGlyphs.length <= 4)
+    assert.equal(new Set(stageDefinition.minionGlyphs).size, stageDefinition.minionGlyphs.length)
+    assert.equal(stageDefinition.waveGlyphPools.length, 20)
+    for (const glyph of stageDefinition.minionGlyphs) configuredMinionGlyphs.add(glyph)
+    for (const pool of stageDefinition.waveGlyphPools) {
+      assert.ok(pool.length >= 1 && pool.length <= 4)
+      assert.ok(pool.every((glyph) => stageDefinition.minionGlyphs.includes(glyph)))
+    }
   }
-  assert.equal(damageAfterExit, true)
+  assert.deepEqual([...configuredMinionGlyphs].sort(), [...PVE_MINION_GLYPHS].sort())
+
+  const webbedHollow = PVE_STAGE_DEFINITIONS.find(({ levelId }) => levelId === 7)
+  assert.ok(webbedHollow)
+  const themedRuntime = new PveGameRuntime({
+    seed: 'stage-glyph-pool',
+    prepDurationMs: 0,
+    maxWaves: 1,
+    waveGlyphPools: webbedHollow.waveGlyphPools,
+  })
+  assert.equal(themedRuntime.registerPlayer('themed-player', 'P1').ok, true)
+  assert.equal(themedRuntime.start().ok, true)
+  themedRuntime.tick()
+  assert.ok(themedRuntime.snapshot().enemies.length > 0)
+  assert.ok(themedRuntime.snapshot().enemies.every((enemy) => enemy.glyph === '蛛'))
+
+  const fourLaneSpawnRuntime = new PveGameRuntime({
+    seed: 'four-lane-body-exit',
+    prepDurationMs: 0,
+    maxWaves: 1,
+  })
+  for (const slot of ['P1', 'P2', 'P3', 'P4'] as const) {
+    assert.equal(fourLaneSpawnRuntime.registerPlayer(`spawn-${slot}`, slot).ok, true)
+  }
+  assert.equal(fourLaneSpawnRuntime.start().ok, true)
+  const fourLaneSpawnSnapshot = fourLaneSpawnRuntime.tick()
+  assert.equal(fourLaneSpawnSnapshot.enemies.length, 4)
+  assert.ok(fourLaneSpawnSnapshot.enemies.every((enemy) => (
+    enemy.spawnProtected === true && enemy.invulnerable === false
+  )))
+  let fourLaneExitSnapshot = fourLaneSpawnSnapshot
+  let enteredSlots = new Set<string>()
+  for (let tick = 0; tick < 30 && enteredSlots.size < 4; tick += 1) {
+    fourLaneExitSnapshot = fourLaneSpawnRuntime.tick()
+    const enteredEvents = fourLaneExitSnapshot.recentEvents.filter((event) => (
+      event.type === 'ENEMY_ENTERED_BATTLEFIELD'
+    ))
+    enteredSlots = new Set(enteredEvents.map((event) => String(event.data.laneSlot)))
+    for (const event of enteredEvents) {
+      assert.equal(hasEnemyBodyFullyExitedPveSpawnSquareMilli(
+        Number(event.data.xMilli),
+        Number(event.data.yMilli),
+      ), true)
+    }
+  }
+  assert.deepEqual([...enteredSlots].sort(), ['P1', 'P2', 'P3', 'P4'])
+
+  const bodyExitRuntime = new PveGameRuntime({ seed: 'body-exit-targeting', prepDurationMs: 0, maxWaves: 1 })
+  assert.equal(bodyExitRuntime.registerPlayer('target-player', 'P1').ok, true)
+  assert.equal(bodyExitRuntime.handleAction('target-player', { type: 'RECRUIT_BATCH', actionId: 'target-recruit' }).ok, true)
+  const targetSoldier = firstSoldier(bodyExitRuntime.snapshot())
+  assert.equal(bodyExitRuntime.handleAction('target-player', {
+    type: 'SWAP_TRAY_BOARD', actionId: 'target-deploy', trayIndex: targetSoldier.index, boardX: 12, boardY: 16,
+  }).ok, true)
+  assert.equal(bodyExitRuntime.start().ok, true)
+  let enteredBattlefieldEvent: PveRuntimeSnapshot['recentEvents'][number] | undefined
+  let firstDamageEvent: PveRuntimeSnapshot['recentEvents'][number] | undefined
+  for (let tick = 0; tick < 40 && !firstDamageEvent; tick += 1) {
+    const next = bodyExitRuntime.tick()
+    for (const enemy of next.enemies.filter((candidate) => candidate.spawnProtected)) {
+      assert.equal(enemy.currentHp, enemy.maxHp)
+      assert.equal(hasEnemyBodyFullyExitedPveSpawnSquareMilli(enemy.xMilli, enemy.yMilli), false)
+    }
+    enteredBattlefieldEvent ??= next.recentEvents.find((event) => (
+      event.type === 'ENEMY_ENTERED_BATTLEFIELD'
+    ))
+    firstDamageEvent = next.recentEvents.find((event) => event.type === 'DAMAGE_APPLIED')
+  }
+  assert.ok(enteredBattlefieldEvent)
+  assert.ok(firstDamageEvent)
+  assert.ok(firstDamageEvent.tick >= enteredBattlefieldEvent.tick)
+
+  // 即使固定间隔已到，只要上一只仍在出生方格内，同一路线就不能生成下一只。
+  // 自定义路线故意让第一只在中央方格内绕行超过第一波的 2.5 秒固定间隔。
+  const spawnGateRuntime = new PveGameRuntime({
+    seed: 'per-lane-spawn-gate',
+    prepDurationMs: 0,
+    maxWaves: 1,
+    eventHistoryLimit: 500,
+    laneRoutes: {
+      P1: {
+        waypoints: [
+          { x: 13, y: 15 },
+          { x: 15, y: 15 },
+          { x: 15, y: 13 },
+          { x: 10, y: 13 },
+          { x: 10, y: 7 },
+          { x: 7, y: 7 },
+        ],
+        loopStartIndex: 3,
+      },
+    },
+  })
+  assert.equal(spawnGateRuntime.registerPlayer('gate-player', 'P1').ok, true)
+  assert.equal(spawnGateRuntime.start().ok, true)
+  for (let tick = 0; tick < 30; tick += 1) spawnGateRuntime.tick()
+  let spawnGateSnapshot = spawnGateRuntime.snapshot()
+  assert.equal(spawnGateSnapshot.recentEvents.filter((event) => event.type === 'ENEMY_SPAWNED').length, 1)
+  assert.equal(spawnGateSnapshot.enemies[0]?.spawnProtected, true)
+
+  let secondSpawnEvent: PveRuntimeSnapshot['recentEvents'][number] | undefined
+  for (let tick = 0; tick < 70 && !secondSpawnEvent; tick += 1) {
+    spawnGateSnapshot = spawnGateRuntime.tick()
+    const spawnEvents = spawnGateSnapshot.recentEvents.filter((event) => event.type === 'ENEMY_SPAWNED')
+    secondSpawnEvent = spawnEvents[1]
+  }
+  const firstExitEvent = spawnGateSnapshot.recentEvents.find((event) => (
+    event.type === 'ENEMY_ENTERED_BATTLEFIELD'
+  ))
+  assert.ok(firstExitEvent)
+  assert.ok(secondSpawnEvent)
+  assert.ok(secondSpawnEvent.tick > firstExitEvent.tick)
 
   const deterministicA = createPreparedRuntime('same-seed')
   const deterministicB = createPreparedRuntime('same-seed')
@@ -409,6 +632,7 @@ export function runPveV2SmokeChecks(): {
     deployment: true,
     merge: true,
     reserve: true,
+    hero: true,
     waveTiming: true,
     combat: true,
   }

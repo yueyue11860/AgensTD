@@ -320,7 +320,7 @@ class SocketGateway {
         this.activateRoomLevel(room, levelConfig);
     }
     activateRoomLevel(room, levelConfig) {
-        room.igniteWithLevel(levelConfig.waves, levelConfig.startingGold);
+        room.igniteWithLevel(levelConfig.waves, levelConfig.startingGold, levelConfig.levelId);
         const levelSelectedPayload = {
             levelId: levelConfig.levelId,
             label: levelConfig.label,
