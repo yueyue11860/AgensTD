@@ -9,7 +9,7 @@ import type { ReplaySummary } from '../domain/competition'
 import { submitAction } from './action-submission'
 import { ActionRateLimiter } from './action-rate-limiter'
 import { authenticateGatewayToken, extractHttpToken } from './gateway-auth'
-import type { SupabaseCompetitionStore } from '../data/supabase-competition-store'
+import type { CompetitionStore } from '../data/competition-store'
 import type { ProgressStore } from '../data/progress-store'
 import type { PlayerType } from '../domain/progress'
 import { checkUnlock } from '../core/unlock-logic'
@@ -82,7 +82,7 @@ export function createRestApiRouter(
   config: ServerConfig,
   limiter: ActionRateLimiter,
   replayRecorder: ReplayRecorder,
-  competitionStore: SupabaseCompetitionStore | null,
+  competitionStore: CompetitionStore | null,
   progressStore: ProgressStore,
 ) {
   const router = Router()

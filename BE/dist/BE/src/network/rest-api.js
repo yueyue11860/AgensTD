@@ -24,8 +24,71 @@ function logCompetitionStoreFailure(operation, error) {
     const details = error instanceof Error ? error.message : String(error);
     console.error(`Competition store ${operation} failed; falling back to memory: ${details}`);
 }
-function createRestApiRouter(engine, config, limiter, replayRecorder, competitionStore, progressStore) {
+function isRecord(value) {
+    return typeof value === 'object' && value !== null;
+}
+function normalizeRoomStatus(room) {
+    if (room.phase === 'playing') {
+        return 'IN_MATCH';
+    }
+    if (room.phase === 'countdown' || room.phase === 'waiting_for_level') {
+        return 'DRAFTING';
+    }
+    return 'OPEN';
+}
+function serializeRoomSummary(room) {
+    return {
+        id: room.id,
+        name: room.name,
+        hasPassword: room.hasPassword,
+        players: room.players,
+        maxPlayers: room.maxPlayers,
+        status: normalizeRoomStatus(room),
+        pingMs: null,
+        slots: room.slots,
+    };
+}
+function generateRoomId(roomManager) {
+    for (let attempt = 0; attempt < 1000; attempt += 1) {
+        const roomId = `RM-${Math.floor(1000 + Math.random() * 9000)}`;
+        if (!roomManager.getRoom(roomId)) {
+            return roomId;
+        }
+    }
+    throw new Error('Failed to allocate room id');
+}
+function createRestApiRouter(engine, roomManager, config, limiter, replayRecorder, competitionStore, progressStore) {
     const router = (0, express_1.Router)();
+    router.get('/rooms', (request, response) => {
+        const principal = resolvePrincipal(request, config);
+        if (!principal) {
+            rejectUnauthorized(response);
+            return;
+        }
+        const rooms = roomManager
+            .listRooms({ includeEmpty: false })
+            .map((room) => serializeRoomSummary(room.getSummary()));
+        response.json({ ok: true, rooms });
+    });
+    router.post('/rooms', (request, response) => {
+        const principal = resolvePrincipal(request, config);
+        if (!principal) {
+            rejectUnauthorized(response);
+            return;
+        }
+        const payload = isRecord(request.body) ? request.body : {};
+        const requestedName = typeof payload.name === 'string' ? payload.name.trim().slice(0, 12) : '';
+        const password = typeof payload.password === 'string' ? payload.password : '';
+        const roomId = generateRoomId(roomManager);
+        const room = roomManager.createRoom(roomId, {
+            displayName: requestedName || roomId,
+            hasPassword: password.length > 0,
+        });
+        response.status(201).json({
+            ok: true,
+            room: serializeRoomSummary(room.getSummary()),
+        });
+    });
     router.get('/state', (request, response) => {
         const principal = resolvePrincipal(request, config);
         if (!principal) {
@@ -200,13 +263,13 @@ function createRestApiRouter(engine, config, limiter, replayRecorder, competitio
     });
     // ── GET /leaderboard/level5 — Level 5 大师排行榜 ───────────────────────────
     // 只返回 level5ClearCount > 0 的玩家，按通关次数降序，包含名次与硅基/碳基标识。
-    router.get('/leaderboard/level5', (request, response) => {
+    router.get('/leaderboard/level5', async (request, response) => {
         const principal = resolvePrincipal(request, config);
         if (!principal) {
             rejectUnauthorized(response);
             return;
         }
-        const leaderboard = progressStore.getLevel5Leaderboard();
+        const leaderboard = await progressStore.getLevel5LeaderboardAsync();
         response.json({ ok: true, leaderboard });
     });
     // ── GET /progress/:playerId — 查询玩家进度 ────────────────────────────────────

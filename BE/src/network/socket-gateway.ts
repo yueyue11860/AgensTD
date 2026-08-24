@@ -4,7 +4,6 @@ import { GameLoop } from '../core/game-loop'
 import { ProjectedTickStream } from '../core/projected-tick-stream'
 import { Room, RoomManager } from '../core/Room'
 import type { PerformanceTelemetry } from '../core/performance-telemetry'
-import type { GameState } from '../domain/game-state'
 import type { PlayerIdentity } from '../domain/actions'
 import type { ServerConfig } from '../config/server-config'
 import { submitAction } from './action-submission'
@@ -48,26 +47,13 @@ interface RoomRuntime {
   unsubscribeProjection: () => void
   playerConnections: Map<string, number>
   disconnectTimers: Map<string, NodeJS.Timeout>
+  ownsProjectedTickStream: boolean
 }
 
-interface SerializedRoomGameState {
-  roomId: string
-  phase: ReturnType<Room['getPhase']>
-  tick: number
-  status: GameState['status']
-  enemies: GameState['enemies']
-  towers: GameState['towers']
-  gold: number
-  playerGold: Array<{
-    playerId: string
-    slot: ReturnType<Room['getPlayerSlot']>
-    gold: number
-  }>
-  currentWave: GameState['wave']
-  overloadTicks: number
-  overloadCountdownSec: number
-  maxCapacity: number
-  result: GameState['result']
+interface JoinedRoomContext {
+  room: Room
+  runtime: RoomRuntime
+  identity: PlayerIdentity
 }
 
 interface SerializedRoomSummary {
@@ -122,6 +108,7 @@ export class SocketGateway {
     private readonly telemetry: PerformanceTelemetry,
     private readonly actionLimiter: ActionRateLimiter,
     private readonly progressStore: ProgressStore,
+    private readonly defaultProjectedTickStream?: ProjectedTickStream,
   ) {
     this.config = config
     this.roomManager = roomManager
@@ -175,6 +162,10 @@ export class SocketGateway {
       this.handleSelectLevel(socket, payload)
     })
 
+    socket.on('REQUEST_FULL_STATE', () => {
+      this.handleFullStateRequest(socket)
+    })
+
     socket.on('disconnect', () => {
       this.leaveJoinedRoom(socket)
       this.telemetry.setGauge('socket.connections', this.io.sockets.sockets.size)
@@ -184,6 +175,9 @@ export class SocketGateway {
   shutdown(onClosed: () => void) {
     for (const runtime of this.roomRuntimes.values()) {
       runtime.unsubscribeProjection()
+      if (runtime.ownsProjectedTickStream) {
+        runtime.projectedTickStream.dispose()
+      }
       runtime.loop.stop()
     }
 
@@ -259,16 +253,31 @@ export class SocketGateway {
 
     const fullEnvelope = {
       mode: 'full' as const,
-      gameState: runtime.projectedTickStream.getCurrentFullState(),
+      gameState: runtime.projectedTickStream.getCurrentFullState({ initializeBroadcastBaseline: true }),
+      sentAt: Date.now(),
     }
 
     socket.emit('TICK_UPDATE', fullEnvelope)
-    const statePayload = this.serializeRoomGameState(runtime.room, runtime.room.engine.getStateSnapshot())
-    socket.emit('SYNC_STATE', statePayload)
     socket.emit('ROOM_SNAPSHOT', this.serializeRoomSummary(runtime.room))
-    socket.emit('GAME_STATE', statePayload)
     socket.emit('ROOM_PHASE_CHANGED', { phase: runtime.room.getPhase() })
     this.recordOutbound('socket.TICK_UPDATE.full', fullEnvelope, 1)
+  }
+
+  private handleFullStateRequest(socket: Socket) {
+    const joinedContext = this.getJoinedContext(socket)
+    if (!joinedContext) {
+      this.emitEngineError(socket, 'NOT_IN_ROOM', '请先发送 JOIN_ROOM 加入房间')
+      return
+    }
+
+    const fullEnvelope = {
+      mode: 'full' as const,
+      gameState: joinedContext.runtime.projectedTickStream.getCurrentFullState(),
+      sentAt: Date.now(),
+    }
+
+    socket.emit('TICK_UPDATE', fullEnvelope)
+    this.recordOutbound('socket.TICK_UPDATE.resync', fullEnvelope, 1)
   }
 
   private handleActionSubmission(socket: Socket, payload: unknown) {
@@ -293,6 +302,9 @@ export class SocketGateway {
     const acceptedPayload = {
       ok: true,
       action: submission.action,
+      requestId: submission.requestId,
+      actionId: submission.actionId,
+      serverTick: submission.serverTick,
       rateLimitRemaining: submission.rateLimitRemaining,
     }
 
@@ -477,8 +489,12 @@ export class SocketGateway {
     }
 
     const room = this.roomManager.getOrCreateRoom(roomId)
-    const projectedTickStream = new ProjectedTickStream(room.engine, this.config, this.telemetry)
+    const usesSharedProjectedTickStream = roomId === DEFAULT_ROOM_ID && Boolean(this.defaultProjectedTickStream)
+    const projectedTickStream = usesSharedProjectedTickStream
+      ? this.defaultProjectedTickStream as ProjectedTickStream
+      : new ProjectedTickStream(room.engine, this.config, this.telemetry)
     const loop = new GameLoop(room.engine, this.config.tickRateMs)
+    room.engine.attachPerformanceTelemetry(this.telemetry)
 
     const runtime: RoomRuntime = {
       room,
@@ -486,28 +502,46 @@ export class SocketGateway {
       projectedTickStream,
       playerConnections: new Map(),
       disconnectTimers: new Map(),
+      ownsProjectedTickStream: !usesSharedProjectedTickStream,
       unsubscribeProjection: () => {},
     }
 
-    runtime.unsubscribeProjection = projectedTickStream.subscribeTick((event) => {
+    runtime.unsubscribeProjection = projectedTickStream.subscribeBroadcast((event) => {
       const recipientCount = this.io.sockets.adapter.rooms.get(room.id)?.size ?? 0
       if (recipientCount === 0) {
         return
       }
 
-      const statePayload = this.serializeRoomGameState(room, event.state)
-  this.io.to(room.id).emit('SYNC_STATE', statePayload)
-  this.io.to(room.id).emit('GAME_STATE', statePayload)
-  this.recordOutbound('socket.SYNC_STATE', statePayload, recipientCount)
-  this.recordOutbound('socket.GAME_STATE', statePayload, recipientCount)
-
       if (!event.shouldSocketBroadcast || !event.broadcast) {
+        return
+      }
+
+      if (event.shouldFullSnapshot) {
+        const checkpointEnvelope = {
+          mode: 'checkpoint' as const,
+          patch: event.broadcast.checkpoint,
+          sentAt: Date.now(),
+        }
+
+        this.io.to(room.id).emit('TICK_UPDATE', checkpointEnvelope)
+        this.recordOutbound('socket.TICK_UPDATE.checkpoint', checkpointEnvelope, recipientCount)
+
+        if (Object.keys(event.broadcast.uiUpdate).length > 0) {
+          this.io.to(room.id).emit('UI_STATE_UPDATE', event.broadcast.uiUpdate)
+          this.recordOutbound('socket.UI_STATE_UPDATE', event.broadcast.uiUpdate, recipientCount)
+        }
+
+        if (event.broadcast.noticeUpdate) {
+          this.io.to(room.id).emit('NOTICE_UPDATE', event.broadcast.noticeUpdate)
+          this.recordOutbound('socket.NOTICE_UPDATE', event.broadcast.noticeUpdate, recipientCount)
+        }
         return
       }
 
       const tickEnvelope = {
         mode: 'patch' as const,
         patch: event.broadcast.patch,
+        sentAt: Date.now(),
       }
 
       this.io.to(room.id).emit('TICK_UPDATE', tickEnvelope)
@@ -585,6 +619,9 @@ export class SocketGateway {
     runtime.disconnectTimers.clear()
 
     runtime.unsubscribeProjection()
+    if (runtime.ownsProjectedTickStream) {
+      runtime.projectedTickStream.dispose()
+    }
     runtime.loop.stop()
     this.roomRuntimes.delete(roomId)
     this.roomManager.removeRoom(roomId)
@@ -648,28 +685,6 @@ export class SocketGateway {
       playerId,
       playerName,
       playerKind,
-    }
-  }
-
-  private serializeRoomGameState(room: Room, state: GameState): SerializedRoomGameState {
-    return {
-      roomId: room.id,
-      phase: room.getPhase(),
-      tick: state.tick,
-      status: state.status,
-      enemies: state.enemies,
-      towers: state.towers,
-      gold: state.players.reduce((sum, player) => sum + player.gold, 0),
-      playerGold: state.players.map((player) => ({
-        playerId: player.id,
-        slot: room.getPlayerSlot(player.id),
-        gold: player.gold,
-      })),
-      currentWave: state.wave,
-      overloadTicks: state.overloadTicks,
-      overloadCountdownSec: state.overloadCountdownSec,
-      maxCapacity: state.maxCapacity,
-      result: state.result,
     }
   }
 

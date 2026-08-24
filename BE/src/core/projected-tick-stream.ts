@@ -13,6 +13,7 @@ import type { GameNoticeUpdate, GameStatePatch, GameUiStateUpdate } from '../../
 
 export interface ProjectedTickBroadcast {
   patch: GameStatePatch
+  checkpoint: GameStatePatch
   uiUpdate: GameUiStateUpdate
   noticeUpdate: GameNoticeUpdate | null
 }
@@ -22,6 +23,7 @@ export interface ProjectedTickEvent {
   fullState: FrontendGameState
   broadcast: ProjectedTickBroadcast | null
   shouldSocketBroadcast: boolean
+  shouldFullSnapshot: boolean
 }
 
 type ProjectedTickListener = (event: ProjectedTickEvent) => void
@@ -33,9 +35,15 @@ export class ProjectedTickStream {
 
   private readonly broadcastEveryTicks: number
 
+  private readonly fullSnapshotEveryTicks: number
+
   private latestFullState: FrontendGameState | null = null
 
   private lastBroadcastState: FrontendGameState | null = null
+
+  private lastStatus: GameState['status'] | null = null
+
+  private readonly unsubscribeEngineTick: () => void
 
   constructor(
     private readonly engine: GameEngine,
@@ -43,8 +51,13 @@ export class ProjectedTickStream {
     private readonly telemetry: PerformanceTelemetry,
   ) {
     this.broadcastEveryTicks = Math.max(1, Math.round(config.broadcastIntervalMs / Math.max(1, config.tickRateMs)))
+    const fullSnapshotEveryBroadcasts = Math.max(
+      1,
+      Math.round(config.fullSnapshotIntervalMs / Math.max(1, config.broadcastIntervalMs)),
+    )
+    this.fullSnapshotEveryTicks = this.broadcastEveryTicks * fullSnapshotEveryBroadcasts
 
-    this.engine.onTick((state) => {
+    this.unsubscribeEngineTick = this.engine.onTick((state) => {
       this.handleTick(state)
     }, { label: 'projected-tick-stream' })
   }
@@ -69,25 +82,45 @@ export class ProjectedTickStream {
     }
   }
 
-  getCurrentFullState() {
+  getCurrentFullState(options?: { initializeBroadcastBaseline?: boolean }) {
     if (!this.latestFullState) {
       const state = this.engine.getStateSnapshot()
       this.latestFullState = this.telemetry.measure('projection.full', () => projectFrontendGameState(state, this.config))
     }
 
-    this.lastBroadcastState = this.latestFullState
+    if (options?.initializeBroadcastBaseline && !this.lastBroadcastState) {
+      this.lastBroadcastState = this.latestFullState
+    }
+
     return this.latestFullState
   }
 
+  dispose() {
+    this.unsubscribeEngineTick()
+    this.tickListeners.clear()
+    this.broadcastListeners.clear()
+    this.updateListenerGauges()
+  }
+
   private handleTick(state: GameState) {
+    const justFinished = state.status === 'finished' && this.lastStatus !== 'finished'
+    const shouldSocketBroadcast = justFinished || state.tick % this.broadcastEveryTicks === 0
+    const shouldNotifyTickListeners = this.tickListeners.size > 0
+    this.lastStatus = state.status
+
+    if (!shouldSocketBroadcast && !shouldNotifyTickListeners) {
+      return
+    }
+
     const fullState = this.telemetry.measure('projection.full', () => projectFrontendGameState(state, this.config))
-    const shouldSocketBroadcast = state.status === 'finished' || state.tick % this.broadcastEveryTicks === 0
-    const shouldComputeBroadcast = this.broadcastListeners.size > 0 || shouldSocketBroadcast
+    const shouldFullSnapshot = this.lastBroadcastState === null
+      || justFinished
+      || state.tick % this.fullSnapshotEveryTicks === 0
 
     this.latestFullState = fullState
 
     let broadcast: ProjectedTickBroadcast | null = null
-    if (shouldComputeBroadcast) {
+    if (shouldSocketBroadcast) {
       const previousState = this.lastBroadcastState ?? fullState
       const uiUpdate = this.telemetry.measure('projection.ui', () => projectFrontendUiStateUpdate(state, this.config, previousState))
       const noticeUpdate = this.telemetry.measure('projection.notice', () => projectFrontendNoticeUpdate(state, previousState))
@@ -95,6 +128,7 @@ export class ProjectedTickStream {
 
       broadcast = {
         patch,
+        checkpoint: createCheckpointPatch(fullState),
         uiUpdate,
         noticeUpdate,
       }
@@ -106,6 +140,10 @@ export class ProjectedTickStream {
         ),
         noticeUpdate,
       )
+
+      if (shouldFullSnapshot) {
+        this.lastBroadcastState = fullState
+      }
     }
 
     const event: ProjectedTickEvent = {
@@ -113,14 +151,17 @@ export class ProjectedTickStream {
       fullState,
       broadcast,
       shouldSocketBroadcast,
+      shouldFullSnapshot,
     }
 
     for (const listener of this.tickListeners) {
       listener(event)
     }
 
-    for (const listener of this.broadcastListeners) {
-      listener(event)
+    if (shouldSocketBroadcast) {
+      for (const listener of this.broadcastListeners) {
+        listener(event)
+      }
     }
   }
 
@@ -128,6 +169,22 @@ export class ProjectedTickStream {
     this.telemetry.setGauge('projection.tickListeners', this.tickListeners.size)
     this.telemetry.setGauge('projection.broadcastListeners', this.broadcastListeners.size)
     this.telemetry.setGauge('projection.listeners', this.tickListeners.size + this.broadcastListeners.size)
+  }
+}
+
+function createCheckpointPatch(state: FrontendGameState): GameStatePatch {
+  return {
+    tick: state.tick,
+    status: state.status,
+    result: state.result,
+    resources: state.resources,
+    room: state.room,
+    towers: state.towers,
+    enemies: state.enemies,
+    wave: state.wave,
+    score: state.score,
+    updatedAt: state.updatedAt,
+    pve: state.pve,
   }
 }
 

@@ -29,7 +29,8 @@ socket.on("ROOM_PHASE_CHANGED", (p) => console.log("PHASE_CHANGED phase=" + p.ph
 socket.on("LEVEL_SELECTED", (p) => console.log("LEVEL_SELECTED id=" + p.levelId));
 socket.on("engine_error", (p) => console.log("ENGINE_ERROR " + JSON.stringify(p)));
 socket.on("START_MATCH_ACCEPTED", () => console.log("START_MATCH_ACCEPTED"));
-socket.on("SYNC_STATE", (p) => {
-  if (p.phase === "playing" || p.status === "running")
-    console.log("SYNC playing/running tick=" + p.tick + " status=" + p.status + " phase=" + p.phase);
+socket.on("TICK_UPDATE", (envelope) => {
+  const state = envelope?.mode === "full" ? envelope.gameState : envelope?.patch;
+  if (state?.status === "running")
+    console.log("TICK_UPDATE mode=" + envelope.mode + " tick=" + state.tick + " status=" + state.status);
 });

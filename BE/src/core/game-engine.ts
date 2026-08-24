@@ -13,6 +13,13 @@ import type { ServerConfig } from '../config/server-config'
 import type { WaveConfig } from '../../../shared/contracts/game'
 import type { TowerCatalogEntry } from '../domain/tower-catalog'
 import {
+  PveGameRuntime,
+  type PveLaneRoute,
+  type PveLaneSlot,
+  type PveRuntimeAction,
+  type PveRuntimeSnapshot,
+} from '../pve-v2'
+import {
   WAYPOINTS_MAP,
   createArenaEnemyLanePath,
   createArenaMapCells,
@@ -123,6 +130,18 @@ function createFallbackMapCells(width: number, height: number) {
   }
 }
 
+function createPveLaneRouteSnapshots(
+  laneRoutes: Readonly<Record<EngineSlotId, EngineLaneRoute>>,
+): Record<PveLaneSlot, PveLaneRoute> {
+  return Object.fromEntries(SLOT_ORDER.map((slot) => {
+    const route = laneRoutes[slot]
+    return [slot, {
+      waypoints: clonePath(route.path),
+      loopStartIndex: route.loopStartIndex ?? 0,
+    }]
+  })) as Record<PveLaneSlot, PveLaneRoute>
+}
+
 export class GameEngine {
   private readonly config: ServerConfig
 
@@ -149,6 +168,18 @@ export class GameEngine {
 
   private readonly laneRoutes: Record<EngineSlotId, EngineLaneRoute>
 
+  private readonly pveRuntime: PveGameRuntime
+
+  private readonly playerSlots = new Map<string, EngineSlotId>()
+
+  private pveStarted = false
+
+  private actionSequence = 0
+
+  private lastPveWaveNumber = 0
+
+  private pveWaveStartedAtTick = 0
+
   private activeSlots: EngineSlotId[]
 
   private playerCount: number
@@ -168,6 +199,12 @@ export class GameEngine {
     this.maxCapacity = this.playerCount * 10
     this.activeSlots = normalizeActiveSlots(options.activeSlots)
     this.laneRoutes = options.laneRoutes ?? createFallbackLaneRoutes()
+    this.pveRuntime = new PveGameRuntime({
+      seed: `${config.matchId}:pve-v2`,
+      tickRateMs: config.tickRateMs,
+      laneRoutes: createPveLaneRouteSnapshots(this.laneRoutes),
+      maxWaves: 5,
+    })
 
     const fallbackMap = createFallbackMapCells(config.mapWidth, config.mapHeight)
     const spawnPoint = options.spawnPoint ?? fallbackMap.spawnPoint
@@ -206,12 +243,14 @@ export class GameEngine {
         startedAtTick: 0,
         endsAtTick: null,
         remainingSpawns: 0,
+        prepCountdownSec: 0,
       },
       players: [],
       enemies: [],
       towers: [],
       pendingActions: 0,
       logs: [],
+      pve: this.projectPveSnapshot(this.pveRuntime.snapshot()),
     }
 
     this.updateWaveState()
@@ -234,6 +273,7 @@ export class GameEngine {
       existingPlayer.name = identity.playerName
       existingPlayer.kind = identity.playerKind
       existingPlayer.connectionStatus = 'connected'
+      this.registerPvePlayer(identity.playerId)
       this.appendLog('info', 'Player reconnected', { playerId: identity.playerId, kind: identity.playerKind })
       return
     }
@@ -249,6 +289,7 @@ export class GameEngine {
     }
 
     this.state.players.push(player)
+    this.registerPvePlayer(player.id)
     // 不在这里自动切换到 'running'；由 ignite() 在关卡选择后触发
     this.appendLog('info', 'Player registered', { playerId: player.id, kind: player.kind })
   }
@@ -265,6 +306,12 @@ export class GameEngine {
 
   setPlayerCount(playerCount: number) {
     this.playerCount = normalizePlayerCount(playerCount)
+
+    if (this.pveStarted) {
+      this.syncPveRuntimeState()
+      return
+    }
+
     this.maxCapacity = this.playerCount * 10
     this.waveManager.setSpawnMultiplier(this.playerCount)
     this.state.playerCount = this.playerCount
@@ -276,9 +323,28 @@ export class GameEngine {
     this.spawnRotation = 0
   }
 
+  syncPlayerSlots(assignments: ReadonlyArray<{ playerId: string, slotId: EngineSlotId }>) {
+    const nextPlayerIds = new Set(assignments.map(({ playerId }) => playerId))
+
+    for (const playerId of this.playerSlots.keys()) {
+      if (!nextPlayerIds.has(playerId)) {
+        this.pveRuntime.unregister(playerId)
+      }
+    }
+
+    this.playerSlots.clear()
+    for (const { playerId, slotId } of assignments) {
+      this.playerSlots.set(playerId, slotId)
+      this.pveRuntime.registerPlayer(playerId, slotId)
+    }
+
+    this.syncPveRuntimeState()
+  }
+
   enqueueAction(player: PlayerIdentity, action: ClientAction) {
+    this.actionSequence += 1
     const queuedAction: QueuedAction = {
-      id: `${player.playerId}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+      id: `${player.playerId}:${this.actionSequence}`,
       receivedAt: Date.now(),
       player,
       action,
@@ -300,6 +366,11 @@ export class GameEngine {
       playerId: player.playerId,
       action: action.action,
     })
+
+    return {
+      actionId: queuedAction.id,
+      serverTick: this.state.tick,
+    }
   }
 
   attachPerformanceTelemetry(performanceTelemetry: PerformanceTelemetry) {
@@ -340,6 +411,29 @@ export class GameEngine {
     try {
       this.state.tick += 1
       this.processQueuedActions()
+
+      if (this.pveStarted) {
+        if (this.state.status !== 'finished') {
+          this.pveRuntime.tick()
+        }
+
+        this.syncRuntimeState()
+        this.state.pendingActions = this.actionQueue.size()
+
+        if (this.state.tick % 10 === 0) {
+          this.appendLog('info', 'PVE V2 tick settled', {
+            tick: this.state.tick,
+            runtimeTick: this.state.pve?.tick,
+            players: this.state.pve?.players.length ?? 0,
+            enemies: this.state.pve?.enemyCount ?? 0,
+            pendingActions: this.state.pendingActions,
+            maxCapacity: this.state.maxCapacity,
+          })
+        }
+
+        this.emitTick(this.cloneStateSnapshot())
+        return
+      }
 
       if (this.state.status === 'finished') {
         this.updateWaveState()
@@ -421,6 +515,21 @@ export class GameEngine {
       return
     }
 
+    if (
+      this.pveStarted
+      && (
+        queuedAction.action.action === 'BUILD_TOWER'
+        || queuedAction.action.action === 'UPGRADE_TOWER'
+        || queuedAction.action.action === 'SELL_TOWER'
+      )
+    ) {
+      this.appendLog('warn', 'Legacy tower action ignored after PVE V2 ignition', {
+        playerId: queuedAction.player.playerId,
+        action: queuedAction.action.action,
+      })
+      return
+    }
+
     switch (queuedAction.action.action) {
       case 'BUILD_TOWER':
         this.handleBuildTower(queuedAction as QueuedAction & { action: BuildTowerAction })
@@ -434,6 +543,73 @@ export class GameEngine {
           towerId: queuedAction.action.towerId,
         })
         return
+      case 'RECRUIT_BATCH':
+      case 'DEPLOY_TRAY_PIECE':
+      case 'MOVE_BOARD_PIECE':
+      case 'MERGE_SOLDIERS':
+        this.handlePveAction(queuedAction)
+        return
+    }
+  }
+
+  private handlePveAction(queuedAction: QueuedAction) {
+    const runtimeAction = this.toPveRuntimeAction(queuedAction)
+    if (!runtimeAction) {
+      this.appendLog('warn', 'PVE V2 action could not be translated', {
+        playerId: queuedAction.player.playerId,
+        action: queuedAction.action.action,
+      })
+      return
+    }
+
+    const result = this.pveRuntime.handleAction(queuedAction.player.playerId, runtimeAction)
+    this.appendLog(result.ok ? 'info' : 'warn', result.ok ? 'PVE V2 action applied' : 'PVE V2 action rejected', {
+      playerId: queuedAction.player.playerId,
+      action: queuedAction.action.action,
+      actionId: queuedAction.id,
+      resultCode: result.code,
+    })
+  }
+
+  private toPveRuntimeAction(queuedAction: QueuedAction): PveRuntimeAction | null {
+    const action = queuedAction.action
+
+    switch (action.action) {
+      case 'RECRUIT_BATCH':
+        return {
+          type: 'RECRUIT_BATCH',
+          actionId: queuedAction.id,
+          expectedTrayRevision: action.expectedTrayRevision,
+        }
+      case 'DEPLOY_TRAY_PIECE':
+        return {
+          type: 'SWAP_TRAY_BOARD',
+          actionId: queuedAction.id,
+          trayIndex: action.trayIndex,
+          boardX: action.x,
+          boardY: action.y,
+          expectedTrayRevision: action.expectedTrayRevision,
+          expectedBoardRevision: action.expectedBoardRevision,
+        }
+      case 'MOVE_BOARD_PIECE':
+        return {
+          type: 'MOVE_BOARD_PIECE',
+          actionId: queuedAction.id,
+          pieceId: action.entityId,
+          targetX: action.x,
+          targetY: action.y,
+          expectedBoardRevision: action.expectedBoardRevision,
+        }
+      case 'MERGE_SOLDIERS':
+        return {
+          type: 'MERGE_SOLDIERS',
+          actionId: queuedAction.id,
+          sourcePieceId: action.sourceEntityId,
+          targetPieceId: action.targetEntityId,
+          expectedBoardRevision: action.expectedBoardRevision,
+        }
+      default:
+        return null
     }
   }
 
@@ -683,6 +859,183 @@ export class GameEngine {
     }
   }
 
+  private registerPvePlayer(playerId: string) {
+    const slot = this.playerSlots.get(playerId)
+    if (!slot) {
+      return
+    }
+
+    this.pveRuntime.registerPlayer(playerId, slot)
+    this.syncPveRuntimeState()
+  }
+
+  private projectPveSnapshot(snapshot: PveRuntimeSnapshot): NonNullable<GameState['pve']> {
+    const players = snapshot.players.map((player) => ({
+      playerId: player.playerId,
+      slotId: player.slot,
+      rice: player.rice,
+      recruitSequence: player.recruitCount,
+      nextRecruitCost: player.nextRecruitCost,
+      populationUsed: player.populationUsed,
+      populationCap: player.populationCap,
+      trayRevision: player.trayRevision,
+      boardRevision: player.boardRevision,
+      tray: player.tray.map((piece, index) => ({
+        index,
+        piece: piece
+          ? {
+              entityId: piece.id,
+              kind: piece.kind,
+              glyph: piece.kind === 'character' ? piece.glyph : this.getSoldierGlyph(piece.soldierType),
+              ...(piece.kind === 'soldier'
+                ? { soldierType: piece.soldierType, level: piece.level }
+                : {}),
+            }
+          : null,
+      })),
+      highestCompletedWave: player.clearedWaves.length > 0 ? Math.max(...player.clearedWaves) : 0,
+    }))
+
+    const boardPieces = snapshot.players.flatMap((player) => player.boardPieces.map(({ piece, x, y }) => ({
+      entityId: piece.id,
+      ownerPlayerId: piece.ownerPlayerId,
+      kind: piece.kind,
+      glyph: piece.kind === 'character' ? piece.glyph : this.getSoldierGlyph(piece.soldierType),
+      ...(piece.kind === 'soldier'
+        ? {
+            soldierType: piece.soldierType,
+            level: piece.level,
+            nextAttackTick: piece.nextAttackTick,
+          }
+        : {}),
+      x,
+      y,
+    })))
+
+    const enemies = snapshot.enemies.map((enemy) => {
+      const loopStartIndex = this.laneRoutes[enemy.laneSlot]?.loopStartIndex ?? 0
+      return {
+        entityId: enemy.id,
+        glyph: enemy.glyph,
+        waveNumber: enemy.waveNumber,
+        homeLanePlayerId: enemy.laneOwnerPlayerId,
+        homeSlotId: enemy.laneSlot,
+        routeZone: enemy.routeWaypointIndex >= loopStartIndex ? 'public_loop' as const : 'private_lane' as const,
+        hp: enemy.currentHp,
+        maxHp: enemy.maxHp,
+        armor: enemy.armor,
+        magicResistance: enemy.magicResistance,
+        moveSpeedMilliCellsPerSecond: enemy.moveSpeedMilliCellsPerSecond,
+        pathIndex: enemy.routeWaypointIndex,
+        pathProgressMilli: enemy.pathProgressMilli,
+        lapCount: enemy.lapCount,
+        x: enemy.xMilli / 1000,
+        y: enemy.yMilli / 1000,
+      }
+    })
+
+    const spawningCompleted = snapshot.wave.phase === 'clearing'
+      || snapshot.wave.phase === 'complete'
+
+    return {
+      schemaVersion: 2,
+      phase: snapshot.status,
+      tick: snapshot.tick,
+      players,
+      boardPieces,
+      enemies,
+      laneWaves: snapshot.wave.lanes.map((lane) => ({
+        playerId: lane.playerId,
+        slotId: lane.slot,
+        waveNumber: snapshot.wave.number,
+        plannedSpawnCount: lane.totalCount,
+        spawnedCount: lane.spawnedCount,
+        aliveEnemyCount: snapshot.enemies.filter((enemy) => (
+          enemy.laneOwnerPlayerId === lane.playerId
+          && enemy.waveNumber === snapshot.wave.number
+        )).length,
+        spawningCompleted: spawningCompleted || lane.spawnedCount >= lane.totalCount,
+        clearRewardRice: snapshot.wave.number * 5,
+        clearRewardGranted: lane.clearRewardGranted,
+      })),
+      currentWave: snapshot.wave.number,
+      maxWaves: snapshot.wave.maxWaves,
+      enemyCount: snapshot.enemies.length,
+      maxCapacity: snapshot.enemyCapacity,
+      overloadCountdownSec: Math.ceil(snapshot.overloadCountdownMs / 1000),
+    }
+  }
+
+  private getSoldierGlyph(soldierType: 'blade' | 'spear' | 'bow' | 'cavalry') {
+    switch (soldierType) {
+      case 'blade': return '刀'
+      case 'spear': return '枪'
+      case 'bow': return '弓'
+      case 'cavalry': return '骑'
+    }
+  }
+
+  private syncPveRuntimeState() {
+    const snapshot = this.pveRuntime.snapshot()
+    this.state.pve = this.projectPveSnapshot(snapshot)
+
+    if (!this.pveStarted) {
+      return
+    }
+
+    this.playerCount = Math.max(1, snapshot.playerCountAtStart || snapshot.players.length)
+    this.maxCapacity = snapshot.enemyCapacity
+    this.overloadTicks = snapshot.overloadTicks
+    this.state.playerCount = this.playerCount
+    this.state.maxCapacity = this.maxCapacity
+    this.state.overloadTicks = this.overloadTicks
+    this.state.overloadCountdownSec = Math.ceil(snapshot.overloadCountdownMs / 1000)
+
+    if (snapshot.wave.number !== this.lastPveWaveNumber) {
+      this.lastPveWaveNumber = snapshot.wave.number
+      this.pveWaveStartedAtTick = this.state.tick
+    }
+
+    const phaseLabels: Record<PveRuntimeSnapshot['wave']['phase'], string> = {
+      idle: '等待中',
+      prep: '准备中',
+      spawning: '出怪中',
+      clearing: '清场中',
+      complete: '已完成',
+    }
+    this.state.wave = {
+      index: snapshot.wave.number,
+      label: snapshot.wave.number > 0
+        ? `第 ${snapshot.wave.number} 波 · ${phaseLabels[snapshot.wave.phase]}`
+        : phaseLabels[snapshot.wave.phase],
+      startedAtTick: this.pveWaveStartedAtTick,
+      endsAtTick: snapshot.wave.phase === 'complete' ? this.state.tick : null,
+      remainingSpawns: snapshot.wave.lanes.reduce(
+        (total, lane) => total + Math.max(0, lane.totalCount - lane.spawnedCount),
+        0,
+      ),
+      prepCountdownSec: Math.ceil(snapshot.wave.prepRemainingTicks * this.config.tickRateMs / 1000),
+    }
+
+    for (const legacyPlayer of this.state.players) {
+      const runtimePlayer = snapshot.players.find((player) => player.playerId === legacyPlayer.id)
+      if (runtimePlayer) {
+        legacyPlayer.gold = runtimePlayer.rice
+      }
+    }
+
+    this.state.enemies = []
+    this.state.towers = []
+    this.state.status = snapshot.status
+    this.state.result = snapshot.result
+      ? {
+          outcome: snapshot.result.outcome,
+          decidedAtTick: snapshot.result.decidedAtTick,
+          reason: snapshot.result.reason,
+        }
+      : null
+  }
+
   private ensurePlayer(identity: PlayerIdentity) {
     let player = this.state.players.find((item) => item.id === identity.playerId)
     if (!player) {
@@ -726,6 +1079,10 @@ export class GameEngine {
   }
 
   private appendLog(level: GameLogEntry['level'], message: string, meta?: Record<string, unknown>) {
+    if (level === 'info' && !this.config.verboseGameLogs) {
+      return
+    }
+
     const entry: GameLogEntry = {
       tick: this.state.tick,
       level,
@@ -877,6 +1234,12 @@ export class GameEngine {
   }
 
   private syncRuntimeState() {
+    this.syncPveRuntimeState()
+
+    if (this.pveStarted) {
+      return
+    }
+
     this.state.playerCount = this.playerCount
     this.state.maxCapacity = this.maxCapacity
     this.state.overloadTicks = this.overloadTicks
@@ -893,10 +1256,9 @@ export class GameEngine {
   // ─────────────────────────────────────────────────────────────────────────
 
   /**
-   * 使用指定波次配置重建 WaveManager 并将引擎切换至 'running'。
-   *
-   * @param waves        来自 LevelConfig 的波次列表
-   * @param startingGold 覆盖初始金币（用于 L0 教学关等特殊配置）
+   * 保留旧关卡选择入口，但点火后只启动 PVE V2 运行时。
+   * 首个可玩切片固定为五波；旧 waves/startingGold 仅用于启动审计，
+   * 不再驱动旧怪物、旧塔或覆盖新版初始斋饭。
    */
   ignite(waves: WaveConfig[], startingGold?: number): void {
     if (this.state.status !== 'waiting') {
@@ -904,18 +1266,22 @@ export class GameEngine {
       return
     }
 
-    this.waveManager = this.createWaveManager(waves, this.playerCount)
-
-    if (startingGold !== undefined) {
-      for (const player of this.state.players) {
-        player.gold = startingGold
-      }
+    for (const tower of this.towers) {
+      this.gridMap.release(tower.x, tower.y, tower.width, tower.height)
     }
 
-    this.state.status = 'running'
-    this.appendLog('info', 'Engine ignited', {
-      waveCount: waves.length,
-      startingGold,
+    this.towers = []
+    this.enemies = []
+    this.overloadTicks = 0
+    this.syncMapCells()
+
+    this.pveStarted = true
+    this.pveRuntime.start()
+    this.syncPveRuntimeState()
+    this.appendLog('info', 'Engine ignited with PVE V2 runtime', {
+      selectedLegacyWaveCount: waves.length,
+      ignoredLegacyStartingGold: startingGold ?? null,
+      runtimeMaxWaves: 5,
       playerCount: this.playerCount,
     })
   }

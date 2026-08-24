@@ -68,7 +68,48 @@ export interface SellTowerAction {
   towerId: string
 }
 
-export type GameAction = BuildTowerAction | UpgradeTowerAction | SellTowerAction
+export type PvePlayerSlotId = 'P1' | 'P2' | 'P3' | 'P4'
+
+export type SoldierType = 'blade' | 'spear' | 'bow' | 'cavalry'
+
+export type PvePieceKind = 'soldier' | 'character'
+
+export interface RecruitBatchAction {
+  action: 'RECRUIT_BATCH'
+  expectedTrayRevision?: number
+}
+
+export interface DeployTrayPieceAction extends GridPosition {
+  action: 'DEPLOY_TRAY_PIECE'
+  trayIndex: number
+  expectedTrayRevision?: number
+  expectedBoardRevision?: number
+}
+
+export interface MoveBoardPieceAction extends GridPosition {
+  action: 'MOVE_BOARD_PIECE'
+  entityId: string
+  expectedBoardRevision?: number
+}
+
+export interface MergeSoldiersAction {
+  action: 'MERGE_SOLDIERS'
+  sourceEntityId: string
+  targetEntityId: string
+  expectedBoardRevision?: number
+}
+
+export type PveGameAction =
+  | RecruitBatchAction
+  | DeployTrayPieceAction
+  | MoveBoardPieceAction
+  | MergeSoldiersAction
+
+export type GameAction =
+  | BuildTowerAction
+  | UpgradeTowerAction
+  | SellTowerAction
+  | PveGameAction
 
 export interface ActionDescriptor {
   id: string
@@ -124,6 +165,87 @@ export interface EnemyState {
   progress?: number
 }
 
+export interface PveTrayPieceState {
+  entityId: string
+  kind: PvePieceKind
+  glyph: string
+  soldierType?: SoldierType
+  level?: 1 | 2 | 3 | 4 | 5
+}
+
+export interface PveTraySlotState {
+  index: number
+  piece: PveTrayPieceState | null
+}
+
+export interface PveBoardPieceState extends GridPosition {
+  entityId: string
+  ownerPlayerId: string
+  kind: PvePieceKind
+  glyph: string
+  soldierType?: SoldierType
+  level?: 1 | 2 | 3 | 4 | 5
+  nextAttackTick?: number
+}
+
+export interface PveEnemyState extends GridPosition {
+  entityId: string
+  glyph: string
+  waveNumber: number
+  homeLanePlayerId: string
+  homeSlotId: PvePlayerSlotId
+  routeZone: 'private_lane' | 'public_loop'
+  hp: number
+  maxHp: number
+  armor: number
+  magicResistance: number
+  moveSpeedMilliCellsPerSecond: number
+  pathIndex: number
+  pathProgressMilli: number
+  lapCount: number
+}
+
+export interface PvePlayerState {
+  playerId: string
+  slotId: PvePlayerSlotId
+  rice: number
+  recruitSequence: number
+  nextRecruitCost: number
+  populationUsed: number
+  populationCap: number
+  trayRevision: number
+  boardRevision: number
+  tray: PveTraySlotState[]
+  highestCompletedWave: number
+}
+
+export interface PveLaneWaveState {
+  playerId: string
+  slotId: PvePlayerSlotId
+  waveNumber: number
+  plannedSpawnCount: number
+  spawnedCount: number
+  aliveEnemyCount: number
+  spawningCompleted: boolean
+  clearRewardRice: number
+  clearRewardGranted: boolean
+}
+
+export interface PveMatchState {
+  schemaVersion: 2
+  phase: 'waiting' | 'running' | 'finished'
+  tick: number
+  players: PvePlayerState[]
+  boardPieces: PveBoardPieceState[]
+  enemies: PveEnemyState[]
+  laneWaves: PveLaneWaveState[]
+  currentWave: number
+  maxWaves: number
+  enemyCount: number
+  maxCapacity: number
+  overloadCountdownSec: number
+}
+
 export interface EntityDelta<T extends { id: string }> {
   upsert: T[]
   remove: string[]
@@ -143,6 +265,16 @@ export interface GameNoticeUpdate {
   notices: GameState['notices']
 }
 
+export interface RoomRuntimeState {
+  playerCount: number
+  enemyCount: number
+  maxCapacity: number
+  overloadTicks: number
+  overloadCountdownSec: number
+  /** 房间共享经济的兼容口径：当前房间内所有玩家金币总和。 */
+  totalGold: number
+}
+
 export interface GameState {
   matchId?: string
   tick: number
@@ -158,6 +290,7 @@ export interface GameState {
     cells: GameCell[]
   }
   resources: ResourceState
+  room?: RoomRuntimeState
   towers: TowerState[]
   enemies: EnemyState[]
   buildPalette: TowerBlueprint[]
@@ -173,6 +306,7 @@ export interface GameState {
   notices?: string[]
   score?: number
   updatedAt?: string
+  pve?: PveMatchState
 }
 
 export interface GameStatePatch {
@@ -180,6 +314,7 @@ export interface GameStatePatch {
   status: GameState['status']
   result: GameState['result']
   resources: GameState['resources']
+  room?: GameState['room']
   towers?: GameState['towers']
   enemies?: GameState['enemies']
   towerDelta?: EntityDelta<TowerState>
@@ -188,16 +323,32 @@ export interface GameStatePatch {
   score?: GameState['score']
   updatedAt?: GameState['updatedAt']
   map?: GameState['map']
+  pve?: GameState['pve']
 }
 
 export interface FullTickEnvelope {
   mode: 'full'
   gameState: GameState
+  sentAt: number
 }
 
 export interface PatchTickEnvelope {
   mode: 'patch'
   patch: GameStatePatch
+  sentAt: number
 }
 
-export type TickEnvelope = FullTickEnvelope | PatchTickEnvelope
+export interface CheckpointTickEnvelope {
+  /** 周期权威校准：包含全部动态实体，但不重复发送静态地图和 UI 描述。 */
+  mode: 'checkpoint'
+  patch: GameStatePatch
+  sentAt: number
+}
+
+export type TickEnvelope = FullTickEnvelope | PatchTickEnvelope | CheckpointTickEnvelope
+
+export interface ActionCommand {
+  requestId: string
+  clientTick?: number
+  payload: GameAction
+}

@@ -1,6 +1,23 @@
-import type { BuildTowerAction, GameAction, PlayerIdentity, UpgradeTowerAction } from '../../../shared/contracts/game'
+import type {
+  BuildTowerAction,
+  DeployTrayPieceAction,
+  GameAction,
+  MergeSoldiersAction,
+  MoveBoardPieceAction,
+  PlayerIdentity,
+  RecruitBatchAction,
+  UpgradeTowerAction,
+} from '../../../shared/contracts/game'
 
-export type { BuildTowerAction, PlayerIdentity, UpgradeTowerAction } from '../../../shared/contracts/game'
+export type {
+  BuildTowerAction,
+  DeployTrayPieceAction,
+  MergeSoldiersAction,
+  MoveBoardPieceAction,
+  PlayerIdentity,
+  RecruitBatchAction,
+  UpgradeTowerAction,
+} from '../../../shared/contracts/game'
 
 export type ClientAction = GameAction
 
@@ -44,6 +61,58 @@ export function parseClientAction(payload: unknown): ClientAction | null {
         ? {
             action: 'SELL_TOWER',
             towerId: payload.towerId,
+          }
+        : null
+    case 'RECRUIT_BATCH':
+      return typeof payload.expectedTrayRevision === 'number' || payload.expectedTrayRevision === undefined
+        ? {
+            action: 'RECRUIT_BATCH',
+            ...(typeof payload.expectedTrayRevision === 'number'
+              ? { expectedTrayRevision: payload.expectedTrayRevision }
+              : {}),
+          }
+        : null
+    case 'DEPLOY_TRAY_PIECE':
+      return Number.isInteger(payload.trayIndex)
+        && typeof payload.x === 'number'
+        && typeof payload.y === 'number'
+        ? {
+            action: 'DEPLOY_TRAY_PIECE',
+            trayIndex: payload.trayIndex as number,
+            x: payload.x,
+            y: payload.y,
+            ...(typeof payload.expectedTrayRevision === 'number'
+              ? { expectedTrayRevision: payload.expectedTrayRevision }
+              : {}),
+            ...(typeof payload.expectedBoardRevision === 'number'
+              ? { expectedBoardRevision: payload.expectedBoardRevision }
+              : {}),
+          }
+        : null
+    case 'MOVE_BOARD_PIECE':
+      return typeof payload.entityId === 'string'
+        && typeof payload.x === 'number'
+        && typeof payload.y === 'number'
+        ? {
+            action: 'MOVE_BOARD_PIECE',
+            entityId: payload.entityId,
+            x: payload.x,
+            y: payload.y,
+            ...(typeof payload.expectedBoardRevision === 'number'
+              ? { expectedBoardRevision: payload.expectedBoardRevision }
+              : {}),
+          }
+        : null
+    case 'MERGE_SOLDIERS':
+      return typeof payload.sourceEntityId === 'string'
+        && typeof payload.targetEntityId === 'string'
+        ? {
+            action: 'MERGE_SOLDIERS',
+            sourceEntityId: payload.sourceEntityId,
+            targetEntityId: payload.targetEntityId,
+            ...(typeof payload.expectedBoardRevision === 'number'
+              ? { expectedBoardRevision: payload.expectedBoardRevision }
+              : {}),
           }
         : null
     default:

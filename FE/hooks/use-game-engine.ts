@@ -173,6 +173,10 @@ function mergeGameStatePatch(previousState: GameState | null, patch: GameStatePa
     return null
   }
 
+  if (patch.tick <= previousState.tick) {
+    return previousState
+  }
+
   return {
     ...previousState,
     ...patch,
@@ -245,7 +249,7 @@ function normalizeTickPayload(payload: unknown, previousState: GameState | null)
       return candidate.gameState
     }
 
-    if (candidate.mode === 'patch' && isGameStatePatch(candidate.patch)) {
+    if ((candidate.mode === 'patch' || candidate.mode === 'checkpoint') && isGameStatePatch(candidate.patch)) {
       return mergeGameStatePatch(previousState, candidate.patch)
     }
 
@@ -378,6 +382,13 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
     queueStateUpdate((currentState) => {
       const nextState = normalizeTickPayload(payload, currentState)
       if (!nextState) {
+        if (
+          payload
+          && typeof payload === 'object'
+          && ((payload as { mode?: unknown }).mode === 'patch' || (payload as { mode?: unknown }).mode === 'checkpoint')
+        ) {
+          socketRef.current?.emit('REQUEST_FULL_STATE')
+        }
         return currentState
       }
 
@@ -577,7 +588,13 @@ export function useGameEngine(options: UseGameEngineOptions = {}): UseGameEngine
       return false
     }
 
-    socket.emit('SEND_ACTION', action)
+    socket.emit('SEND_ACTION', {
+      requestId: typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `action-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      clientTick: committedStateRef.current?.tick,
+      payload: action,
+    })
     actionLogRef.current.push({ action, ts: Date.now() })
     setLastActionAt(Date.now())
     setError(null)

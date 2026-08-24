@@ -2,6 +2,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { ServerConfig } from '../config/server-config'
 import type { DualLeaderboard, LeaderboardEntry, MatchResultRecord, ReplaySummary } from '../domain/competition'
 import type { MatchReplay } from '../domain/replay'
+import type { CompetitionStore } from './competition-store'
 
 interface MatchReplayRow {
   match_id: string
@@ -106,7 +107,7 @@ function isBetterResult(next: MatchResultRecord, current: LeaderboardRow | null)
   return next.survivedWaves > current.best_survived_waves
 }
 
-export class SupabaseCompetitionStore {
+export class SupabaseCompetitionStore implements CompetitionStore {
   private readonly client: SupabaseClient | null
 
   private remoteDisabledUntil = 0

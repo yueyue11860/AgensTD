@@ -40,23 +40,39 @@ function createAgentApiRouter(projectedTickStream, config, replayRecorder, compe
         });
         sseConnections.add(response);
         telemetry.setGauge('agent.sse.connections', sseConnections.size);
-        writeSseEvent(telemetry, 'agent.sse.tick_update.full', response, 'tick_update', {
+        writeSseEvent(telemetry, 'agent.sse.TICK_UPDATE.full', response, 'TICK_UPDATE', {
             mode: 'full',
-            gameState: projectedTickStream.getCurrentFullState(),
+            gameState: projectedTickStream.getCurrentFullState({ initializeBroadcastBaseline: true }),
+            sentAt: Date.now(),
         });
         const unsubscribe = projectedTickStream.subscribeBroadcast((event) => {
             if (!event.broadcast) {
                 return;
             }
-            writeSseEvent(telemetry, 'agent.sse.tick_update.patch', response, 'tick_update', {
+            if (event.shouldFullSnapshot) {
+                writeSseEvent(telemetry, 'agent.sse.TICK_UPDATE.checkpoint', response, 'TICK_UPDATE', {
+                    mode: 'checkpoint',
+                    patch: event.broadcast.checkpoint,
+                    sentAt: Date.now(),
+                });
+                if (Object.keys(event.broadcast.uiUpdate).length > 0) {
+                    writeSseEvent(telemetry, 'agent.sse.UI_STATE_UPDATE', response, 'UI_STATE_UPDATE', event.broadcast.uiUpdate);
+                }
+                if (event.broadcast.noticeUpdate) {
+                    writeSseEvent(telemetry, 'agent.sse.NOTICE_UPDATE', response, 'NOTICE_UPDATE', event.broadcast.noticeUpdate);
+                }
+                return;
+            }
+            writeSseEvent(telemetry, 'agent.sse.TICK_UPDATE.patch', response, 'TICK_UPDATE', {
                 mode: 'patch',
                 patch: event.broadcast.patch,
+                sentAt: Date.now(),
             });
             if (Object.keys(event.broadcast.uiUpdate).length > 0) {
-                writeSseEvent(telemetry, 'agent.sse.ui_state_update', response, 'ui_state_update', event.broadcast.uiUpdate);
+                writeSseEvent(telemetry, 'agent.sse.UI_STATE_UPDATE', response, 'UI_STATE_UPDATE', event.broadcast.uiUpdate);
             }
             if (event.broadcast.noticeUpdate) {
-                writeSseEvent(telemetry, 'agent.sse.notice_update', response, 'notice_update', event.broadcast.noticeUpdate);
+                writeSseEvent(telemetry, 'agent.sse.NOTICE_UPDATE', response, 'NOTICE_UPDATE', event.broadcast.noticeUpdate);
             }
         });
         const heartbeat = setInterval(() => {

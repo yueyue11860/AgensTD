@@ -251,6 +251,14 @@ function projectFrontendRuntimeState(state, config) {
             fortress: Math.max(0, state.maxCapacity - state.enemies.length),
             fortressMax: state.maxCapacity,
         },
+        room: {
+            playerCount: state.playerCount,
+            enemyCount: state.enemies.length,
+            maxCapacity: state.maxCapacity,
+            overloadTicks: state.overloadTicks,
+            overloadCountdownSec: state.overloadCountdownSec,
+            totalGold: state.players.reduce((sum, player) => sum + player.gold, 0),
+        },
         towers: state.towers.map((tower) => {
             const towerDefinition = tower_catalog_1.towerCatalog[tower.type];
             const nextTowerDefinition = (0, tower_catalog_1.getNextTowerCatalogEntryById)(tower.type);
@@ -314,6 +322,7 @@ function projectFrontendRuntimeState(state, config) {
         },
         score: primaryPlayer?.score ?? 0,
         updatedAt: new Date().toISOString(),
+        pve: state.pve,
     };
 }
 function buildFrontendNotices(state) {
@@ -325,7 +334,7 @@ function buildFrontendNotices(state) {
     return state.players.length === 0
         ? ['等待玩家或 Agent 连接网关。']
         : [
-            `当前 ${state.playerCount} 人房间，刷怪容量 ${state.enemies.length}/${state.maxCapacity}，超载计数 ${state.overloadTicks}/100。`,
+            `当前 ${state.playerCount} 人房间，刷怪容量 ${state.enemies.length}/${state.maxCapacity}${state.overloadCountdownSec > 0 ? `，超载倒计时 ${state.overloadCountdownSec}s` : ''}。`,
             ...(resultNotice ? [resultNotice] : []),
         ];
 }
@@ -357,9 +366,11 @@ function projectFrontendGameStatePatch(state, config, previousState) {
         status: runtimeState.status,
         result: runtimeState.result,
         resources: runtimeState.resources,
+        room: runtimeState.room,
         wave: runtimeState.wave,
         score: runtimeState.score,
         updatedAt: runtimeState.updatedAt,
+        pve: runtimeState.pve,
     };
     if (!previousState) {
         patch.towers = runtimeState.towers;

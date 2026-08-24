@@ -329,6 +329,14 @@ function projectFrontendRuntimeState(state: GameState, config: ServerConfig): Fr
       fortress: Math.max(0, state.maxCapacity - state.enemies.length),
       fortressMax: state.maxCapacity,
     },
+    room: {
+      playerCount: state.playerCount,
+      enemyCount: state.enemies.length,
+      maxCapacity: state.maxCapacity,
+      overloadTicks: state.overloadTicks,
+      overloadCountdownSec: state.overloadCountdownSec,
+      totalGold: state.players.reduce((sum, player) => sum + player.gold, 0),
+    },
     towers: state.towers.map((tower) => {
       const towerDefinition = towerCatalog[tower.type]
       const nextTowerDefinition = getNextTowerCatalogEntryById(tower.type)
@@ -394,6 +402,7 @@ function projectFrontendRuntimeState(state: GameState, config: ServerConfig): Fr
     },
     score: primaryPlayer?.score ?? 0,
     updatedAt: new Date().toISOString(),
+    pve: state.pve,
   }
 }
 
@@ -447,9 +456,11 @@ export function projectFrontendGameStatePatch(
     status: runtimeState.status,
     result: runtimeState.result,
     resources: runtimeState.resources,
+    room: runtimeState.room,
     wave: runtimeState.wave,
     score: runtimeState.score,
     updatedAt: runtimeState.updatedAt,
+    pve: runtimeState.pve,
   }
 
   if (!previousState) {

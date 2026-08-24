@@ -1,18 +1,18 @@
 import type { UserProgress, PlayerType, Level5LeaderboardEntry } from '../domain/progress'
 import { MAX_STANDARD_LEVEL } from '../domain/progress'
-import type { SupabaseUserStore } from './supabase-user-store'
+import type { UserStore } from './user-store'
 
 /**
- * ProgressStore — 内存 + Supabase 持久化
+ * ProgressStore — 内存缓存 + 可替换持久化
  *
- * 内存缓存用于高频读取，写入时同步持久化到 Supabase。
+ * 内存缓存用于高频读取，写入时同步到已配置的持久化实现。
  */
 export class ProgressStore {
   private readonly store = new Map<string, UserProgress>()
-  private userStore: SupabaseUserStore | null = null
+  private userStore: UserStore | null = null
 
-  /** 注入 Supabase 用户存储（在 server.ts 中调用） */
-  setUserStore(userStore: SupabaseUserStore): void {
+  /** 注入用户存储（在 server.ts 中调用） */
+  setUserStore(userStore: UserStore): void {
     this.userStore = userStore
   }
 
@@ -71,10 +71,10 @@ export class ProgressStore {
       progress.level5ClearCount++
     }
 
-    // 异步持久化到 Supabase（不阻塞返回）
+    // 异步持久化（不阻塞返回）
     if (this.userStore?.isEnabled()) {
       void this.userStore.recordLevelClear(playerId, level, playerType, MAX_STANDARD_LEVEL)
-        .catch((err) => console.error('Supabase progress sync failed:', err))
+        .catch((err) => console.error('Progress persistence sync failed:', err))
     }
 
     return progress
@@ -88,7 +88,7 @@ export class ProgressStore {
    * 返回 Level 5 通关次数 > 0 的玩家，按 clearCount 降序。
    */
   getLevel5Leaderboard(): Level5LeaderboardEntry[] {
-    // 优先从 Supabase 获取（异步转同步：由调用方使用 async 版本）
+    // 同步读取使用本地缓存；远端数据由异步版本读取。
     return Array.from(this.store.values())
       .filter(p => p.level5ClearCount > 0)
       .sort((a, b) => b.level5ClearCount - a.level5ClearCount)
@@ -100,7 +100,7 @@ export class ProgressStore {
       }))
   }
 
-  /** 异步版排行榜，优先使用 Supabase */
+  /** 异步版排行榜，优先使用持久化实现。 */
   async getLevel5LeaderboardAsync(): Promise<Level5LeaderboardEntry[]> {
     if (this.userStore?.isEnabled()) {
       try {
@@ -112,7 +112,7 @@ export class ProgressStore {
     return this.getLevel5Leaderboard()
   }
 
-  /** 从 Supabase 加载玩家进度到内存缓存 */
+  /** 从持久化实现加载玩家进度到内存缓存。 */
   async loadProgressFromDb(playerId: string, playerType: PlayerType): Promise<UserProgress> {
     if (this.userStore?.isEnabled()) {
       try {

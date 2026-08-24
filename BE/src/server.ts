@@ -70,7 +70,15 @@ const actionLimiter = new ActionRateLimiter(config.actionRateLimitWindowMs, conf
 const progressStore = new ProgressStore()
 const userStore = new SupabaseUserStore(config)
 progressStore.setUserStore(userStore)
-const gateway = new SocketGateway(httpServer, roomManager, config, performanceTelemetry, actionLimiter, progressStore)
+const gateway = new SocketGateway(
+  httpServer,
+  roomManager,
+  config,
+  performanceTelemetry,
+  actionLimiter,
+  progressStore,
+  projectedTickStream,
+)
 
 app.use('/api', createOAuthRouter(config, userStore))
 app.use('/api', createRestApiRouter(engine, roomManager, config, actionLimiter, replayRecorder, competitionStore, progressStore))
@@ -91,13 +99,18 @@ httpServer.listen(config.port, () => {
 })
 
 const shutdown = () => {
-  void replayRecorder.flushLatest().finally(() => {
-    gateway.shutdown(() => {
-      httpServer.close(() => {
-        process.exit(0)
+  void replayRecorder.flushLatest()
+    .catch((error: unknown) => {
+      const details = error instanceof Error ? error.message : String(error)
+      console.error(`Final replay persistence failed during shutdown: ${details}`)
+    })
+    .finally(() => {
+      gateway.shutdown(() => {
+        httpServer.close(() => {
+          process.exit(0)
+        })
       })
     })
-  })
 }
 
 process.on('SIGINT', shutdown)

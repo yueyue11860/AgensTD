@@ -2,8 +2,9 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { ServerConfig } from '../config/server-config'
 import type { SecondMeUser } from '../domain/user'
 import type { UserProgress, PlayerType } from '../domain/progress'
+import type { UserStore } from './user-store'
 
-export class SupabaseUserStore {
+export class SupabaseUserStore implements UserStore {
   private readonly client: SupabaseClient | null
 
   constructor(config: ServerConfig) {

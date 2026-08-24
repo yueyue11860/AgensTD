@@ -2,6 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WAYPOINTS_MAP = exports.LOOP_REENTRY_OFFSET = exports.ARENA_GRID_SIZE = void 0;
 exports.getArenaLoopStartIndex = getArenaLoopStartIndex;
+exports.createArenaEnemyLanePath = createArenaEnemyLanePath;
+exports.getArenaLaneSpawnPoint = getArenaLaneSpawnPoint;
 exports.getArenaPrimarySpawnPoint = getArenaPrimarySpawnPoint;
 exports.getArenaPrimaryBasePoint = getArenaPrimaryBasePoint;
 exports.createArenaGridMatrix = createArenaGridMatrix;
@@ -9,7 +11,7 @@ exports.createArenaMapCells = createArenaMapCells;
 exports.ARENA_GRID_SIZE = 29;
 const ARENA_CORE_CENTER = { x: 14, y: 14 };
 const ARENA_CORE_RADIUS = 1;
-exports.LOOP_REENTRY_OFFSET = 5;
+exports.LOOP_REENTRY_OFFSET = 6;
 exports.WAYPOINTS_MAP = {
     P1: [
         { x: 13, y: 15 },
@@ -80,6 +82,9 @@ const ARENA_SLOT_ORDER = ['P1', 'P2', 'P3', 'P4'];
 function clonePosition(position) {
     return { x: position.x, y: position.y };
 }
+function clonePath(path) {
+    return path.map(clonePosition);
+}
 function isArenaCoreCell(x, y) {
     return Math.abs(x - ARENA_CORE_CENTER.x) <= ARENA_CORE_RADIUS && Math.abs(y - ARENA_CORE_CENTER.y) <= ARENA_CORE_RADIUS;
 }
@@ -110,8 +115,28 @@ function getArenaLoopStartIndex(path) {
     }
     return Math.max(0, path.length - exports.LOOP_REENTRY_OFFSET);
 }
+function appendHubApproach(path, hub) {
+    const nextPath = clonePath(path);
+    const last = nextPath[nextPath.length - 1];
+    if (!last) {
+        return [clonePosition(hub)];
+    }
+    if (last.x !== hub.x) {
+        nextPath.push({ x: hub.x, y: last.y });
+    }
+    if (nextPath[nextPath.length - 1].y !== hub.y) {
+        nextPath.push({ x: hub.x, y: hub.y });
+    }
+    return nextPath;
+}
+function createArenaEnemyLanePath(slot) {
+    return clonePath(exports.WAYPOINTS_MAP[slot]);
+}
+function getArenaLaneSpawnPoint(slot) {
+    return clonePosition(exports.WAYPOINTS_MAP[slot][0]);
+}
 function getArenaPrimarySpawnPoint() {
-    return clonePosition(exports.WAYPOINTS_MAP.P1[0]);
+    return getArenaLaneSpawnPoint('P1');
 }
 function getArenaPrimaryBasePoint() {
     return clonePosition(ARENA_CORE_CENTER);
@@ -140,7 +165,7 @@ function createArenaMapCells(width, height) {
     const grid = createArenaGridMatrix(width, height);
     const gateByKey = new Map();
     for (const slot of ARENA_SLOT_ORDER) {
-        const spawn = exports.WAYPOINTS_MAP[slot][0];
+        const spawn = getArenaLaneSpawnPoint(slot);
         gateByKey.set(positionKey(spawn.x, spawn.y), slot.toLowerCase());
     }
     return grid.map((row, y) => row.map((value, x) => {

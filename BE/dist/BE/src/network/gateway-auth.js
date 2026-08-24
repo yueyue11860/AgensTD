@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.authenticateGatewayToken = authenticateGatewayToken;
 exports.extractHttpToken = extractHttpToken;
 exports.extractSocketToken = extractSocketToken;
+const oauth_routes_1 = require("./oauth-routes");
 function readAuthorizationToken(authorizationHeader) {
     if (!authorizationHeader) {
         return undefined;
@@ -15,6 +16,20 @@ function readAuthorizationToken(authorizationHeader) {
 }
 function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+/** 尝试从 session token 解析已登录的 OAuth 用户 */
+function resolveSessionPrincipal(token) {
+    if (!token.startsWith('sess_'))
+        return null;
+    const session = (0, oauth_routes_1.getSessionByToken)(token);
+    if (!session)
+        return null;
+    return {
+        token,
+        playerId: session.user.userId,
+        playerName: session.user.name || session.user.userId,
+        playerKind: 'human',
+    };
 }
 function authenticateGatewayToken(config, token) {
     if (!config.authRequired) {
@@ -32,6 +47,11 @@ function authenticateGatewayToken(config, token) {
     if (!token) {
         return null;
     }
+    // 优先检查 session token（OAuth 登录用户）
+    const sessionPrincipal = resolveSessionPrincipal(token);
+    if (sessionPrincipal)
+        return sessionPrincipal;
+    // 回退到静态 token 匹配（dev/agent token）
     const match = config.authTokens.find((candidate) => candidate.token === token);
     if (!match) {
         return null;

@@ -15,6 +15,7 @@ export interface ServerConfig {
   matchId: string
   tickRateMs: number
   broadcastIntervalMs: number
+  fullSnapshotIntervalMs: number
   mapWidth: number
   mapHeight: number
   playerStartingGold: number
@@ -24,6 +25,7 @@ export interface ServerConfig {
   replayMaxFrames: number
   replayMaxActions: number
   persistenceFlushEveryTicks: number
+  verboseGameLogs: boolean
   supabaseUrl: string | null
   supabaseServiceRoleKey: string | null
   oauthClientId: string
@@ -82,6 +84,10 @@ function buildAuthTokens(): AuthTokenConfig[] {
 export function createServerConfig(): ServerConfig {
   const tickRateMs = readNumber('TICK_RATE_MS', 100)
   const broadcastIntervalMs = Math.max(tickRateMs, readNumber('BROADCAST_INTERVAL_MS', 200))
+  const fullSnapshotIntervalMs = Math.max(
+    broadcastIntervalMs,
+    readNumber('FULL_SNAPSHOT_INTERVAL_MS', 5000),
+  )
 
   return {
     port: readNumber('PORT', 3000),
@@ -89,6 +95,7 @@ export function createServerConfig(): ServerConfig {
     matchId: process.env.MATCH_ID ?? createDefaultMatchId(),
     tickRateMs,
     broadcastIntervalMs,
+    fullSnapshotIntervalMs,
     mapWidth: readNumber('MAP_WIDTH', 29),
     mapHeight: readNumber('MAP_HEIGHT', 29),
     playerStartingGold: readNumber('PLAYER_STARTING_GOLD', 200),
@@ -97,7 +104,8 @@ export function createServerConfig(): ServerConfig {
     actionRateLimitMax: readNumber('ACTION_RATE_LIMIT_MAX', 3),
     replayMaxFrames: readNumber('REPLAY_MAX_FRAMES', 300),
     replayMaxActions: readNumber('REPLAY_MAX_ACTIONS', 500),
-    persistenceFlushEveryTicks: readNumber('PERSISTENCE_FLUSH_EVERY_TICKS', 10),
+    persistenceFlushEveryTicks: Math.max(1, Math.round(readNumber('PERSISTENCE_FLUSH_EVERY_TICKS', 50))),
+    verboseGameLogs: readBoolean('VERBOSE_GAME_LOGS', process.env.NODE_ENV !== 'production'),
     supabaseUrl: readString('SUPABASE_URL'),
     supabaseServiceRoleKey: readString('SUPABASE_SERVICE_ROLE_KEY'),
     oauthClientId: process.env.OAUTH_CLIENT_ID ?? '',

@@ -34,8 +34,8 @@ export const LEVEL_DEFS: readonly LevelDef[] = [
   },
   {
     levelId: 1,
-    label: '基础心智试炼',
-    subtitle: '5 波 · 速度压制初测',
+    label: '花果山前哨',
+    subtitle: '新版首测 · 天兵征召与五波守线',
     clearRate: 0.5,
     minPlayers: 1,
     allowedPlayerKinds: ['human', 'agent'],

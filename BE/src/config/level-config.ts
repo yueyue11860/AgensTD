@@ -671,8 +671,8 @@ export const LEVEL_CONFIGS: Readonly<Record<number, LevelConfig>> = {
   },
   1: {
     levelId: 1,
-    label: '基础心智试炼',
-    description: '验证基础伤害覆盖与攻击间距。少量高移速 Speedster 会突破低射速炮阵。',
+    label: '花果山前哨',
+    description: '新版五波纵向切片：征召天兵、部署汉字棋子、合成升级并抵御鬼怪妖魔。',
     targetClearRate: 0.5,
     allowedPlayerKinds: ['human', 'agent'],
     minPlayers: 1,

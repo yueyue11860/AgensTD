@@ -18,8 +18,10 @@ const supabase_competition_store_1 = require("./data/supabase-competition-store"
 const action_rate_limiter_1 = require("./network/action-rate-limiter");
 const agent_api_1 = require("./network/agent-api");
 const rest_api_1 = require("./network/rest-api");
+const oauth_routes_1 = require("./network/oauth-routes");
 const socket_gateway_1 = require("./network/socket-gateway");
 const progress_store_1 = require("./data/progress-store");
+const supabase_user_store_1 = require("./data/supabase-user-store");
 const config = (0, server_config_1.createServerConfig)();
 const app = (0, express_1.default)();
 const frontendDistDir = path_1.default.resolve(process.cwd(), '../FE/dist');
@@ -62,8 +64,11 @@ const projectedTickStream = new projected_tick_stream_1.ProjectedTickStream(engi
 const replayRecorder = new replay_recorder_1.ReplayRecorder(engine, projectedTickStream, config, competitionStore, performanceTelemetry);
 const actionLimiter = new action_rate_limiter_1.ActionRateLimiter(config.actionRateLimitWindowMs, config.actionRateLimitMax);
 const progressStore = new progress_store_1.ProgressStore();
-const gateway = new socket_gateway_1.SocketGateway(httpServer, roomManager, config, performanceTelemetry, actionLimiter, progressStore);
-app.use('/api', (0, rest_api_1.createRestApiRouter)(engine, config, actionLimiter, replayRecorder, competitionStore, progressStore));
+const userStore = new supabase_user_store_1.SupabaseUserStore(config);
+progressStore.setUserStore(userStore);
+const gateway = new socket_gateway_1.SocketGateway(httpServer, roomManager, config, performanceTelemetry, actionLimiter, progressStore, projectedTickStream);
+app.use('/api', (0, oauth_routes_1.createOAuthRouter)(config, userStore));
+app.use('/api', (0, rest_api_1.createRestApiRouter)(engine, roomManager, config, actionLimiter, replayRecorder, competitionStore, progressStore));
 app.use('/api/agent', (0, agent_api_1.createAgentApiRouter)(projectedTickStream, config, replayRecorder, competitionStore, performanceTelemetry));
 if (hasFrontendBuild) {
     app.use((request, response, next) => {
@@ -77,7 +82,12 @@ if (hasFrontendBuild) {
 httpServer.listen(config.port, () => {
 });
 const shutdown = () => {
-    void replayRecorder.flushLatest().finally(() => {
+    void replayRecorder.flushLatest()
+        .catch((error) => {
+        const details = error instanceof Error ? error.message : String(error);
+        console.error(`Final replay persistence failed during shutdown: ${details}`);
+    })
+        .finally(() => {
         gateway.shutdown(() => {
             httpServer.close(() => {
                 process.exit(0);

@@ -1,4 +1,5 @@
 import type { TowerBehaviorDefinition, TowerBehaviorKind, TowerFireRate } from './tower-behavior'
+import type { PveMatchState } from '../../../shared/contracts/game'
 
 export type PlayerKind = 'human' | 'agent'
 export type ConnectionStatus = 'connected' | 'disconnected'
@@ -178,4 +179,5 @@ export interface GameState {
   towers: TowerState[]
   pendingActions: number
   logs: GameLogEntry[]
+  pve?: PveMatchState
 }

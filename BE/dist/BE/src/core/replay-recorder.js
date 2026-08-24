@@ -11,19 +11,24 @@ class ReplayRecorder {
     replay = null;
     isPersisting = false;
     hasLoggedPersistenceFailure = false;
+    lastObservedStatus = null;
     constructor(engine, projectedTickStream, config, store = null, telemetry = null, maxFrames = config.replayMaxFrames, maxActions = config.replayMaxActions) {
         this.config = config;
         this.store = store;
         this.telemetry = telemetry;
         this.maxFrames = maxFrames;
         this.maxActions = maxActions;
-        projectedTickStream.subscribeTick(({ state, fullState }) => {
+        projectedTickStream.subscribeBroadcast(({ state, fullState }) => {
             this.recordFrame({
                 tick: state.tick,
                 recordedAt: new Date().toISOString(),
                 gameState: fullState,
             });
-            if (state.tick > 0 && state.tick % this.config.persistenceFlushEveryTicks === 0) {
+        });
+        engine.onTick((state) => {
+            const justFinished = state.status === 'finished' && this.lastObservedStatus !== 'finished';
+            this.lastObservedStatus = state.status;
+            if ((state.tick > 0 && state.tick % this.config.persistenceFlushEveryTicks === 0) || justFinished) {
                 const flushPromise = this.telemetry
                     ? this.telemetry.measureAsync('replay.flush', async () => this.flush(state))
                     : this.flush(state);
@@ -31,7 +36,7 @@ class ReplayRecorder {
                     this.logPersistenceFailure('periodic flush', error);
                 });
             }
-        });
+        }, { label: 'replay-persistence' });
         engine.onActionQueued((queuedAction) => {
             this.recordAction({
                 id: queuedAction.id,

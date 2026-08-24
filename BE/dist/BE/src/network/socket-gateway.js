@@ -17,6 +17,7 @@ function readHandshakeValue(socket, key) {
 }
 const DEFAULT_ROOM_ID = 'public-1';
 const COUNTDOWN_DURATION_MS = 3000;
+const PLAYER_RECONNECT_GRACE_MS = 5000;
 function isJoinRoomPayload(payload) {
     return typeof payload === 'object'
         && payload !== null
@@ -39,14 +40,16 @@ class SocketGateway {
     telemetry;
     actionLimiter;
     progressStore;
+    defaultProjectedTickStream;
     io;
     config;
     roomManager;
     roomRuntimes = new Map();
-    constructor(httpServer, roomManager, config, telemetry, actionLimiter, progressStore) {
+    constructor(httpServer, roomManager, config, telemetry, actionLimiter, progressStore, defaultProjectedTickStream) {
         this.telemetry = telemetry;
         this.actionLimiter = actionLimiter;
         this.progressStore = progressStore;
+        this.defaultProjectedTickStream = defaultProjectedTickStream;
         this.config = config;
         this.roomManager = roomManager;
         this.io = new socket_io_1.Server(httpServer, {
@@ -76,7 +79,7 @@ class SocketGateway {
         socket.on('JOIN_ROOM', (payload) => {
             this.handleJoinRoom(socket, payload);
         });
-        socket.on('send_action', (payload) => {
+        socket.on('SEND_ACTION', (payload) => {
             this.handleActionSubmission(socket, payload);
         });
         socket.on('BUILD_TOWER', (payload) => {
@@ -88,6 +91,9 @@ class SocketGateway {
         socket.on('SELECT_LEVEL', (payload) => {
             this.handleSelectLevel(socket, payload);
         });
+        socket.on('REQUEST_FULL_STATE', () => {
+            this.handleFullStateRequest(socket);
+        });
         socket.on('disconnect', () => {
             this.leaveJoinedRoom(socket);
             this.telemetry.setGauge('socket.connections', this.io.sockets.sockets.size);
@@ -96,6 +102,9 @@ class SocketGateway {
     shutdown(onClosed) {
         for (const runtime of this.roomRuntimes.values()) {
             runtime.unsubscribeProjection();
+            if (runtime.ownsProjectedTickStream) {
+                runtime.projectedTickStream.dispose();
+            }
             runtime.loop.stop();
         }
         this.roomRuntimes.clear();
@@ -124,9 +133,15 @@ class SocketGateway {
             this.leaveJoinedRoom(socket);
         }
         const runtime = this.ensureRoomRuntime(nextRoomId);
+        const pendingDisconnectTimer = runtime.disconnectTimers.get(identity.playerId);
+        if (pendingDisconnectTimer) {
+            clearTimeout(pendingDisconnectTimer);
+            runtime.disconnectTimers.delete(identity.playerId);
+        }
+        const existingSlot = runtime.room.getPlayerSlot(identity.playerId);
         const existingConnections = runtime.playerConnections.get(identity.playerId) ?? 0;
-        const assignedSlot = existingConnections > 0
-            ? runtime.room.getPlayerSlot(identity.playerId)
+        const assignedSlot = existingConnections > 0 || existingSlot
+            ? existingSlot
             : runtime.room.joinPlayer(identity.playerId);
         if (!assignedSlot) {
             this.emitEngineError(socket, 'ROOM_FULL', 'Room is full');
@@ -138,6 +153,7 @@ class SocketGateway {
         socket.data.identity = identity;
         socket.data.roomId = nextRoomId;
         this.emitJoinSnapshot(socket, runtime, assignedSlot);
+        this.emitRoomSnapshot(runtime.room);
     }
     emitJoinSnapshot(socket, runtime, assignedSlot) {
         const joinPayload = {
@@ -149,14 +165,27 @@ class SocketGateway {
         socket.emit('ROOM_JOINED', joinPayload);
         const fullEnvelope = {
             mode: 'full',
-            gameState: runtime.projectedTickStream.getCurrentFullState(),
+            gameState: runtime.projectedTickStream.getCurrentFullState({ initializeBroadcastBaseline: true }),
+            sentAt: Date.now(),
         };
-        socket.emit('tick_update', fullEnvelope);
-        const statePayload = this.serializeRoomGameState(runtime.room, runtime.room.engine.getStateSnapshot());
-        socket.emit('SYNC_STATE', statePayload);
-        socket.emit('GAME_STATE', statePayload);
+        socket.emit('TICK_UPDATE', fullEnvelope);
+        socket.emit('ROOM_SNAPSHOT', this.serializeRoomSummary(runtime.room));
         socket.emit('ROOM_PHASE_CHANGED', { phase: runtime.room.getPhase() });
-        this.recordOutbound('socket.tick_update.full', fullEnvelope, 1);
+        this.recordOutbound('socket.TICK_UPDATE.full', fullEnvelope, 1);
+    }
+    handleFullStateRequest(socket) {
+        const joinedContext = this.getJoinedContext(socket);
+        if (!joinedContext) {
+            this.emitEngineError(socket, 'NOT_IN_ROOM', '请先发送 JOIN_ROOM 加入房间');
+            return;
+        }
+        const fullEnvelope = {
+            mode: 'full',
+            gameState: joinedContext.runtime.projectedTickStream.getCurrentFullState(),
+            sentAt: Date.now(),
+        };
+        socket.emit('TICK_UPDATE', fullEnvelope);
+        this.recordOutbound('socket.TICK_UPDATE.resync', fullEnvelope, 1);
     }
     handleActionSubmission(socket, payload) {
         const joinedContext = this.getJoinedContext(socket);
@@ -177,6 +206,9 @@ class SocketGateway {
         const acceptedPayload = {
             ok: true,
             action: submission.action,
+            requestId: submission.requestId,
+            actionId: submission.actionId,
+            serverTick: submission.serverTick,
             rateLimitRemaining: submission.rateLimitRemaining,
         };
         socket.emit('ACTION_ACCEPTED', acceptedPayload);
@@ -200,35 +232,12 @@ class SocketGateway {
             this.emitEngineError(socket, 'NOT_IN_ROOM', '请先发送 JOIN_ROOM 加入房间');
             return;
         }
-        const result = joinedContext.room.beginCountdown(joinedContext.identity.playerId, () => {
-            const waitingPayload = { phase: 'waiting_for_level' };
-            this.io.to(joinedContext.room.id).emit('ROOM_PHASE_CHANGED', waitingPayload);
-        });
-        if (result === 'forbidden') {
-            this.emitEngineError(socket, 'FORBIDDEN', '只有房主可以启动游戏');
-            return;
-        }
-        if (result === 'wrong_phase') {
-            this.emitEngineError(socket, 'WRONG_PHASE', '当前房间状态不允许启动该操作');
-            return;
-        }
-        const countdownPayload = {
-            phase: 'countdown',
-            durationMs: COUNTDOWN_DURATION_MS,
-            remainingSeconds: COUNTDOWN_DURATION_MS / 1000,
-        };
-        this.io.to(joinedContext.room.id).emit('START_MATCH_ACCEPTED', countdownPayload);
-        this.io.to(joinedContext.room.id).emit('ROOM_PHASE_CHANGED', countdownPayload);
-        this.scheduleCountdownBroadcast(joinedContext.room);
+        this.beginRoomCountdown(joinedContext, socket);
     }
     handleSelectLevel(socket, payload) {
         const joinedContext = this.getJoinedContext(socket);
         if (!joinedContext) {
             this.emitEngineError(socket, 'NOT_IN_ROOM', '请先发送 JOIN_ROOM 加入房间');
-            return;
-        }
-        if (joinedContext.room.getPhase() !== 'waiting_for_level') {
-            this.emitEngineError(socket, 'WRONG_PHASE', '当前状态不接受难度选择，请等待倒计时完成');
             return;
         }
         if (joinedContext.identity.playerId !== joinedContext.room.getHostPlayerId()) {
@@ -259,7 +268,63 @@ class SocketGateway {
             this.emitEngineError(socket, 'COOP_REQUIRED', '零域裁决需至少两名物理终端协同');
             return;
         }
-        joinedContext.room.igniteWithLevel(levelConfig.waves, levelConfig.startingGold);
+        const currentPhase = joinedContext.room.getPhase();
+        if (currentPhase === 'playing') {
+            this.emitEngineError(socket, 'WRONG_PHASE', '当前对局已开始，不能再次选择难度');
+            return;
+        }
+        if (currentPhase === 'lobby' || currentPhase === 'countdown') {
+            joinedContext.room.setPendingLevelSelection(payload.levelId);
+            if (currentPhase === 'lobby') {
+                this.beginRoomCountdown(joinedContext, socket);
+            }
+            return;
+        }
+        if (currentPhase !== 'waiting_for_level') {
+            this.emitEngineError(socket, 'WRONG_PHASE', '当前状态不接受难度选择，请等待倒计时完成');
+            return;
+        }
+        this.activateRoomLevel(joinedContext.room, levelConfig);
+    }
+    beginRoomCountdown(joinedContext, socket) {
+        const result = joinedContext.room.beginCountdown(joinedContext.identity.playerId, () => {
+            this.handleCountdownCompleted(joinedContext.room);
+        });
+        if (result === 'forbidden') {
+            this.emitEngineError(socket, 'FORBIDDEN', '只有房主可以启动游戏');
+            return false;
+        }
+        if (result === 'wrong_phase') {
+            this.emitEngineError(socket, 'WRONG_PHASE', '当前房间状态不允许启动该操作');
+            return false;
+        }
+        const countdownPayload = {
+            phase: 'countdown',
+            durationMs: COUNTDOWN_DURATION_MS,
+            remainingSeconds: COUNTDOWN_DURATION_MS / 1000,
+        };
+        this.io.to(joinedContext.room.id).emit('START_MATCH_ACCEPTED', countdownPayload);
+        this.io.to(joinedContext.room.id).emit('ROOM_PHASE_CHANGED', countdownPayload);
+        this.emitRoomSnapshot(joinedContext.room);
+        this.scheduleCountdownBroadcast(joinedContext.room);
+        return true;
+    }
+    handleCountdownCompleted(room) {
+        const pendingLevelId = room.consumePendingLevelSelection();
+        if (pendingLevelId === null) {
+            this.io.to(room.id).emit('ROOM_PHASE_CHANGED', { phase: 'waiting_for_level' });
+            this.emitRoomSnapshot(room);
+            return;
+        }
+        const levelConfig = level_config_1.LEVEL_CONFIGS[pendingLevelId];
+        if (!levelConfig) {
+            this.io.to(room.id).emit('ROOM_PHASE_CHANGED', { phase: 'waiting_for_level' });
+            return;
+        }
+        this.activateRoomLevel(room, levelConfig);
+    }
+    activateRoomLevel(room, levelConfig) {
+        room.igniteWithLevel(levelConfig.waves, levelConfig.startingGold);
         const levelSelectedPayload = {
             levelId: levelConfig.levelId,
             label: levelConfig.label,
@@ -268,8 +333,9 @@ class SocketGateway {
             waveCount: levelConfig.waves.length,
             minPlayers: levelConfig.minPlayers,
         };
-        this.io.to(joinedContext.room.id).emit('LEVEL_SELECTED', levelSelectedPayload);
-        this.io.to(joinedContext.room.id).emit('ROOM_PHASE_CHANGED', { phase: 'playing', levelId: payload.levelId });
+        this.io.to(room.id).emit('LEVEL_SELECTED', levelSelectedPayload);
+        this.io.to(room.id).emit('ROOM_PHASE_CHANGED', { phase: 'playing', levelId: levelConfig.levelId });
+        this.emitRoomSnapshot(room);
     }
     scheduleCountdownBroadcast(room) {
         const countdownSeconds = [2, 1];
@@ -292,41 +358,61 @@ class SocketGateway {
             return existingRuntime;
         }
         const room = this.roomManager.getOrCreateRoom(roomId);
-        const projectedTickStream = new projected_tick_stream_1.ProjectedTickStream(room.engine, this.config, this.telemetry);
+        const usesSharedProjectedTickStream = roomId === DEFAULT_ROOM_ID && Boolean(this.defaultProjectedTickStream);
+        const projectedTickStream = usesSharedProjectedTickStream
+            ? this.defaultProjectedTickStream
+            : new projected_tick_stream_1.ProjectedTickStream(room.engine, this.config, this.telemetry);
         const loop = new game_loop_1.GameLoop(room.engine, this.config.tickRateMs);
+        room.engine.attachPerformanceTelemetry(this.telemetry);
         const runtime = {
             room,
             loop,
             projectedTickStream,
             playerConnections: new Map(),
+            disconnectTimers: new Map(),
+            ownsProjectedTickStream: !usesSharedProjectedTickStream,
             unsubscribeProjection: () => { },
         };
-        runtime.unsubscribeProjection = projectedTickStream.subscribeTick((event) => {
+        runtime.unsubscribeProjection = projectedTickStream.subscribeBroadcast((event) => {
             const recipientCount = this.io.sockets.adapter.rooms.get(room.id)?.size ?? 0;
             if (recipientCount === 0) {
                 return;
             }
-            const statePayload = this.serializeRoomGameState(room, event.state);
-            this.io.to(room.id).emit('SYNC_STATE', statePayload);
-            this.io.to(room.id).emit('GAME_STATE', statePayload);
-            this.recordOutbound('socket.sync_state', statePayload, recipientCount);
-            this.recordOutbound('socket.game_state', statePayload, recipientCount);
             if (!event.shouldSocketBroadcast || !event.broadcast) {
+                return;
+            }
+            if (event.shouldFullSnapshot) {
+                const checkpointEnvelope = {
+                    mode: 'checkpoint',
+                    patch: event.broadcast.checkpoint,
+                    sentAt: Date.now(),
+                };
+                this.io.to(room.id).emit('TICK_UPDATE', checkpointEnvelope);
+                this.recordOutbound('socket.TICK_UPDATE.checkpoint', checkpointEnvelope, recipientCount);
+                if (Object.keys(event.broadcast.uiUpdate).length > 0) {
+                    this.io.to(room.id).emit('UI_STATE_UPDATE', event.broadcast.uiUpdate);
+                    this.recordOutbound('socket.UI_STATE_UPDATE', event.broadcast.uiUpdate, recipientCount);
+                }
+                if (event.broadcast.noticeUpdate) {
+                    this.io.to(room.id).emit('NOTICE_UPDATE', event.broadcast.noticeUpdate);
+                    this.recordOutbound('socket.NOTICE_UPDATE', event.broadcast.noticeUpdate, recipientCount);
+                }
                 return;
             }
             const tickEnvelope = {
                 mode: 'patch',
                 patch: event.broadcast.patch,
+                sentAt: Date.now(),
             };
-            this.io.to(room.id).emit('tick_update', tickEnvelope);
-            this.recordOutbound('socket.tick_update.patch', tickEnvelope, recipientCount);
+            this.io.to(room.id).emit('TICK_UPDATE', tickEnvelope);
+            this.recordOutbound('socket.TICK_UPDATE.patch', tickEnvelope, recipientCount);
             if (Object.keys(event.broadcast.uiUpdate).length > 0) {
-                this.io.to(room.id).emit('ui_state_update', event.broadcast.uiUpdate);
-                this.recordOutbound('socket.ui_state_update', event.broadcast.uiUpdate, recipientCount);
+                this.io.to(room.id).emit('UI_STATE_UPDATE', event.broadcast.uiUpdate);
+                this.recordOutbound('socket.UI_STATE_UPDATE', event.broadcast.uiUpdate, recipientCount);
             }
             if (event.broadcast.noticeUpdate) {
-                this.io.to(room.id).emit('notice_update', event.broadcast.noticeUpdate);
-                this.recordOutbound('socket.notice_update', event.broadcast.noticeUpdate, recipientCount);
+                this.io.to(room.id).emit('NOTICE_UPDATE', event.broadcast.noticeUpdate);
+                this.recordOutbound('socket.NOTICE_UPDATE', event.broadcast.noticeUpdate, recipientCount);
             }
         });
         loop.start();
@@ -348,15 +434,43 @@ class SocketGateway {
         const activeConnectionCount = runtime.playerConnections.get(identity.playerId) ?? 0;
         if (activeConnectionCount <= 1) {
             runtime.playerConnections.delete(identity.playerId);
-            runtime.room.leavePlayer(identity.playerId);
             runtime.room.engine.markPlayerDisconnected(identity.playerId);
+            this.emitRoomSnapshot(runtime.room);
+            const disconnectTimer = setTimeout(() => {
+                runtime.disconnectTimers.delete(identity.playerId);
+                if ((runtime.playerConnections.get(identity.playerId) ?? 0) > 0) {
+                    return;
+                }
+                runtime.room.leavePlayer(identity.playerId);
+                this.emitRoomSnapshot(runtime.room);
+                this.cleanupRoomIfEmpty(roomId);
+            }, PLAYER_RECONNECT_GRACE_MS);
+            runtime.disconnectTimers.set(identity.playerId, disconnectTimer);
         }
         else {
             runtime.playerConnections.set(identity.playerId, activeConnectionCount - 1);
+            this.emitRoomSnapshot(runtime.room);
         }
         socket.leave(roomId);
         delete socket.data.roomId;
         delete socket.data.identity;
+    }
+    cleanupRoomIfEmpty(roomId) {
+        const runtime = this.roomRuntimes.get(roomId);
+        if (!runtime || !runtime.room.isEmpty()) {
+            return;
+        }
+        for (const disconnectTimer of runtime.disconnectTimers.values()) {
+            clearTimeout(disconnectTimer);
+        }
+        runtime.disconnectTimers.clear();
+        runtime.unsubscribeProjection();
+        if (runtime.ownsProjectedTickStream) {
+            runtime.projectedTickStream.dispose();
+        }
+        runtime.loop.stop();
+        this.roomRuntimes.delete(roomId);
+        this.roomManager.removeRoom(roomId);
     }
     getJoinedContext(socket) {
         const roomId = this.getJoinedRoomId(socket);
@@ -392,8 +506,15 @@ class SocketGateway {
     }
     resolvePlayerIdentity(socket, overrides) {
         const principal = socket.data.principal;
-        const playerId = principal?.playerId ?? overrides?.playerId ?? readHandshakeValue(socket, 'playerId') ?? socket.id;
-        const playerName = principal?.playerName ?? overrides?.playerName ?? readHandshakeValue(socket, 'playerName') ?? `player-${playerId.slice(0, 6)}`;
+        const requestedPlayerId = overrides?.playerId ?? readHandshakeValue(socket, 'playerId');
+        const requestedPlayerName = overrides?.playerName ?? readHandshakeValue(socket, 'playerName');
+        const isOAuthSession = principal?.token.startsWith('sess_') ?? false;
+        const playerId = isOAuthSession
+            ? principal?.playerId ?? requestedPlayerId ?? socket.id
+            : requestedPlayerId ?? principal?.playerId ?? socket.id;
+        const playerName = isOAuthSession
+            ? principal?.playerName ?? requestedPlayerName ?? `player-${playerId.slice(0, 6)}`
+            : requestedPlayerName ?? principal?.playerName ?? `player-${playerId.slice(0, 6)}`;
         const playerKind = principal?.playerKind ?? overrides?.playerKind ?? (readHandshakeValue(socket, 'playerKind') === 'agent' ? 'agent' : 'human');
         return {
             playerId,
@@ -401,23 +522,25 @@ class SocketGateway {
             playerKind,
         };
     }
-    serializeRoomGameState(room, state) {
+    serializeRoomSummary(room) {
+        const summary = room.getSummary();
         return {
-            roomId: room.id,
-            phase: room.getPhase(),
-            tick: state.tick,
-            status: state.status,
-            enemies: state.enemies,
-            towers: state.towers,
-            gold: state.players.reduce((sum, player) => sum + player.gold, 0),
-            playerGold: state.players.map((player) => ({
-                playerId: player.id,
-                slot: room.getPlayerSlot(player.id),
-                gold: player.gold,
-            })),
-            currentWave: state.wave,
-            overloadTicks: state.overloadTicks,
+            id: summary.id,
+            name: summary.name,
+            hasPassword: summary.hasPassword,
+            players: summary.players,
+            maxPlayers: summary.maxPlayers,
+            status: summary.phase === 'playing'
+                ? 'IN_MATCH'
+                : summary.phase === 'countdown' || summary.phase === 'waiting_for_level'
+                    ? 'DRAFTING'
+                    : 'OPEN',
+            pingMs: null,
+            slots: summary.slots,
         };
+    }
+    emitRoomSnapshot(room) {
+        this.io.to(room.id).emit('ROOM_SNAPSHOT', this.serializeRoomSummary(room));
     }
     emitEngineError(socket, code, message, retryAfterMs) {
         socket.emit('engine_error', {

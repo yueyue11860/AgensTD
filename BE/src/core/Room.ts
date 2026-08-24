@@ -309,6 +309,12 @@ export class Room {
 
   private syncEngineRoomRules() {
     const activeSlots = this.getActiveSlots()
+    const playerSlotAssignments = ROOM_SLOT_ORDER.flatMap((slotId) => {
+      const playerId = this.slotAssignments.get(slotId)
+      return playerId ? [{ playerId, slotId }] : []
+    })
+
+    this.engine.syncPlayerSlots(playerSlotAssignments)
     this.engine.setActiveSlots(activeSlots)
     this.engine.setPlayerCount(this.getPlayerCount())
   }

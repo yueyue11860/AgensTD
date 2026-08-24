@@ -1,7 +1,7 @@
 import crypto from 'crypto'
 import { Router, type Request, type Response } from 'express'
 import type { ServerConfig } from '../config/server-config'
-import type { SupabaseUserStore } from '../data/supabase-user-store'
+import type { UserStore } from '../data/user-store'
 import type { SecondMeUser, UserSession } from '../domain/user'
 
 const SECONDME_BASE_URL = 'https://api.mindverse.com/gate/lab'
@@ -120,7 +120,7 @@ async function refreshAccessToken(
   }
 }
 
-export function createOAuthRouter(config: ServerConfig, userStore: SupabaseUserStore) {
+export function createOAuthRouter(config: ServerConfig, userStore: UserStore) {
   const router = Router()
 
   /**
@@ -164,7 +164,7 @@ export function createOAuthRouter(config: ServerConfig, userStore: SupabaseUserS
       return
     }
 
-    // Step 3: 写入 Supabase
+    // Step 3: 写入已配置的用户存储
     await userStore.upsertUser(user)
     await userStore.getOrCreateProgress(user.userId, 'HUMAN')
 

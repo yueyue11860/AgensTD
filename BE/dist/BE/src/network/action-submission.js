@@ -11,6 +11,13 @@ function normalizeActionPayload(payload) {
     }
     return payload;
 }
+function readRequestId(payload) {
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+        return null;
+    }
+    const requestId = payload.requestId;
+    return typeof requestId === 'string' && requestId.length > 0 ? requestId : null;
+}
 function submitAction({ engine, limiter, player, payload }) {
     const parsedAction = (0, actions_1.parseClientAction)(normalizeActionPayload(payload));
     if (!parsedAction) {
@@ -31,10 +38,13 @@ function submitAction({ engine, limiter, player, payload }) {
             retryAfterMs: limitDecision.retryAfterMs,
         };
     }
-    engine.enqueueAction(player, parsedAction);
+    const queued = engine.enqueueAction(player, parsedAction);
     return {
         ok: true,
         action: parsedAction,
+        requestId: readRequestId(payload),
+        actionId: queued.actionId,
+        serverTick: queued.serverTick,
         rateLimitRemaining: limitDecision.remaining,
     };
 }

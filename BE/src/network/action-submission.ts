@@ -13,6 +13,9 @@ interface ActionSubmissionInput {
 export interface AcceptedActionSubmission {
   ok: true
   action: ClientAction
+  requestId: string | null
+  actionId: string
+  serverTick: number
   rateLimitRemaining: number
 }
 
@@ -38,6 +41,15 @@ function normalizeActionPayload(payload: unknown) {
   return payload
 }
 
+function readRequestId(payload: unknown) {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    return null
+  }
+
+  const requestId = (payload as { requestId?: unknown }).requestId
+  return typeof requestId === 'string' && requestId.length > 0 ? requestId : null
+}
+
 export function submitAction({ engine, limiter, player, payload }: ActionSubmissionInput): ActionSubmissionResult {
   const parsedAction = parseClientAction(normalizeActionPayload(payload))
   if (!parsedAction) {
@@ -60,10 +72,13 @@ export function submitAction({ engine, limiter, player, payload }: ActionSubmiss
     }
   }
 
-  engine.enqueueAction(player, parsedAction)
+  const queued = engine.enqueueAction(player, parsedAction)
   return {
     ok: true,
     action: parsedAction,
+    requestId: readRequestId(payload),
+    actionId: queued.actionId,
+    serverTick: queued.serverTick,
     rateLimitRemaining: limitDecision.remaining,
   }
 }

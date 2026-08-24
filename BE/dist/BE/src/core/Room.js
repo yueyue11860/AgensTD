@@ -3,48 +3,38 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.RoomManager = exports.Room = exports.ROOM_SLOT_ORDER = void 0;
 exports.createFixedRoomLayout = createFixedRoomLayout;
 const arena_layout_1 = require("../config/arena-layout");
+const grid_map_1 = require("./grid-map");
 const game_engine_1 = require("./game-engine");
 exports.ROOM_SLOT_ORDER = ['P1', 'P2', 'P3', 'P4'];
 const MIN_ROOM_WIDTH = arena_layout_1.ARENA_GRID_SIZE;
 const MIN_ROOM_HEIGHT = arena_layout_1.ARENA_GRID_SIZE;
 const HUB = (0, arena_layout_1.getArenaPrimaryBasePoint)();
-function clonePath(path) {
-    return path.map((position) => ({ x: position.x, y: position.y }));
-}
-function createLaneRoutes() {
+function createLaneRoutes(pathGrid) {
+    function createLaneRoute(slot) {
+        const spawn = (0, arena_layout_1.getArenaLaneSpawnPoint)(slot);
+        const path = (0, arena_layout_1.createArenaEnemyLanePath)(slot);
+        const loopStartIndex = (0, arena_layout_1.getArenaLoopStartIndex)(arena_layout_1.WAYPOINTS_MAP[slot]);
+        return {
+            slot,
+            spawn,
+            path,
+            loopStartIndex,
+        };
+    }
     return {
-        P1: {
-            slot: 'P1',
-            spawn: { ...arena_layout_1.WAYPOINTS_MAP.P1[0] },
-            path: clonePath(arena_layout_1.WAYPOINTS_MAP.P1),
-            loopStartIndex: (0, arena_layout_1.getArenaLoopStartIndex)(arena_layout_1.WAYPOINTS_MAP.P1),
-        },
-        P2: {
-            slot: 'P2',
-            spawn: { ...arena_layout_1.WAYPOINTS_MAP.P2[0] },
-            path: clonePath(arena_layout_1.WAYPOINTS_MAP.P2),
-            loopStartIndex: (0, arena_layout_1.getArenaLoopStartIndex)(arena_layout_1.WAYPOINTS_MAP.P2),
-        },
-        P3: {
-            slot: 'P3',
-            spawn: { ...arena_layout_1.WAYPOINTS_MAP.P3[0] },
-            path: clonePath(arena_layout_1.WAYPOINTS_MAP.P3),
-            loopStartIndex: (0, arena_layout_1.getArenaLoopStartIndex)(arena_layout_1.WAYPOINTS_MAP.P3),
-        },
-        P4: {
-            slot: 'P4',
-            spawn: { ...arena_layout_1.WAYPOINTS_MAP.P4[0] },
-            path: clonePath(arena_layout_1.WAYPOINTS_MAP.P4),
-            loopStartIndex: (0, arena_layout_1.getArenaLoopStartIndex)(arena_layout_1.WAYPOINTS_MAP.P4),
-        },
+        P1: createLaneRoute('P1'),
+        P2: createLaneRoute('P2'),
+        P3: createLaneRoute('P3'),
+        P4: createLaneRoute('P4'),
     };
 }
 function createFixedRoomLayout(width, height) {
     if (width < MIN_ROOM_WIDTH || height < MIN_ROOM_HEIGHT) {
         throw new Error(`Arena room requires at least ${MIN_ROOM_WIDTH}x${MIN_ROOM_HEIGHT} cells`);
     }
-    const laneRoutes = createLaneRoutes();
     const cells = (0, arena_layout_1.createArenaMapCells)(width, height);
+    const pathGrid = new grid_map_1.GridMap(cells, (0, arena_layout_1.getArenaPrimarySpawnPoint)(), HUB);
+    const laneRoutes = createLaneRoutes(pathGrid);
     return {
         width,
         height,
@@ -61,12 +51,17 @@ class Room {
     slotAssignments = new Map();
     // 房间生命周期状态机
     phase = 'lobby';
+    displayName;
+    hasPassword;
     // 第一个加入的玩家为房主
     hostPlayerId = null;
     // 倒计时定时器句柄（idle 时务必清除）
     countdownTimer = null;
-    constructor(id, config) {
+    pendingLevelId = null;
+    constructor(id, config, options) {
         this.id = id;
+        this.displayName = options?.displayName?.trim() || id;
+        this.hasPassword = options?.hasPassword ?? false;
         this.layout = createFixedRoomLayout(config.mapWidth, config.mapHeight);
         this.engine = new game_engine_1.GameEngine({
             ...config,
@@ -140,6 +135,30 @@ class Room {
     getConnectedPlayerIds() {
         return [...this.slotAssignments.values()];
     }
+    getSummary() {
+        const players = this.engine.getStateSnapshot().players;
+        return {
+            id: this.id,
+            name: this.displayName,
+            hasPassword: this.hasPassword,
+            players: this.slotAssignments.size,
+            maxPlayers: exports.ROOM_SLOT_ORDER.length,
+            phase: this.phase,
+            slots: exports.ROOM_SLOT_ORDER.map((slotId) => {
+                const playerId = this.slotAssignments.get(slotId) ?? null;
+                const player = playerId
+                    ? players.find((candidate) => candidate.id === playerId) ?? null
+                    : null;
+                return {
+                    slotId,
+                    playerId,
+                    playerName: player?.name ?? null,
+                    connected: player?.connectionStatus === 'connected',
+                    isHost: playerId !== null && playerId === this.hostPlayerId,
+                };
+            }),
+        };
+    }
     // ───────────────────────────────────────────────────────────────────────────
     // 生命周期状态机
     // ───────────────────────────────────────────────────────────────────────────
@@ -169,11 +188,32 @@ class Room {
      * 应由 SocketGateway 在所有校验通过后调用。
      */
     igniteWithLevel(waves, startingGold) {
+        this.pendingLevelId = null;
         this.phase = 'playing';
         this.engine.ignite(waves, startingGold);
     }
+    setPendingLevelSelection(levelId) {
+        this.pendingLevelId = levelId;
+    }
+    consumePendingLevelSelection() {
+        const nextLevelId = this.pendingLevelId;
+        this.pendingLevelId = null;
+        return nextLevelId;
+    }
+    destroy() {
+        this.pendingLevelId = null;
+        if (this.countdownTimer) {
+            clearTimeout(this.countdownTimer);
+            this.countdownTimer = null;
+        }
+    }
     syncEngineRoomRules() {
         const activeSlots = this.getActiveSlots();
+        const playerSlotAssignments = exports.ROOM_SLOT_ORDER.flatMap((slotId) => {
+            const playerId = this.slotAssignments.get(slotId);
+            return playerId ? [{ playerId, slotId }] : [];
+        });
+        this.engine.syncPlayerSlots(playerSlotAssignments);
         this.engine.setActiveSlots(activeSlots);
         this.engine.setPlayerCount(this.getPlayerCount());
     }
@@ -194,24 +234,28 @@ class RoomManager {
     constructor(config) {
         this.config = config;
     }
-    createRoom(roomId) {
+    createRoom(roomId, options) {
         if (this.rooms.has(roomId)) {
             throw new Error(`Room ${roomId} already exists`);
         }
-        const room = new Room(roomId, this.config);
+        const room = new Room(roomId, this.config, options);
         this.rooms.set(roomId, room);
         return room;
     }
     getRoom(roomId) {
         return this.rooms.get(roomId) ?? null;
     }
-    getOrCreateRoom(roomId) {
-        return this.getRoom(roomId) ?? this.createRoom(roomId);
+    getOrCreateRoom(roomId, options) {
+        return this.getRoom(roomId) ?? this.createRoom(roomId, options);
     }
-    listRooms() {
-        return [...this.rooms.values()];
+    listRooms(options) {
+        const includeEmpty = options?.includeEmpty ?? true;
+        const rooms = [...this.rooms.values()];
+        return includeEmpty ? rooms : rooms.filter((room) => !room.isEmpty());
     }
     removeRoom(roomId) {
+        const room = this.rooms.get(roomId);
+        room?.destroy();
         return this.rooms.delete(roomId);
     }
     removeEmptyRooms() {

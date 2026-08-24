@@ -6,7 +6,7 @@ import type { ReplayRecorder } from '../core/replay-recorder'
 import type { ServerConfig } from '../config/server-config'
 import type { ReplaySummary } from '../domain/competition'
 import { authenticateGatewayToken, extractHttpToken } from './gateway-auth'
-import type { SupabaseCompetitionStore } from '../data/supabase-competition-store'
+import type { CompetitionStore } from '../data/competition-store'
 
 function resolveAgentPrincipal(request: Request, config: ServerConfig) {
   const principal = authenticateGatewayToken(config, extractHttpToken(request))
@@ -30,7 +30,7 @@ export function createAgentApiRouter(
   projectedTickStream: ProjectedTickStream,
   config: ServerConfig,
   replayRecorder: ReplayRecorder,
-  competitionStore: SupabaseCompetitionStore | null,
+  competitionStore: CompetitionStore | null,
   telemetry: PerformanceTelemetry,
 ) {
   const router = Router()
@@ -61,7 +61,8 @@ export function createAgentApiRouter(
 
     writeSseEvent(telemetry, 'agent.sse.TICK_UPDATE.full', response, 'TICK_UPDATE', {
       mode: 'full',
-      gameState: projectedTickStream.getCurrentFullState(),
+      gameState: projectedTickStream.getCurrentFullState({ initializeBroadcastBaseline: true }),
+      sentAt: Date.now(),
     })
 
     const unsubscribe = projectedTickStream.subscribeBroadcast((event) => {
@@ -69,9 +70,27 @@ export function createAgentApiRouter(
         return
       }
 
+      if (event.shouldFullSnapshot) {
+        writeSseEvent(telemetry, 'agent.sse.TICK_UPDATE.checkpoint', response, 'TICK_UPDATE', {
+          mode: 'checkpoint',
+          patch: event.broadcast.checkpoint,
+          sentAt: Date.now(),
+        })
+
+        if (Object.keys(event.broadcast.uiUpdate).length > 0) {
+          writeSseEvent(telemetry, 'agent.sse.UI_STATE_UPDATE', response, 'UI_STATE_UPDATE', event.broadcast.uiUpdate)
+        }
+
+        if (event.broadcast.noticeUpdate) {
+          writeSseEvent(telemetry, 'agent.sse.NOTICE_UPDATE', response, 'NOTICE_UPDATE', event.broadcast.noticeUpdate)
+        }
+        return
+      }
+
       writeSseEvent(telemetry, 'agent.sse.TICK_UPDATE.patch', response, 'TICK_UPDATE', {
         mode: 'patch',
         patch: event.broadcast.patch,
+        sentAt: Date.now(),
       })
 
       if (Object.keys(event.broadcast.uiUpdate).length > 0) {

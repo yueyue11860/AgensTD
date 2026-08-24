@@ -78,6 +78,7 @@ function getWaveStateForTick(tick, timeline, schedule, nextSpawnScheduleIndex) {
             startedAtTick: 0,
             endsAtTick: null,
             remainingSpawns: 0,
+            prepCountdownSec: 0,
         };
     }
     let remainingSpawns = 0;
@@ -92,5 +93,6 @@ function getWaveStateForTick(tick, timeline, schedule, nextSpawnScheduleIndex) {
         startedAtTick: activeWave.startTick,
         endsAtTick: activeWave.endTick,
         remainingSpawns,
+        prepCountdownSec: 0,
     };
 }

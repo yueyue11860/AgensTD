@@ -5,7 +5,7 @@ import type { ProjectedTickStream } from './projected-tick-stream'
 import type { ServerConfig } from '../config/server-config'
 import type { MatchReplay, ReplayActionRecord, ReplayFrame } from '../domain/replay'
 import type { QueuedAction } from '../domain/actions'
-import type { SupabaseCompetitionStore } from '../data/supabase-competition-store'
+import type { CompetitionStore } from '../data/competition-store'
 
 export class ReplayRecorder {
   private replay: MatchReplay | null = null
@@ -14,23 +14,30 @@ export class ReplayRecorder {
 
   private hasLoggedPersistenceFailure = false
 
+  private lastObservedStatus: 'waiting' | 'running' | 'finished' | null = null
+
   constructor(
     engine: GameEngine,
     projectedTickStream: ProjectedTickStream,
     private readonly config: ServerConfig,
-    private readonly store: SupabaseCompetitionStore | null = null,
+    private readonly store: CompetitionStore | null = null,
     private readonly telemetry: PerformanceTelemetry | null = null,
     private readonly maxFrames: number = config.replayMaxFrames,
     private readonly maxActions: number = config.replayMaxActions,
   ) {
-    projectedTickStream.subscribeTick(({ state, fullState }) => {
+    projectedTickStream.subscribeBroadcast(({ state, fullState }) => {
       this.recordFrame({
         tick: state.tick,
         recordedAt: new Date().toISOString(),
         gameState: fullState,
       })
+    })
 
-      if (state.tick > 0 && state.tick % this.config.persistenceFlushEveryTicks === 0) {
+    engine.onTick((state) => {
+      const justFinished = state.status === 'finished' && this.lastObservedStatus !== 'finished'
+      this.lastObservedStatus = state.status
+
+      if ((state.tick > 0 && state.tick % this.config.persistenceFlushEveryTicks === 0) || justFinished) {
         const flushPromise = this.telemetry
           ? this.telemetry.measureAsync('replay.flush', async () => this.flush(state))
           : this.flush(state)
@@ -39,7 +46,7 @@ export class ReplayRecorder {
           this.logPersistenceFailure('periodic flush', error)
         })
       }
-    })
+    }, { label: 'replay-persistence' })
 
     engine.onActionQueued((queuedAction) => {
       this.recordAction({

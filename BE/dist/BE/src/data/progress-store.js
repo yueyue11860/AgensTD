@@ -3,13 +3,17 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ProgressStore = void 0;
 const progress_1 = require("../domain/progress");
 /**
- * ProgressStore — 内存 Mock 实现
+ * ProgressStore — 内存缓存 + 可替换持久化
  *
- * 生产部署时可直接换成 Supabase / Prisma 等持久化方案，
- * 只需实现相同的公开方法签名即可。
+ * 内存缓存用于高频读取，写入时同步到已配置的持久化实现。
  */
 class ProgressStore {
     store = new Map();
+    userStore = null;
+    /** 注入用户存储（在 server.ts 中调用） */
+    setUserStore(userStore) {
+        this.userStore = userStore;
+    }
     // ──────────────────────────────────────────────────────────────────────────
     // 基础 CRUD
     // ──────────────────────────────────────────────────────────────────────────
@@ -56,6 +60,11 @@ class ProgressStore {
         if (level === progress_1.MAX_STANDARD_LEVEL) {
             progress.level5ClearCount++;
         }
+        // 异步持久化（不阻塞返回）
+        if (this.userStore?.isEnabled()) {
+            void this.userStore.recordLevelClear(playerId, level, playerType, progress_1.MAX_STANDARD_LEVEL)
+                .catch((err) => console.error('Progress persistence sync failed:', err));
+        }
         return progress;
     }
     // ──────────────────────────────────────────────────────────────────────────
@@ -65,6 +74,7 @@ class ProgressStore {
      * 返回 Level 5 通关次数 > 0 的玩家，按 clearCount 降序。
      */
     getLevel5Leaderboard() {
+        // 同步读取使用本地缓存；远端数据由异步版本读取。
         return Array.from(this.store.values())
             .filter(p => p.level5ClearCount > 0)
             .sort((a, b) => b.level5ClearCount - a.level5ClearCount)
@@ -74,6 +84,32 @@ class ProgressStore {
             playerType: (p.playerType === 'AGENT' ? '硅基' : '碳基'),
             clearCount: p.level5ClearCount,
         }));
+    }
+    /** 异步版排行榜，优先使用持久化实现。 */
+    async getLevel5LeaderboardAsync() {
+        if (this.userStore?.isEnabled()) {
+            try {
+                return await this.userStore.getLevel5Leaderboard();
+            }
+            catch {
+                // fallback to memory
+            }
+        }
+        return this.getLevel5Leaderboard();
+    }
+    /** 从持久化实现加载玩家进度到内存缓存。 */
+    async loadProgressFromDb(playerId, playerType) {
+        if (this.userStore?.isEnabled()) {
+            try {
+                const progress = await this.userStore.getOrCreateProgress(playerId, playerType);
+                this.store.set(playerId, progress);
+                return progress;
+            }
+            catch {
+                // fallback
+            }
+        }
+        return this.getOrCreate(playerId, playerType);
     }
 }
 exports.ProgressStore = ProgressStore;
