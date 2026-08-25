@@ -447,13 +447,13 @@ function PlayerCard({
   actionLabel,
   onClick,
 }: {
-  side: 'HUMAN' | 'AGENT'
+  side: 'PVE' | 'PVP'
   title: string
   description: string
   actionLabel: string
   onClick: () => void
 }) {
-  const isHuman = side === 'HUMAN'
+  const isPve = side === 'PVE'
 
   return (
     <div
@@ -465,17 +465,17 @@ function PlayerCard({
       }}
       className={cx(
         'absolute inset-0 overflow-hidden outline-none',
-        isHuman ? 'split-side-human' : 'split-side-agent',
+        isPve ? 'split-side-human' : 'split-side-agent',
       )}
     >
       <div className="split-side-fx" aria-hidden="true">
-        {!isHuman && <div className="split-chip-fx" />}
+        {!isPve && <div className="split-chip-fx" />}
       </div>
 
       <div
         className={cx(
           'relative z-10 flex h-full flex-col justify-center gap-3',
-          isHuman
+          isPve
             ? 'items-start pl-[clamp(2.5rem,7vw,6rem)] pr-[32%] text-left'
             : 'items-end pr-[clamp(2.5rem,7vw,6rem)] pl-[32%] text-right',
         )}
@@ -483,23 +483,27 @@ function PlayerCard({
         <span
           className={cx(
             'text-[0.62rem] font-bold uppercase tracking-[0.6em]',
-            isHuman ? 'text-cyan-400/65' : 'text-red-400/65',
+            isPve ? 'text-cyan-400/65' : 'text-red-400/65',
           )}
         >
-          {isHuman ? 'CARBON CORE ///' : '/// SILICON STACK'}
+          {isPve ? 'CO-OP DEFENSE ///' : '/// REAL-TIME DUEL'}
         </span>
 
-        <h2 className={cx('split-side-title', isHuman ? 'split-title-cyan' : 'split-title-red')}>
-          {isHuman ? (<>HUMAN<br />PLAYER</>) : (<>AGENT<br />INTERFACE</>)}
+        <h2 className={cx('split-side-title', isPve ? 'split-title-cyan' : 'split-title-red')}>
+          {isPve ? (<>西游<br />守关</>) : (<>斗法<br />竞技</>)}
         </h2>
 
         <p className="mt-2 max-w-[26rem] text-[0.9rem] leading-[1.85] text-slate-300/80">
           {description}
         </p>
 
-        <span className={cx('split-side-cta', isHuman ? 'split-cta-cyan' : 'split-cta-red')}>
+        <button
+          type="button"
+          className={cx('split-side-cta', isPve ? 'split-cta-cyan' : 'split-cta-red')}
+          onClick={(event) => { event.stopPropagation(); onClick() }}
+        >
           {actionLabel}
-        </span>
+        </button>
       </div>
     </div>
   )
@@ -959,10 +963,10 @@ export function TowerDefenseFrontendPage() {
 
         <section className="absolute inset-0 split-container">
           <PlayerCard
-            side="HUMAN"
-            title="HUMAN PLAYER"
-            description=""
-            actionLabel="ENTER LOBBY ›"
+            side="PVE"
+            title="西游守关"
+            description="四人合作守护循环战场，挑战西游副本的统一二十波关卡。"
+            actionLabel="进入 PVE 大厅 ›"
             onClick={() => {
               // TODO: 测试中暂时跳过登录检查，恢复时取消注释下方代码
               // if (!authUser) {
@@ -974,11 +978,11 @@ export function TowerDefenseFrontendPage() {
           />
 
           <PlayerCard
-            side="AGENT"
-            title="AGENT INTERFACE"
-            description=""
-            actionLabel="‹ OPEN INTERFACE"
-            onClick={() => navigateToView('SKILL_DOC')}
+            side="PVP"
+            title="斗法竞技"
+            description="真人 1v1 镜像斗法，通过真经制造压力；排位采用标准化竞技构筑。"
+            actionLabel="‹ 进入 PVP 中心"
+            onClick={() => navigate('/pvp')}
           />
 
         </section>

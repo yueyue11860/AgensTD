@@ -10,11 +10,15 @@ import { PerformanceTelemetry } from './core/performance-telemetry'
 import { ProjectedTickStream } from './core/projected-tick-stream'
 import { ReplayRecorder } from './core/replay-recorder'
 import { SupabaseCompetitionStore } from './data/supabase-competition-store'
+import { MemoryPvpStore } from './data/memory-pvp-store'
+import { SupabasePvpStore } from './data/supabase-pvp-store'
 import { ActionRateLimiter } from './network/action-rate-limiter'
 import { createAgentApiRouter } from './network/agent-api'
 import { createRestApiRouter } from './network/rest-api'
+import { createPvpRestApiRouter } from './network/pvp-rest-api'
 import { createOAuthRouter } from './network/oauth-routes'
 import { SocketGateway } from './network/socket-gateway'
+import { PvpPlatformService } from './pvp-platform-v1'
 import { ProgressStore } from './data/progress-store'
 import { SupabaseUserStore } from './data/supabase-user-store'
 import { PlayerAccountService } from './account-v1'
@@ -87,6 +91,17 @@ const actionLimiter = new ActionRateLimiter(config.actionRateLimitWindowMs, conf
 const progressStore = new ProgressStore()
 const userStore = new SupabaseUserStore(config)
 progressStore.setUserStore(userStore)
+// 本地默认内存，避免仅因 .env 中存在 Supabase 凭据就误写远端。
+// 正式持久化必须显式设置 PVP_STORE=supabase；凭据缺失时直接拒绝启动，不静默丢战绩。
+const pvpStoreMode = (process.env.PVP_STORE ?? 'memory').trim().toLowerCase()
+if (pvpStoreMode !== 'memory' && pvpStoreMode !== 'supabase') {
+  throw new Error(`Unsupported PVP_STORE=${pvpStoreMode}; expected memory or supabase`)
+}
+if (pvpStoreMode === 'supabase' && (!config.supabaseUrl || !config.supabaseServiceRoleKey)) {
+  throw new Error('PVP_STORE=supabase requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY')
+}
+const pvpStore = pvpStoreMode === 'supabase' ? new SupabasePvpStore(config) : new MemoryPvpStore()
+const pvpPlatform = new PvpPlatformService({ store: pvpStore })
 const gateway = new SocketGateway(
   httpServer,
   roomManager,
@@ -98,6 +113,7 @@ const gateway = new SocketGateway(
 )
 
 app.use('/api', createOAuthRouter(config, userStore))
+app.use('/api/pvp', createPvpRestApiRouter(config, pvpPlatform))
 app.use('/api', createRestApiRouter(
   engine,
   roomManager,
@@ -125,6 +141,7 @@ httpServer.listen(config.port, () => {
 })
 
 const shutdown = () => {
+  pvpPlatform.shutdown()
   void replayRecorder.flushLatest()
     .catch((error: unknown) => {
       const details = error instanceof Error ? error.message : String(error)
