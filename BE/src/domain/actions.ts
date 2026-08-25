@@ -12,6 +12,7 @@ import type {
   SwapStoragePiecesAction,
   SetGeneralFixedAction,
   MoveFixedGeneralAction,
+  UseActiveItemAction,
 } from '../../../shared/contracts/game'
 
 export type {
@@ -27,12 +28,15 @@ export type {
   SwapStoragePiecesAction,
   SetGeneralFixedAction,
   MoveFixedGeneralAction,
+  UseActiveItemAction,
 } from '../../../shared/contracts/game'
 
 export type ClientAction = GameAction
 
 export interface QueuedAction {
   id: string
+  /** 客户端稳定幂等键；旧客户端可为 null。 */
+  clientRequestId: string | null
   receivedAt: number
   player: PlayerIdentity
   action: ClientAction
@@ -80,6 +84,20 @@ export function parseClientAction(payload: unknown): ClientAction | null {
             ...(typeof payload.expectedTrayRevision === 'number'
               ? { expectedTrayRevision: payload.expectedTrayRevision }
               : {}),
+          }
+        : null
+    case 'USE_ACTIVE_ITEM':
+      return (payload.slotIndex === 0 || payload.slotIndex === 1)
+        && typeof payload.itemId === 'string'
+        && isObject(payload.target)
+        && typeof payload.target.kind === 'string'
+        && Number.isInteger(payload.expectedItemRuntimeVersion)
+        ? {
+            action: 'USE_ACTIVE_ITEM',
+            slotIndex: payload.slotIndex,
+            itemId: payload.itemId,
+            target: payload.target as UseActiveItemAction['target'],
+            expectedItemRuntimeVersion: payload.expectedItemRuntimeVersion as number,
           }
         : null
     case 'DEPLOY_TRAY_PIECE':

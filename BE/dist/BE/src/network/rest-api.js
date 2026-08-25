@@ -7,6 +7,13 @@ const state_projection_1 = require("../core/state-projection");
 const action_submission_1 = require("./action-submission");
 const gateway_auth_1 = require("./gateway-auth");
 const unlock_logic_1 = require("../core/unlock-logic");
+const types_1 = require("../account-v1/types");
+const player_account_adapters_1 = require("../data/player-account-adapters");
+const types_2 = require("../item-v1/types");
+const account_1 = require("../item-v1/account");
+const catalog_1 = require("../weapon-v1/catalog");
+const account_2 = require("../weapon-v1/account");
+const types_3 = require("../weapon-v1/types");
 function resolvePrincipal(request, config) {
     return (0, gateway_auth_1.authenticateGatewayToken)(config, (0, gateway_auth_1.extractHttpToken)(request));
 }
@@ -25,7 +32,88 @@ function logCompetitionStoreFailure(operation, error) {
     console.error(`Competition store ${operation} failed; falling back to memory: ${details}`);
 }
 function isRecord(value) {
-    return typeof value === 'object' && value !== null;
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function publicAccount(account) {
+    const { idempotencyByRequestId: _idempotencyByRequestId, buildSnapshotsByMatchId: _buildSnapshotsByMatchId, ...safe } = account;
+    return safe;
+}
+class RequestPayloadError extends Error {
+}
+function requireString(payload, field) {
+    const value = payload[field];
+    if (typeof value !== 'string' || value.length === 0)
+        throw new RequestPayloadError(`${field} is required`);
+    return value;
+}
+function requireVersion(payload, field) {
+    const value = payload[field];
+    if (!Number.isSafeInteger(value) || value < 0)
+        throw new RequestPayloadError(`${field} must be a non-negative integer`);
+    return value;
+}
+function asNullableStringSlots(value, length, field) {
+    if (!Array.isArray(value) || value.length !== length || value.some(slot => slot !== null && typeof slot !== 'string')) {
+        throw new RequestPayloadError(`${field} must contain exactly ${length} string-or-null slots`);
+    }
+    return [...value];
+}
+function stableStringify(value) {
+    if (value === null || typeof value !== 'object')
+        return JSON.stringify(value);
+    if (Array.isArray(value))
+        return `[${value.map(stableStringify).join(',')}]`;
+    return `{${Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => `${JSON.stringify(key)}:${stableStringify(child)}`)
+        .join(',')}}`;
+}
+function readStoredSubsystemReplay(account, requestId, operation, expectedAccountVersion, context) {
+    const stored = account.idempotencyByRequestId[requestId];
+    if (!stored)
+        return null;
+    const result = isRecord(stored.result) ? stored.result : null;
+    const storedContext = result && isRecord(result.context) ? result.context : null;
+    if (stored.operation !== operation
+        || !result
+        || result.expectedAccountVersion !== expectedAccountVersion
+        || !storedContext
+        || stableStringify(storedContext) !== stableStringify(context)) {
+        throw new types_1.AccountDomainError('REQUEST_ID_CONFLICT', 'requestId was already used with a different payload');
+    }
+    return result;
+}
+function sendAccountError(response, error) {
+    if (error instanceof types_1.AccountDomainError) {
+        const status = error.code === 'STALE_ACCOUNT_VERSION'
+            || error.code === 'REQUEST_ID_CONFLICT'
+            || error.code === 'ENTITLEMENT_ALREADY_CONSUMED'
+            || error.code === 'SHOP_REWARD_CONFLICT'
+            ? 409
+            : error.code === 'OFFER_NOT_FOUND' || error.code === 'ACCOUNT_NOT_FOUND'
+                ? 404
+                : error.code === 'ACCOUNT_WRITE_CONFLICT'
+                    ? 503
+                    : 422;
+        response.status(status).json({ ok: false, code: error.code, message: error.message });
+        return;
+    }
+    if (error instanceof types_3.WeaponDomainError) {
+        const status = error.code.startsWith('STALE_') || error.code === 'REQUEST_ID_CONFLICT'
+            ? 409
+            : error.code === 'WEAPON_NOT_FOUND'
+                ? 404
+                : 422;
+        response.status(status).json({ ok: false, code: error.code, message: error.message });
+        return;
+    }
+    if (error instanceof RequestPayloadError) {
+        response.status(400).json({ ok: false, code: 'BAD_PAYLOAD', message: error.message });
+        return;
+    }
+    const details = error instanceof Error ? error.message : String(error);
+    console.error(`Account REST operation failed: ${details}`);
+    response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE', message: 'Account service is temporarily unavailable' });
 }
 function normalizeRoomStatus(room) {
     if (room.phase === 'playing') {
@@ -57,8 +145,290 @@ function generateRoomId(roomManager) {
     }
     throw new Error('Failed to allocate room id');
 }
-function createRestApiRouter(engine, roomManager, config, limiter, replayRecorder, competitionStore, progressStore) {
+function createRestApiRouter(engine, roomManager, config, limiter, replayRecorder, competitionStore, progressStore, accountService) {
     const router = (0, express_1.Router)();
+    // ── 局外账户 / 道具 / 武器 ───────────────────────────────────────────
+    router.get('/account', async (request, response) => {
+        const principal = resolvePrincipal(request, config);
+        if (!principal)
+            return rejectUnauthorized(response);
+        if (!accountService)
+            return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' });
+        try {
+            const account = await accountService.getOrCreate(principal.playerId);
+            response.json({ ok: true, account: publicAccount(account), catalogs: player_account_adapters_1.ACCOUNT_CATALOGS });
+        }
+        catch (error) {
+            sendAccountError(response, error);
+        }
+    });
+    router.put('/loadouts/items', async (request, response) => {
+        const principal = resolvePrincipal(request, config);
+        if (!principal)
+            return rejectUnauthorized(response);
+        if (!accountService)
+            return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' });
+        try {
+            const payload = isRecord(request.body) ? request.body : {};
+            const loadout = isRecord(payload.loadout) ? payload.loadout : payload;
+            const requestId = requireString(payload, 'requestId');
+            const expectedAccountVersion = requireVersion(payload, 'expectedAccountVersion');
+            const submittedLoadoutVersion = payload.expectedLoadoutVersion === undefined
+                ? null
+                : requireVersion(payload, 'expectedLoadoutVersion');
+            const expectedCatalogVersion = payload.expectedCatalogVersion === undefined
+                ? types_2.ITEM_CATALOG_VERSION
+                : requireVersion(payload, 'expectedCatalogVersion');
+            if (expectedCatalogVersion !== types_2.ITEM_CATALOG_VERSION) {
+                return response.status(409).json({ ok: false, code: 'ITEM_CATALOG_VERSION_MISMATCH' });
+            }
+            const activeSlots = asNullableStringSlots(loadout.activeSlots, 2, 'activeSlots');
+            const passiveSlots = asNullableStringSlots(loadout.passiveSlots, 6, 'passiveSlots');
+            const current = await accountService.getOrCreate(principal.playerId);
+            const storedReplay = current.idempotencyByRequestId[requestId];
+            const storedReplayResult = storedReplay && isRecord(storedReplay.result) ? storedReplay.result : null;
+            const storedReplayContext = storedReplayResult && isRecord(storedReplayResult.context) ? storedReplayResult.context : null;
+            // V1 前端可省略道具子版本；服务端仍以外层账户 CAS 防止并发覆盖。
+            const expectedLoadoutVersion = submittedLoadoutVersion
+                ?? (storedReplayContext && typeof storedReplayContext.expectedLoadoutVersion === 'number'
+                    ? storedReplayContext.expectedLoadoutVersion
+                    : current.item.loadout.version);
+            if (current.idempotencyByRequestId[requestId]) {
+                readStoredSubsystemReplay(current, requestId, 'save_item_payload', expectedAccountVersion, {
+                    kind: 'item_loadout', expectedLoadoutVersion, activeSlots, passiveSlots,
+                });
+                return response.json({ ok: true, duplicate: true, account: publicAccount(current) });
+            }
+            if (current.version !== expectedAccountVersion) {
+                throw new types_1.AccountDomainError('STALE_ACCOUNT_VERSION', `expected ${expectedAccountVersion}, got ${current.version}`);
+            }
+            if (current.item.loadout.version !== expectedLoadoutVersion) {
+                return response.status(409).json({ ok: false, code: 'ITEM_ACCOUNT_VERSION_MISMATCH', message: 'stale item loadout version' });
+            }
+            const itemAccount = {
+                playerId: principal.playerId,
+                version: current.item.version,
+                unlockedActiveItemIds: [...current.item.unlockedActiveItemIds],
+                unlockedPassiveItemIds: [...current.item.unlockedPassiveItemIds],
+                loadout: structuredClone(current.item.loadout),
+            };
+            const validationError = (0, account_1.validateItemLoadout)(itemAccount, activeSlots, passiveSlots);
+            if (validationError)
+                return response.status(422).json({ ok: false, code: validationError });
+            const now = new Date().toISOString();
+            const saved = await accountService.saveItemPayload({
+                requestId,
+                playerId: principal.playerId,
+                expectedAccountVersion,
+                idempotencyContext: {
+                    kind: 'item_loadout',
+                    expectedLoadoutVersion,
+                    activeSlots: [...activeSlots],
+                    passiveSlots: [...passiveSlots],
+                },
+                payload: {
+                    ...structuredClone(current.item),
+                    version: current.item.version + 1,
+                    loadout: {
+                        activeSlots: [...activeSlots],
+                        passiveSlots: [...passiveSlots],
+                        version: expectedLoadoutVersion + 1,
+                        updatedAt: now,
+                    },
+                },
+            });
+            response.json({ ok: true, duplicate: false, account: publicAccount(saved) });
+        }
+        catch (error) {
+            sendAccountError(response, error);
+        }
+    });
+    router.put('/loadouts/weapons/:generalId', async (request, response) => {
+        const principal = resolvePrincipal(request, config);
+        if (!principal)
+            return rejectUnauthorized(response);
+        if (!accountService)
+            return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' });
+        try {
+            const payload = isRecord(request.body) ? request.body : {};
+            const requestId = requireString(payload, 'requestId');
+            const expectedAccountVersion = requireVersion(payload, 'expectedAccountVersion');
+            const expectedLoadoutVersion = requireVersion(payload, 'expectedLoadoutVersion');
+            const slots = asNullableStringSlots(payload.slots, 2, 'slots');
+            const generalId = request.params.generalId;
+            const current = await accountService.getOrCreate(principal.playerId);
+            if (current.idempotencyByRequestId[requestId]) {
+                readStoredSubsystemReplay(current, requestId, 'save_weapon_payload', expectedAccountVersion, {
+                    kind: 'weapon_loadout', generalId, expectedLoadoutVersion, slots,
+                });
+                return response.json({ ok: true, duplicate: true, account: publicAccount(current) });
+            }
+            if (current.version !== expectedAccountVersion) {
+                throw new types_1.AccountDomainError('STALE_ACCOUNT_VERSION', `expected ${expectedAccountVersion}, got ${current.version}`);
+            }
+            const oldLoadout = current.weapon.loadoutsByGeneralId[generalId];
+            if ((oldLoadout?.version ?? 0) !== expectedLoadoutVersion) {
+                throw new types_3.WeaponDomainError('STALE_WEAPON_LOADOUT_VERSION', 'stale weapon loadout version');
+            }
+            const weaponAccount = {
+                playerId: principal.playerId,
+                version: current.weapon.version,
+                fragmentBalances: structuredClone(current.weapon.fragmentBalances),
+                unlockedWeaponIds: [...current.weapon.unlockedWeaponIds],
+                loadoutsByGeneralId: structuredClone(current.weapon.loadoutsByGeneralId),
+            };
+            (0, account_2.validateWeaponLoadout)(weaponAccount, generalId, slots);
+            const nextWeapon = structuredClone(current.weapon);
+            nextWeapon.version += 1;
+            nextWeapon.loadoutsByGeneralId[generalId] = {
+                slots,
+                version: expectedLoadoutVersion + 1,
+                updatedAt: new Date().toISOString(),
+            };
+            const saved = await accountService.saveWeaponPayload({
+                requestId,
+                playerId: principal.playerId,
+                expectedAccountVersion,
+                payload: nextWeapon,
+                idempotencyContext: { kind: 'weapon_loadout', generalId, expectedLoadoutVersion, slots },
+            });
+            response.json({ ok: true, duplicate: false, account: publicAccount(saved) });
+        }
+        catch (error) {
+            sendAccountError(response, error);
+        }
+    });
+    router.post('/weapons/:weaponId/craft', async (request, response) => {
+        const principal = resolvePrincipal(request, config);
+        if (!principal)
+            return rejectUnauthorized(response);
+        if (!accountService)
+            return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' });
+        try {
+            const payload = isRecord(request.body) ? request.body : {};
+            const requestId = requireString(payload, 'requestId');
+            const expectedAccountVersion = requireVersion(payload, 'expectedAccountVersion');
+            const weaponId = request.params.weaponId;
+            const definition = (0, catalog_1.getWeaponDefinition)(weaponId);
+            if (!definition)
+                throw new types_3.WeaponDomainError('WEAPON_NOT_FOUND', `Unknown weapon ${weaponId}`);
+            const current = await accountService.getOrCreate(principal.playerId);
+            if (current.idempotencyByRequestId[requestId]) {
+                const replay = readStoredSubsystemReplay(current, requestId, 'save_weapon_payload', expectedAccountVersion, {
+                    kind: 'craft_weapon', weaponId,
+                });
+                const storedWeapon = replay && isRecord(replay.payload) ? replay.payload : null;
+                const storedBalances = storedWeapon && isRecord(storedWeapon.fragmentBalances) ? storedWeapon.fragmentBalances : null;
+                return response.json({
+                    ok: true,
+                    duplicate: true,
+                    craft: {
+                        weaponId,
+                        spentFragments: definition.fragmentRequirement,
+                        fragmentBalance: storedBalances && typeof storedBalances[weaponId] === 'number'
+                            ? storedBalances[weaponId]
+                            : current.weapon.fragmentBalances[weaponId] ?? 0,
+                    },
+                    account: publicAccount(current),
+                });
+            }
+            if (current.version !== expectedAccountVersion) {
+                throw new types_1.AccountDomainError('STALE_ACCOUNT_VERSION', `expected ${expectedAccountVersion}, got ${current.version}`);
+            }
+            if (current.weapon.unlockedWeaponIds.includes(weaponId)) {
+                throw new types_3.WeaponDomainError('WEAPON_ALREADY_UNLOCKED', `${weaponId} is already unlocked`);
+            }
+            const balance = current.weapon.fragmentBalances[weaponId] ?? 0;
+            if (balance < definition.fragmentRequirement) {
+                throw new types_3.WeaponDomainError('INSUFFICIENT_FRAGMENTS', `${weaponId} requires ${definition.fragmentRequirement} fragments`);
+            }
+            const nextWeapon = structuredClone(current.weapon);
+            nextWeapon.version += 1;
+            nextWeapon.fragmentBalances[weaponId] = balance - definition.fragmentRequirement;
+            nextWeapon.unlockedWeaponIds = [...nextWeapon.unlockedWeaponIds, weaponId].sort();
+            const saved = await accountService.saveWeaponPayload({
+                requestId,
+                playerId: principal.playerId,
+                expectedAccountVersion,
+                payload: nextWeapon,
+                idempotencyContext: { kind: 'craft_weapon', weaponId },
+            });
+            response.json({
+                ok: true,
+                duplicate: false,
+                craft: {
+                    weaponId,
+                    spentFragments: definition.fragmentRequirement,
+                    fragmentBalance: nextWeapon.fragmentBalances[weaponId],
+                },
+                account: publicAccount(saved),
+            });
+        }
+        catch (error) {
+            sendAccountError(response, error);
+        }
+    });
+    router.post('/shop/offers', async (request, response) => {
+        const principal = resolvePrincipal(request, config);
+        if (!principal)
+            return rejectUnauthorized(response);
+        if (!accountService)
+            return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' });
+        try {
+            const payload = isRecord(request.body) ? request.body : {};
+            const entitlementId = requireString(payload, 'entitlementId');
+            const recentActiveGeneralIds = Array.isArray(payload.recentActiveGeneralIds)
+                && payload.recentActiveGeneralIds.every(value => typeof value === 'string')
+                ? payload.recentActiveGeneralIds
+                : [];
+            const offerSet = await accountService.generateFixedOffers({ playerId: principal.playerId, entitlementId, recentActiveGeneralIds });
+            response.json({ ok: true, offerSet, offers: offerSet.offers });
+        }
+        catch (error) {
+            sendAccountError(response, error);
+        }
+    });
+    router.post('/shop/purchase', async (request, response) => {
+        const principal = resolvePrincipal(request, config);
+        if (!principal)
+            return rejectUnauthorized(response);
+        if (!accountService)
+            return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' });
+        try {
+            const payload = isRecord(request.body) ? request.body : {};
+            const purchaseInput = {
+                requestId: requireString(payload, 'requestId'),
+                playerId: principal.playerId,
+                entitlementId: requireString(payload, 'entitlementId'),
+                offerId: requireString(payload, 'offerId'),
+                expectedAccountVersion: requireVersion(payload, 'expectedAccountVersion'),
+            };
+            const before = await accountService.getOrCreate(principal.playerId);
+            const duplicate = Boolean(before.idempotencyByRequestId[purchaseInput.requestId]);
+            const receipt = await accountService.purchaseOffer(purchaseInput);
+            response.json({ ok: true, duplicate, receipt });
+        }
+        catch (error) {
+            sendAccountError(response, error);
+        }
+    });
+    router.get('/settlements/:matchId', async (request, response) => {
+        const principal = resolvePrincipal(request, config);
+        if (!principal)
+            return rejectUnauthorized(response);
+        if (!accountService)
+            return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' });
+        try {
+            const account = await accountService.getOrCreate(principal.playerId);
+            const settlement = account.settlementsById[`${request.params.matchId}:${principal.playerId}`];
+            if (!settlement)
+                return response.status(404).json({ ok: false, code: 'SETTLEMENT_NOT_FOUND' });
+            response.json({ ok: true, settlement });
+        }
+        catch (error) {
+            sendAccountError(response, error);
+        }
+    });
     router.get('/rooms', (request, response) => {
         const principal = resolvePrincipal(request, config);
         if (!principal) {
@@ -131,6 +501,7 @@ function createRestApiRouter(engine, roomManager, config, limiter, replayRecorde
             accepted: true,
             action: submission.action,
             rateLimitRemaining: submission.rateLimitRemaining,
+            duplicate: submission.duplicate,
             gameState: (0, state_projection_1.projectFrontendGameState)(engine.getStateSnapshot(), config),
         });
     });

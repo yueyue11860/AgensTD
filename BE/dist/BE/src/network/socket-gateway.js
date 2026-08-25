@@ -140,6 +140,10 @@ class SocketGateway {
         }
         const existingSlot = runtime.room.getPlayerSlot(identity.playerId);
         const existingConnections = runtime.playerConnections.get(identity.playerId) ?? 0;
+        if (!existingSlot && existingConnections === 0 && !runtime.room.isAcceptingNewPlayers()) {
+            this.emitEngineError(socket, 'MATCH_IN_PROGRESS', '对局构筑已锁定，只允许原玩家重连');
+            return;
+        }
         const assignedSlot = existingConnections > 0 || existingSlot
             ? existingSlot
             : runtime.room.joinPlayer(identity.playerId);
@@ -210,6 +214,7 @@ class SocketGateway {
             actionId: submission.actionId,
             serverTick: submission.serverTick,
             rateLimitRemaining: submission.rateLimitRemaining,
+            duplicate: submission.duplicate,
         };
         socket.emit('ACTION_ACCEPTED', acceptedPayload);
         socket.emit('action_accepted', acceptedPayload);
@@ -232,7 +237,7 @@ class SocketGateway {
             this.emitEngineError(socket, 'NOT_IN_ROOM', '请先发送 JOIN_ROOM 加入房间');
             return;
         }
-        this.beginRoomCountdown(joinedContext, socket);
+        void this.beginRoomCountdown(joinedContext, socket);
     }
     handleSelectLevel(socket, payload) {
         const joinedContext = this.getJoinedContext(socket);
@@ -272,7 +277,7 @@ class SocketGateway {
         if (currentPhase === 'lobby' || currentPhase === 'countdown') {
             joinedContext.room.setPendingLevelSelection(payload.levelId);
             if (currentPhase === 'lobby') {
-                this.beginRoomCountdown(joinedContext, socket);
+                void this.beginRoomCountdown(joinedContext, socket);
             }
             return;
         }
@@ -282,8 +287,8 @@ class SocketGateway {
         }
         this.activateRoomLevel(joinedContext.room, levelConfig);
     }
-    beginRoomCountdown(joinedContext, socket) {
-        const result = joinedContext.room.beginCountdown(joinedContext.identity.playerId, () => {
+    async beginRoomCountdown(joinedContext, socket) {
+        const result = await joinedContext.room.beginCountdown(joinedContext.identity.playerId, () => {
             this.handleCountdownCompleted(joinedContext.room);
         });
         if (result === 'forbidden') {
@@ -292,6 +297,10 @@ class SocketGateway {
         }
         if (result === 'wrong_phase') {
             this.emitEngineError(socket, 'WRONG_PHASE', '当前房间状态不允许启动该操作');
+            return false;
+        }
+        if (result === 'snapshot_failed') {
+            this.emitEngineError(socket, 'BUILD_SNAPSHOT_FAILED', '局外构筑锁定失败，对局未启动，请重试');
             return false;
         }
         const countdownPayload = {

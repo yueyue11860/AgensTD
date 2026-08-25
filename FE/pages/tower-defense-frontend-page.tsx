@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  Backpack,
   ChevronDown,
   ChevronLeft,
   ChevronUp,
@@ -13,6 +14,8 @@ import {
   Rocket,
   Search,
   ShieldPlus,
+  ShoppingBag,
+  Swords,
   Trophy,
   UserPlus,
   Wifi,
@@ -947,6 +950,12 @@ export function TowerDefenseFrontendPage() {
         <div className="split-home-logo">
           <h1 className="split-home-title">Myriad TD</h1>
         </div>
+
+        <nav className="home-meta-entry" aria-label="局外构筑">
+          <button type="button" onClick={() => navigate('/build')}><Backpack className="h-4 w-4" /><span>道具构筑</span></button>
+          <button type="button" onClick={() => navigate('/arsenal')}><Swords className="h-4 w-4" /><span>神将武库</span></button>
+          <button type="button" onClick={() => navigate('/shop')}><ShoppingBag className="h-4 w-4" /><span>金币商店</span></button>
+        </nav>
 
         <section className="absolute inset-0 split-container">
           <PlayerCard

@@ -45,6 +45,7 @@ function createFixedRoomLayout(width, height) {
     };
 }
 class Room {
+    accountRuntime;
     id;
     layout;
     engine;
@@ -57,8 +58,11 @@ class Room {
     hostPlayerId = null;
     // 倒计时定时器句柄（idle 时务必清除）
     countdownTimer = null;
+    countdownPreparing = false;
     pendingLevelId = null;
-    constructor(id, config, options) {
+    matchBuildSnapshots = new Map();
+    constructor(id, config, options, accountRuntime) {
+        this.accountRuntime = accountRuntime;
         this.id = id;
         this.displayName = options?.displayName?.trim() || id;
         this.hasPassword = options?.hasPassword ?? false;
@@ -81,6 +85,10 @@ class Room {
         const existingSlot = this.getPlayerSlot(playerId);
         if (existingSlot) {
             return existingSlot;
+        }
+        // 构筑在倒计时前已锁定；只允许旧玩家重连，不允许陌生玩家插入。
+        if (!this.isAcceptingNewPlayers()) {
+            return null;
         }
         const openSlot = exports.ROOM_SLOT_ORDER.find((slot) => !this.slotAssignments.has(slot));
         if (!openSlot) {
@@ -131,12 +139,18 @@ class Room {
         }
         return this.phase;
     }
+    isAcceptingNewPlayers() {
+        return this.getPhase() === 'lobby' && !this.countdownPreparing;
+    }
     getHostPlayerId() {
         return this.hostPlayerId;
     }
     /** 返回当前房间内全部玩家 ID 列表 */
     getConnectedPlayerIds() {
-        return [...this.slotAssignments.values()];
+        const connected = new Set(this.engine.getStateSnapshot().players
+            .filter(player => player.connectionStatus === 'connected')
+            .map(player => player.id));
+        return [...this.slotAssignments.values()].filter(playerId => connected.has(playerId));
     }
     getSummary() {
         const players = this.engine.getStateSnapshot().players;
@@ -171,15 +185,29 @@ class Room {
      * - `onComplete` 在 3 秒后自动触发，应由 SocketGateway 向全房广播状态变化
      * @returns 'ok' | 'wrong_phase' | 'forbidden'
      */
-    beginCountdown(requestorPlayerId, onComplete) {
+    async beginCountdown(requestorPlayerId, onComplete) {
         if (this.getPhase() !== 'lobby') {
             return 'wrong_phase';
         }
+        if (this.countdownPreparing)
+            return 'wrong_phase';
         if (requestorPlayerId !== this.hostPlayerId) {
             return 'forbidden';
         }
         if (this.phase === 'playing' && !this.engine.resetForRematch()) {
             return 'wrong_phase';
+        }
+        this.countdownPreparing = true;
+        try {
+            await this.lockMatchBuildSnapshots();
+        }
+        catch (error) {
+            const details = error instanceof Error ? error.message : String(error);
+            console.error(`Room ${this.id} failed to lock match build snapshots: ${details}`);
+            return 'snapshot_failed';
+        }
+        finally {
+            this.countdownPreparing = false;
         }
         this.phase = 'countdown';
         this.countdownTimer = setTimeout(() => {
@@ -198,6 +226,22 @@ class Room {
         this.phase = 'playing';
         this.engine.ignite(waves, startingGold, levelId);
     }
+    getMatchBuildSnapshot(playerId) {
+        const snapshot = this.matchBuildSnapshots.get(playerId);
+        return snapshot ? structuredClone(snapshot) : null;
+    }
+    /**
+     * 权威结算钩子。调用方必须传入已由战斗服务确认的碎片，
+     * Room 不会从 UI 或不完整快照猜测掉落。
+     */
+    async commitPlayerSettlement(input) {
+        if (!this.accountRuntime)
+            throw new Error('PLAYER_ACCOUNT_SERVICE_NOT_CONFIGURED');
+        return this.accountRuntime.accountService.settleMatch({
+            ...input,
+            matchId: this.engine.getStateSnapshot().matchId,
+        });
+    }
     setPendingLevelSelection(levelId) {
         this.pendingLevelId = levelId;
     }
@@ -208,10 +252,41 @@ class Room {
     }
     destroy() {
         this.pendingLevelId = null;
+        this.countdownPreparing = false;
         if (this.countdownTimer) {
             clearTimeout(this.countdownTimer);
             this.countdownTimer = null;
         }
+    }
+    async lockMatchBuildSnapshots() {
+        if (!this.accountRuntime) {
+            this.matchBuildSnapshots.clear();
+            this.engine.setMatchBuildSnapshots({});
+            return;
+        }
+        const matchId = this.engine.getStateSnapshot().matchId;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            const playerIds = this.getConnectedPlayerIds().sort();
+            const snapshots = await Promise.all(playerIds.map(async (playerId) => {
+                const account = await this.accountRuntime.accountService.getOrCreate(playerId);
+                return this.accountRuntime.accountService.createBuildSnapshot({
+                    requestId: `lock-build:${matchId}:${playerId}`,
+                    matchId,
+                    playerId,
+                    expectedAccountVersion: account.version,
+                }, this.accountRuntime.buildResolver);
+            }));
+            const connectedAfterRead = this.getConnectedPlayerIds().sort();
+            if (playerIds.length !== connectedAfterRead.length
+                || playerIds.some((playerId, index) => playerId !== connectedAfterRead[index]))
+                continue;
+            this.matchBuildSnapshots.clear();
+            for (const snapshot of snapshots)
+                this.matchBuildSnapshots.set(snapshot.playerId, snapshot);
+            this.engine.setMatchBuildSnapshots(Object.fromEntries(snapshots.map(snapshot => [snapshot.playerId, snapshot])));
+            return;
+        }
+        throw new Error('CONNECTED_PLAYERS_CHANGED_DURING_BUILD_LOCK');
     }
     syncEngineRoomRules() {
         const activeSlots = this.getActiveSlots();
@@ -236,15 +311,17 @@ class Room {
 exports.Room = Room;
 class RoomManager {
     config;
+    accountRuntime;
     rooms = new Map();
-    constructor(config) {
+    constructor(config, accountRuntime) {
         this.config = config;
+        this.accountRuntime = accountRuntime;
     }
     createRoom(roomId, options) {
         if (this.rooms.has(roomId)) {
             throw new Error(`Room ${roomId} already exists`);
         }
-        const room = new Room(roomId, this.config, options);
+        const room = new Room(roomId, this.config, options, this.accountRuntime);
         this.rooms.set(roomId, room);
         return room;
     }

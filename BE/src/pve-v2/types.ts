@@ -177,6 +177,19 @@ export interface PvePlayerSnapshot {
   boardRevision: number
   tray: Array<PvePiece | null>
   reserve: Array<PvePiece | null>
+  discardedCharacters: CharacterPiece[]
+  itemRuntime: {
+    version: number
+    slots: Array<{
+      itemId: string
+      slotIndex: 0 | 1
+      chargesRemaining: number
+      cooldownEndsAtTick: number
+      usesThisMatch: number
+      enabled: boolean
+    } | null>
+  } | null
+  weaponLoadoutByGeneralId: Record<string, readonly [string | null, string | null]>
   boardPieces: PveBoardPiece[]
   generalFormations: PveGeneralFormationSnapshot[]
   generalProgress: PveGeneralProgressSnapshot[]
@@ -231,6 +244,10 @@ export interface PveRuntimeEvent {
     | 'GENERAL_XP_SETTLEMENT_AVAILABLE'
     | 'LANE_WAVE_CLEARED'
     | 'MATCH_FINISHED'
+    | 'ACTIVE_ITEM_USED'
+    | 'ACTIVE_ITEM_REJECTED'
+    | 'CHARACTER_DISCARDED'
+    | 'WEAPON_EFFECT_UNSUPPORTED'
   data: Record<string, string | number | boolean | string[] | number[] | null>
 }
 
@@ -352,6 +369,16 @@ export interface MoveFixedGeneralAction {
   expectedBoardRevision?: number
 }
 
+export interface UseActiveItemAction {
+  type: 'USE_ACTIVE_ITEM'
+  actionId: string
+  requestId: string
+  slotIndex: 0 | 1
+  itemId: string
+  target: import('../item-v1').ActiveItemTarget
+  expectedItemRuntimeVersion: number
+}
+
 export type PveRuntimeAction =
   | RecruitBatchAction
   | SwapTrayBoardAction
@@ -362,6 +389,7 @@ export type PveRuntimeAction =
   | SwapStoragePiecesAction
   | SetGeneralFixedAction
   | MoveFixedGeneralAction
+  | UseActiveItemAction
 
 export interface PveRuntimeResult {
   ok: boolean
@@ -384,5 +412,9 @@ export interface PveGameRuntimeOptions {
   eventHistoryLimit?: number
   /** 测试、回放和对局配置快照注入；未传时使用默认目录。 */
   generalCatalog?: Readonly<Record<string, GeneralDefinition>>
+  /** 开局时冻结的局外道具配装；对局内不再读账户。 */
+  itemLoadoutSnapshots?: Readonly<Record<string, import('../item-v1').MatchItemLoadoutSnapshot>>
+  /** 开局时冻结的局外武器配装；对局内不再读账户。 */
+  weaponLoadoutSnapshots?: Readonly<Record<string, import('../weapon-v1').MatchWeaponLoadoutSnapshot>>
 }
 import type { GeneralDefinition } from '../core/hero-v1/types'

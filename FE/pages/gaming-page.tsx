@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { Coins, OctagonX, RefreshCw, ShieldAlert, Skull, Timer, Users } from 'lucide-react'
+import { Coins, Crosshair, OctagonX, RefreshCw, ShieldAlert, Skull, Sparkles, Timer, Users } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { io, type Socket } from 'socket.io-client'
 import { GameOverOverlay } from '../components/game-over-overlay'
@@ -142,6 +142,23 @@ interface ServerWaveState {
   prepCountdownSec?: number
 }
 
+interface ServerActiveItemState {
+  itemId: string
+  name: string
+  slotIndex: 0 | 1
+  chargesRemaining: number
+  cooldownEndsAtTick: number
+  runtimeVersion: number
+  targetingKind: 'none' | 'active_general' | 'battlefield_point' | 'character_token' | 'discarded_character_to_empty_slot' | string
+  enabled: boolean
+}
+
+interface ServerDiscardedCharacterState {
+  entityId: string
+  glyph: string
+  createdSequence: number
+}
+
 interface SelectedLevelInfo {
   levelId: number
   label: string
@@ -174,6 +191,8 @@ interface ServerDrivenGameState {
   summonedUnits: ServerSummonedUnitState[]
   zones: ServerEffectZoneState[]
   recentEvents: ServerCombatEventState[]
+  activeItems: Array<ServerActiveItemState | null>
+  discardedCharacters: ServerDiscardedCharacterState[]
   overloadTicks: number
   overloadCountdownSec: number
   maxCapacity: number
@@ -226,6 +245,19 @@ const COMBAT_EVENT_LABELS: Record<string, string> = {
   ZONE_EXPIRED: '效果区域消散',
   SYNERGY_ACTIVATED: '羁绊激活',
   SYNERGY_DEACTIVATED: '羁绊解除',
+  ACTIVE_ITEM_USED: '主动道具生效',
+  ACTIVE_ITEM_REJECTED: '主动道具使用失败',
+}
+
+const ACTIVE_ITEM_PRESENTATION: Record<string, { name: string; targetingKind: ServerActiveItemState['targetingKind'] }> = {
+  change_character_brush: { name: '点将笔', targetingKind: 'character_token' },
+  cultivation_pill: { name: '修为丹', targetingKind: 'active_general' },
+  general_ascension_talisman: { name: '神将符', targetingKind: 'active_general' },
+  rerecruit_order: { name: '再征令', targetingKind: 'none' },
+  soul_recall_banner: { name: '招魂幡', targetingKind: 'discarded_character_to_empty_slot' },
+  heavenly_thunder_order: { name: '天雷令', targetingKind: 'battlefield_point' },
+  wind_stilling_talisman: { name: '定风符', targetingKind: 'battlefield_point' },
+  war_drum_order: { name: '战鼓令', targetingKind: 'active_general' },
 }
 
 const ENEMY_GLYPHS: Record<string, string> = {
@@ -478,7 +510,7 @@ function normalizeSyncState(payload: unknown, playerId: string): ServerDrivenGam
     ? pve.recentEvents.map(normalizeCombatEvent).filter((event): event is ServerCombatEventState => event !== null)
     : []
   const tray = Array<ServerTrayPieceState | null>(5).fill(null)
-  const reserve = Array<ServerTrayPieceState | null>(2).fill(null)
+  const reserve = Array<ServerTrayPieceState | null>(Math.max(2, currentPlayer && Array.isArray(currentPlayer.reserve) ? currentPlayer.reserve.length : 0)).fill(null)
   const generalFormations: ServerGeneralFormationState[] = currentPlayer && Array.isArray(currentPlayer.generalFormations)
     ? currentPlayer.generalFormations.flatMap((rawFormation) => {
         if (!isObject(rawFormation)
@@ -544,6 +576,49 @@ function normalizeSyncState(payload: unknown, playerId: string): ServerDrivenGam
         }]
       })
     : []
+  const rawItemRuntime = currentPlayer && isObject(currentPlayer.itemRuntime) ? currentPlayer.itemRuntime : null
+  const itemRuntimeVersion = readNumber(rawItemRuntime, 'version', 0)
+  const rawActiveItems = rawItemRuntime && Array.isArray(rawItemRuntime.slots)
+    ? rawItemRuntime.slots
+    : currentPlayer && Array.isArray(currentPlayer.activeItems)
+      ? currentPlayer.activeItems
+      : []
+  const activeItems: Array<ServerActiveItemState | null> = [0, 1].map((slotIndex) => {
+    const rawItem = rawActiveItems[slotIndex]
+    if (!isObject(rawItem) || typeof rawItem.itemId !== 'string') return null
+    const definition = ACTIVE_ITEM_PRESENTATION[rawItem.itemId]
+    const targeting = isObject(rawItem.targeting) ? rawItem.targeting : null
+    return {
+      itemId: rawItem.itemId,
+      name: typeof rawItem.name === 'string' ? rawItem.name : definition?.name ?? rawItem.itemId,
+      slotIndex: slotIndex as 0 | 1,
+      chargesRemaining: readNumber(rawItem, 'chargesRemaining', 0),
+      cooldownEndsAtTick: readNumber(rawItem, 'cooldownEndsAtTick', 0),
+      runtimeVersion: readNumber(rawItem, 'runtimeVersion', itemRuntimeVersion),
+      targetingKind: typeof targeting?.kind === 'string'
+        ? targeting.kind
+        : typeof rawItem.targetingKind === 'string'
+          ? rawItem.targetingKind
+          : definition?.targetingKind ?? 'none',
+      enabled: rawItem.enabled !== false,
+    }
+  })
+  const discardedCharacters: ServerDiscardedCharacterState[] = currentPlayer && Array.isArray(currentPlayer.discardedCharacters)
+    ? currentPlayer.discardedCharacters.flatMap((rawToken) => {
+        if (!isObject(rawToken)) return []
+        const entityId = typeof rawToken.entityId === 'string'
+          ? rawToken.entityId
+          : typeof rawToken.id === 'string'
+            ? rawToken.id
+            : null
+        if (!entityId || typeof rawToken.glyph !== 'string') return []
+        return [{
+          entityId,
+          glyph: rawToken.glyph,
+          createdSequence: readNumber(rawToken, 'createdSequence', 0),
+        }]
+      })
+    : []
 
   if (currentPlayer && Array.isArray(currentPlayer.tray)) {
     for (const [fallbackIndex, rawSlot] of currentPlayer.tray.entries()) {
@@ -592,6 +667,8 @@ function normalizeSyncState(payload: unknown, playerId: string): ServerDrivenGam
     summonedUnits,
     zones,
     recentEvents,
+    activeItems,
+    discardedCharacters,
     overloadTicks: readNumber(roomRuntime, 'overloadTicks', 0),
     overloadCountdownSec: pve ? readNumber(pve, 'overloadCountdownSec', 0) : readNumber(roomRuntime, 'overloadCountdownSec', 0),
     maxCapacity: pve ? readNumber(pve, 'maxCapacity', 10) : readNumber(roomRuntime, 'maxCapacity', 10),
@@ -703,11 +780,12 @@ function CrisisWarning({ overloadTicks, overloadCountdownSec, enemyCount, maxCap
   )
 }
 
-function GamingBoard({ gameState, sceneTheme, selectedPieceId, placementMode, hoveredCell, onCellClick, onCellHover, onCellLeave }: {
+function GamingBoard({ gameState, sceneTheme, selectedPieceId, placementMode, allowAnyTargetCell, hoveredCell, onCellClick, onCellHover, onCellLeave }: {
   gameState: ServerDrivenGameState | null
   sceneTheme?: PveSceneTheme | null
   selectedPieceId: string | null
   placementMode: boolean
+  allowAnyTargetCell?: boolean
   hoveredCell: { x: number; y: number } | null
   onCellClick: (x: number, y: number) => void
   onCellHover: (x: number, y: number) => void
@@ -716,7 +794,7 @@ function GamingBoard({ gameState, sceneTheme, selectedPieceId, placementMode, ho
   const canPreviewAtHoveredCell = Boolean(
     hoveredCell
     && placementMode
-    && isTerrainDeployableCell(hoveredCell.x, hoveredCell.y),
+    && (allowAnyTargetCell || isTerrainDeployableCell(hoveredCell.x, hoveredCell.y)),
   )
   return (
     <Suspense fallback={<section className="gaming-board-frame" aria-busy="true"><div className="gaming-board-viewport">正在加载战场引擎…</div></section>}>
@@ -753,11 +831,14 @@ export function GamingPage() {
   const playerName = useMemo(() => resolvePlayerName() ?? playerId, [playerId])
   const playerKind = resolvePlayerKind()
   const socketRef = useRef<Socket | null>(null)
+  const lastItemRejectionRef = useRef<string | null>(null)
   const [gameState, setGameState] = useState<ServerDrivenGameState | null>(null)
   const [roomPhase, setRoomPhase] = useState<RoomPhase>('lobby')
   const [selectedTrayIndex, setSelectedTrayIndex] = useState<number | null>(null)
   const [selectedReserveIndex, setSelectedReserveIndex] = useState<number | null>(null)
   const [selectedPieceId, setSelectedPieceId] = useState<string | null>(null)
+  const [targetingItemSlot, setTargetingItemSlot] = useState<0 | 1 | null>(null)
+  const [selectedDiscardedTokenId, setSelectedDiscardedTokenId] = useState<string | null>(null)
   const [hoveredCell, setHoveredCell] = useState<{ x: number; y: number } | null>(null)
   const [isLeaveConfirmOpen, setIsLeaveConfirmOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -908,7 +989,19 @@ export function GamingPage() {
     if (selectedTrayIndex !== null && !gameState?.tray[selectedTrayIndex]) setSelectedTrayIndex(null)
     if (selectedReserveIndex !== null && !gameState?.reserve[selectedReserveIndex]) setSelectedReserveIndex(null)
     if (selectedPieceId && !gameState?.boardPieces.some((piece) => piece.entityId === selectedPieceId)) setSelectedPieceId(null)
-  }, [gameState, selectedPieceId, selectedReserveIndex, selectedTrayIndex])
+    if (targetingItemSlot !== null && !gameState?.activeItems[targetingItemSlot]) setTargetingItemSlot(null)
+    if (selectedDiscardedTokenId && !gameState?.discardedCharacters.some((token) => token.entityId === selectedDiscardedTokenId)) {
+      setSelectedDiscardedTokenId(null)
+    }
+  }, [gameState, selectedDiscardedTokenId, selectedPieceId, selectedReserveIndex, selectedTrayIndex, targetingItemSlot])
+
+  useEffect(() => {
+    const rejected = [...(gameState?.recentEvents ?? [])].reverse().find((event) => event.type === 'ACTIVE_ITEM_REJECTED')
+    if (!rejected || lastItemRejectionRef.current === rejected.id) return
+    lastItemRejectionRef.current = rejected.id
+    const reason = typeof rejected.data.error === 'string' ? rejected.data.error : '服务端拒绝了该道具目标'
+    setError(`道具使用失败：${reason}（未在客户端预扣次数）`)
+  }, [gameState?.recentEvents])
 
   function emitAction(payload: Record<string, unknown>) {
     const socket = socketRef.current
@@ -969,8 +1062,48 @@ export function GamingPage() {
     setSelectedPieceId(null)
   }
 
+  function useItemOnStoragePiece(zone: StorageZone, index: number) {
+    if (!gameState || targetingItemSlot === null) return false
+    const item = gameState.activeItems[targetingItemSlot]
+    if (!item) return false
+    const piece = zone === 'tray' ? gameState.tray[index] : gameState.reserve[index]
+    const expectedRevision = zone === 'tray' ? gameState.trayRevision : gameState.reserveRevision
+    if (item.targetingKind === 'character_token') {
+      if (!piece || piece.kind !== 'character') {
+        setError(`使用${item.name}时需要点击一个神将字符。`)
+        return true
+      }
+      useActiveItem(item, { kind: 'piece', pieceId: piece.entityId, expectedRevision })
+      return true
+    }
+    if (item.targetingKind === 'discarded_character_to_empty_slot') {
+      const token = gameState.discardedCharacters.find((entry) => entry.entityId === selectedDiscardedTokenId)
+      if (!token) {
+        setError('请先选择一个弃置字符。')
+        return true
+      }
+      if (piece) {
+        setError('招魂幡只能把弃置字符放入空托盘位或空备战位。')
+        return true
+      }
+      useActiveItem(item, {
+        kind: 'discarded_character_to_empty_slot',
+        tokenId: token.entityId,
+        expectedTokenRevision: token.createdSequence,
+        destination: {
+          zone: zone === 'tray' ? 'summon_tray' : 'reserve',
+          index,
+          expectedRevision,
+        },
+      })
+      return true
+    }
+    return false
+  }
+
   function handleTrayClick(index: number) {
     if (!gameState) return
+    if (useItemOnStoragePiece('tray', index)) return
     if (selectedPiece) {
       if (selectedPiece.ownerPlayerId !== playerId) return
       if (selectedFormation?.fixed) return
@@ -1008,6 +1141,7 @@ export function GamingPage() {
 
   function handleReserveClick(index: number) {
     if (!gameState) return
+    if (useItemOnStoragePiece('reserve', index)) return
     if (selectedPiece) {
       if (selectedPiece.ownerPlayerId !== playerId) return
       if (selectedFormation?.fixed) return
@@ -1060,9 +1194,90 @@ export function GamingPage() {
     })
   }
 
+  function useActiveItem(item: ServerActiveItemState, target: Record<string, unknown>) {
+    if (!gameState) return false
+    const used = emitAction({
+      action: 'USE_ACTIVE_ITEM',
+      slotIndex: item.slotIndex,
+      itemId: item.itemId,
+      target,
+      expectedItemRuntimeVersion: item.runtimeVersion,
+    })
+    if (used) {
+      setTargetingItemSlot(null)
+      setSelectedDiscardedTokenId(null)
+    }
+    return used
+  }
+
+  function handleActiveItemClick(item: ServerActiveItemState) {
+    if (!gameState || gameState.status !== 'running') return
+    if (!item.enabled || item.chargesRemaining <= 0 || item.cooldownEndsAtTick > gameState.tick) return
+    setError(null)
+    if (item.targetingKind === 'none') {
+      useActiveItem(item, { kind: 'none' })
+      return
+    }
+    if (item.targetingKind === 'active_general') {
+      if (!selectedFormation || !selectedGeneralProgress) {
+        setError(`使用${item.name}前，请先点击选中一名已激活神将。`)
+        return
+      }
+      useActiveItem(item, { kind: 'general', generalId: selectedFormation.generalId })
+      return
+    }
+    if (item.targetingKind === 'battlefield_point') {
+      clearPieceSelection()
+      setSelectedDiscardedTokenId(null)
+      setTargetingItemSlot((current) => current === item.slotIndex ? null : item.slotIndex)
+      return
+    }
+    if (item.targetingKind === 'character_token') {
+      clearPieceSelection()
+      setSelectedDiscardedTokenId(null)
+      setTargetingItemSlot((current) => current === item.slotIndex ? null : item.slotIndex)
+      return
+    }
+    if (item.targetingKind === 'discarded_character_to_empty_slot') {
+      if (gameState.discardedCharacters.length === 0) {
+        setError('当前没有可供招魂幡找回的弃置字符。')
+        return
+      }
+      clearPieceSelection()
+      setSelectedDiscardedTokenId(gameState.discardedCharacters[0]!.entityId)
+      setTargetingItemSlot((current) => current === item.slotIndex ? null : item.slotIndex)
+      return
+    }
+    setError(`${item.name}的目标类型暂不受支持，本次未消耗道具次数。`)
+  }
+
   function handleCellClick(x: number, y: number) {
     if (!gameState) return
     const target = findPieceAtCell(gameState.boardPieces, x, y)
+    if (targetingItemSlot !== null) {
+      const item = gameState.activeItems[targetingItemSlot]
+      if (!item) {
+        setTargetingItemSlot(null)
+        return
+      }
+      if (item.targetingKind === 'battlefield_point') {
+        useActiveItem(item, { kind: 'battlefield_point', xMilli: x * 1000 + 500, yMilli: y * 1000 + 500 })
+        return
+      }
+      if (item.targetingKind === 'character_token') {
+        if (!target || target.ownerPlayerId !== playerId || target.kind !== 'character') {
+          setError(`使用${item.name}时需要点击自己的一个神将字符。`)
+          return
+        }
+        useActiveItem(item, { kind: 'piece', pieceId: target.entityId, expectedRevision: gameState.boardRevision })
+        return
+      }
+      if (item.targetingKind === 'discarded_character_to_empty_slot') {
+        setError('招魂幡的目标位置只能是空托盘位或空备战位。')
+        return
+      }
+      return
+    }
 
     if (selectedTrayIndex !== null) {
       const trayPiece = gameState.tray[selectedTrayIndex]
@@ -1275,7 +1490,7 @@ export function GamingPage() {
                     <button type="button" className="gaming-exile-button" disabled={!gameState || gameState.status !== 'running'} onClick={handleExileReserve}>流放</button>
                   </div>
                   <div className="gaming-reserve-row">
-                    {Array.from({ length: 2 }, (_, index) => {
+                    {Array.from({ length: gameState?.reserve.length ?? 2 }, (_, index) => {
                       const piece = gameState?.reserve[index] ?? null
                       return (
                         <button
@@ -1325,6 +1540,76 @@ export function GamingPage() {
                     })}
                   </div>
                 </div>
+              </section>
+
+              <section className="gaming-panel-card gaming-active-items-panel">
+                <div className="gaming-active-items-heading">
+                  <div><p className="gaming-section-label">主动道具</p><p className="gaming-recruit-help">2 槽 · 服务端确认后才扣除次数</p></div>
+                  {targetingItemSlot !== null ? <button type="button" onClick={() => {
+                    setTargetingItemSlot(null)
+                    setSelectedDiscardedTokenId(null)
+                  }}>取消选择</button> : null}
+                </div>
+                <div className="gaming-active-items-row">
+                  {[0, 1].map((slotIndex) => {
+                    const item = gameState?.activeItems[slotIndex] ?? null
+                    const coolingTicks = item && gameState ? Math.max(0, item.cooldownEndsAtTick - gameState.tick) : 0
+                    const disabled = !item || !gameState || gameState.status !== 'running' || !item.enabled || item.chargesRemaining <= 0 || coolingTicks > 0
+                    const requiresGeneral = item?.targetingKind === 'active_general'
+                    const isTargeting = targetingItemSlot === slotIndex
+                    return (
+                      <button
+                        type="button"
+                        key={slotIndex}
+                        className={cx('gaming-active-item', isTargeting && 'gaming-active-item-targeting')}
+                        disabled={disabled}
+                        onClick={() => item && handleActiveItemClick(item)}
+                        title={requiresGeneral ? '先选中一名神将后使用' : item?.targetingKind === 'battlefield_point' ? '点击后在战场选择位置' : undefined}
+                      >
+                        <span>{item ? item.name.slice(0, 1) : '空'}</span>
+                        <div><strong>{item?.name ?? '未携带'}</strong><small>{item ? coolingTicks > 0 ? `冷却 ${Math.ceil(coolingTicks / 10)}s` : `${item.chargesRemaining} 次可用` : '局外构筑后生效'}</small></div>
+                        {isTargeting ? <Crosshair className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+                      </button>
+                    )
+                  })}
+                </div>
+                {targetingItemSlot !== null ? (() => {
+                  const targetingItem = gameState?.activeItems[targetingItemSlot]
+                  if (targetingItem?.targetingKind === 'battlefield_point') {
+                    return <p className="gaming-item-target-hint"><Crosshair className="h-3.5 w-3.5" />请在棋盘上点击一个位置；取消不会发送命令。</p>
+                  }
+                  if (targetingItem?.targetingKind === 'character_token') {
+                    return <p className="gaming-item-target-hint"><Crosshair className="h-3.5 w-3.5" />请点击托盘、备战席或棋盘中的一个神将字符。</p>
+                  }
+                  if (targetingItem?.targetingKind === 'discarded_character_to_empty_slot') {
+                    return <p className="gaming-item-target-hint"><Crosshair className="h-3.5 w-3.5" />先选择弃置字符，再点击空托盘位或空备战位。</p>
+                  }
+                  return null
+                })() : null}
+                {(gameState?.discardedCharacters.length ?? 0) > 0 ? (
+                  <div className="gaming-discarded-characters">
+                    <small>弃置字符</small>
+                    <div>
+                      {gameState!.discardedCharacters.map((token) => (
+                        <button
+                          type="button"
+                          key={token.entityId}
+                          className={cx(selectedDiscardedTokenId === token.entityId && 'gaming-discarded-character-active')}
+                          onClick={() => {
+                            const item = targetingItemSlot === null ? null : gameState?.activeItems[targetingItemSlot]
+                            if (item?.targetingKind !== 'discarded_character_to_empty_slot') {
+                              setError('请先点击招魂幡，再选择要找回的弃置字符。')
+                              return
+                            }
+                            setSelectedDiscardedTokenId(token.entityId)
+                            setError(null)
+                          }}
+                          aria-label={`弃置字符${token.glyph}`}
+                        >{token.glyph}</button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </section>
 
               {selectedPiece ? (
@@ -1381,7 +1666,8 @@ export function GamingPage() {
             gameState={gameState}
             sceneTheme={LEVEL_DEFS.find(({ levelId }) => levelId === selectedLevelPreview?.levelId)?.sceneTheme}
             selectedPieceId={selectedPieceId}
-            placementMode={selectedTrayIndex !== null || selectedReserveIndex !== null || selectedPieceId !== null}
+            placementMode={selectedTrayIndex !== null || selectedReserveIndex !== null || selectedPieceId !== null || targetingItemSlot !== null}
+            allowAnyTargetCell={targetingItemSlot !== null}
             hoveredCell={hoveredCell}
             onCellClick={handleCellClick}
             onCellHover={(x, y) => setHoveredCell({ x, y })}

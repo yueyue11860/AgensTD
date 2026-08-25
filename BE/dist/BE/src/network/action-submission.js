@@ -28,6 +28,29 @@ function submitAction({ engine, limiter, player, payload }) {
             message: 'Invalid action payload',
         };
     }
+    const requestId = readRequestId(payload);
+    if (requestId) {
+        const previous = engine.resolveActionRequest(player.playerId, requestId, parsedAction);
+        if (previous.status === 'conflict') {
+            return {
+                ok: false,
+                status: 409,
+                code: 'REQUEST_ID_CONFLICT',
+                message: 'requestId was already used with a different action payload',
+            };
+        }
+        if (previous.status === 'replay') {
+            return {
+                ok: true,
+                action: parsedAction,
+                requestId,
+                actionId: previous.actionId,
+                serverTick: previous.serverTick,
+                rateLimitRemaining: previous.rateLimitRemaining,
+                duplicate: true,
+            };
+        }
+    }
     const limitDecision = limiter.consume(player.playerId);
     if (!limitDecision.allowed) {
         return {
@@ -38,13 +61,14 @@ function submitAction({ engine, limiter, player, payload }) {
             retryAfterMs: limitDecision.retryAfterMs,
         };
     }
-    const queued = engine.enqueueAction(player, parsedAction);
+    const queued = engine.enqueueAction(player, parsedAction, requestId, limitDecision.remaining);
     return {
         ok: true,
         action: parsedAction,
-        requestId: readRequestId(payload),
+        requestId,
         actionId: queued.actionId,
         serverTick: queued.serverTick,
         rateLimitRemaining: limitDecision.remaining,
+        duplicate: false,
     };
 }

@@ -17,6 +17,14 @@ import { createOAuthRouter } from './network/oauth-routes'
 import { SocketGateway } from './network/socket-gateway'
 import { ProgressStore } from './data/progress-store'
 import { SupabaseUserStore } from './data/supabase-user-store'
+import { PlayerAccountService } from './account-v1'
+import { MemoryPlayerAccountStore } from './account-v1/memory-store'
+import { SupabasePlayerAccountStore } from './data/supabase-player-account-store'
+import { ResilientPlayerAccountStore } from './data/resilient-player-account-store'
+import {
+  V1AccountShopCatalog,
+  V1MatchBuildDefinitionResolver,
+} from './data/player-account-adapters'
 
 const config = createServerConfig()
 const app = express()
@@ -58,7 +66,16 @@ app.get('/health', (_request, response) => {
 })
 
 const httpServer = http.createServer(app)
-const roomManager = new RoomManager(config)
+const accountStore = new ResilientPlayerAccountStore(
+  new SupabasePlayerAccountStore(config),
+  new MemoryPlayerAccountStore(),
+)
+const accountBuildResolver = new V1MatchBuildDefinitionResolver()
+const accountService = new PlayerAccountService(accountStore, new V1AccountShopCatalog())
+const roomManager = new RoomManager(config, {
+  accountService,
+  buildResolver: accountBuildResolver,
+})
 const room = roomManager.getOrCreateRoom('public-1')
 const engine = room.engine
 const performanceTelemetry = new PerformanceTelemetry()
@@ -81,7 +98,16 @@ const gateway = new SocketGateway(
 )
 
 app.use('/api', createOAuthRouter(config, userStore))
-app.use('/api', createRestApiRouter(engine, roomManager, config, actionLimiter, replayRecorder, competitionStore, progressStore))
+app.use('/api', createRestApiRouter(
+  engine,
+  roomManager,
+  config,
+  actionLimiter,
+  replayRecorder,
+  competitionStore,
+  progressStore,
+  accountService,
+))
 app.use('/api/agent', createAgentApiRouter(projectedTickStream, config, replayRecorder, competitionStore, performanceTelemetry))
 
 if (hasFrontendBuild) {

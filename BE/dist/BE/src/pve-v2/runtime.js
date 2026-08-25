@@ -10,6 +10,8 @@ const combat_engine_1 = require("../core/hero-v1/combat-engine");
 const formation_manager_1 = require("../core/hero-v1/formation-manager");
 const summon_catalog_1 = require("../core/hero-v1/summon-catalog");
 const synergy_v1_1 = require("../synergy-v1");
+const item_v1_1 = require("../item-v1");
+const weapon_v1_1 = require("../weapon-v1");
 const TRAY_SIZE = 5;
 const RESERVE_SIZE = 2;
 const POPULATION_CAP = 10;
@@ -109,6 +111,9 @@ class PveGameRuntime {
     recentEvents = [];
     generalCatalog;
     generalFormations;
+    itemLoadoutSnapshots;
+    weaponLoadoutSnapshots;
+    reportedUnsupportedWeaponEffects = new Set();
     synergyByPlayer = new Map();
     /** 羁绊效果唯一运行时来源；重配与失活由 reconcile commands 精确替换/移除。 */
     synergyEffects = new synergy_v1_1.SynergyRuntimeProjectionRegistry(synergy_v1_1.GENERAL_SYNERGY_PROFILES);
@@ -154,6 +159,8 @@ class PveGameRuntime {
         this.waveGlyphPools = sanitizeWaveGlyphPools(options.waveGlyphPools, this.maxWaves);
         this.eventHistoryLimit = Math.max(20, options.eventHistoryLimit ?? 300);
         this.generalCatalog = options.generalCatalog ?? catalog_1.GENERAL_CATALOG;
+        this.itemLoadoutSnapshots = structuredClone(options.itemLoadoutSnapshots ?? {});
+        this.weaponLoadoutSnapshots = structuredClone(options.weaponLoadoutSnapshots ?? {});
         this.generalFormations = new formation_manager_1.GeneralFormationManager(this.generalCatalog);
     }
     registerPlayer(playerId, slot) {
@@ -169,20 +176,32 @@ class PveGameRuntime {
         if (this.slotAssignments.has(slot)) {
             return this.commandResult(false, 'SLOT_OCCUPIED');
         }
+        const itemSnapshot = this.itemLoadoutSnapshots[playerId] ?? null;
+        const weaponSnapshot = this.weaponLoadoutSnapshots[playerId] ?? null;
+        if ((itemSnapshot && itemSnapshot.playerId !== playerId) || (weaponSnapshot && weaponSnapshot.playerId !== playerId)) {
+            return this.commandResult(false, 'LOADOUT_PLAYER_MISMATCH');
+        }
+        const passiveItems = itemSnapshot ? (0, item_v1_1.projectPassiveItemRules)(this.seed, itemSnapshot) : null;
         const player = {
             playerId,
             slot,
-            rice: 10,
+            rice: 10 + (passiveItems?.startingRationsBonus ?? 0),
             recruitCount: 0,
-            populationCap: POPULATION_CAP,
+            populationCap: POPULATION_CAP + (passiveItems?.populationCapBonus ?? 0),
             trayRevision: 0,
             reserveRevision: 0,
             boardRevision: 0,
             tray: Array(TRAY_SIZE).fill(null),
-            reserve: Array(RESERVE_SIZE).fill(null),
+            reserve: Array(RESERVE_SIZE + (passiveItems?.reserveCapacityBonus ?? 0)).fill(null),
+            discardedCharacters: [],
             board: new Map(),
             remainingCharacterTokens: new Map(this.initialCharacterTokens),
             clearedWaves: new Set(),
+            noCharacterPaidRecruitBatches: 0,
+            itemSnapshot,
+            passiveItems,
+            itemRuntime: itemSnapshot ? (0, item_v1_1.createItemRuntimeAggregate)(this.seed, itemSnapshot) : null,
+            weaponSnapshot,
         };
         this.players.set(playerId, player);
         this.slotAssignments.set(slot, playerId);
@@ -275,6 +294,9 @@ class PveGameRuntime {
                         break;
                     case 'MOVE_FIXED_GENERAL':
                         result = this.handleMoveFixedGeneral(player, action);
+                        break;
+                    case 'USE_ACTIVE_ITEM':
+                        result = this.handleUseActiveItem(player, action);
                         break;
                 }
             }
@@ -385,7 +407,13 @@ class PveGameRuntime {
         if (player.rice < cost) {
             return this.actionResult(action, false, 'INSUFFICIENT_RICE', { required: cost, available: player.rice });
         }
-        const nextTray = Array.from({ length: TRAY_SIZE }, () => this.drawRecruitPiece(player));
+        this.discardStorageCharacters(player, player.tray);
+        const pity = player.passiveItems?.characterPity;
+        const shouldForcePityCharacter = Boolean(pity
+            && player.noCharacterPaidRecruitBatches >= pity.triggerAfterNoCharacterBatches
+            && player.remainingCharacterTokens.size > 0);
+        const forcedCharacterIndex = shouldForcePityCharacter ? this.prng.pickIndex(TRAY_SIZE) : -1;
+        const nextTray = Array.from({ length: TRAY_SIZE }, (_, index) => (this.drawRecruitPiece(player, index === forcedCharacterIndex)));
         let firstBatchSoldierForced = false;
         if (player.recruitCount === 0 && nextTray.filter((piece) => piece.kind === 'soldier').length === 0) {
             const replacementIndex = this.prng.pickIndex(TRAY_SIZE);
@@ -398,6 +426,10 @@ class PveGameRuntime {
         }
         player.rice -= cost;
         player.recruitCount += 1;
+        const characterCount = nextTray.filter((piece) => piece.kind === 'character').length;
+        player.noCharacterPaidRecruitBatches = characterCount > 0
+            ? 0
+            : player.noCharacterPaidRecruitBatches + 1;
         player.tray = nextTray;
         player.trayRevision += 1;
         this.emit('RECRUITED', {
@@ -406,6 +438,7 @@ class PveGameRuntime {
             recruitCount: player.recruitCount,
             nextRecruitCost: this.nextRecruitCost(player),
             firstBatchSoldierForced,
+            characterPityForced: shouldForcePityCharacter,
             pieceIds: nextTray.map((piece) => piece.id),
         });
         return this.actionResult(action, true, 'RECRUITED', {
@@ -413,6 +446,220 @@ class PveGameRuntime {
             nextRecruitCost: this.nextRecruitCost(player),
             firstBatchSoldierForced,
         });
+    }
+    handleUseActiveItem(player, action) {
+        if (!player.itemRuntime)
+            return this.actionResult(action, false, 'ITEM_NOT_EQUIPPED');
+        const wasProcessed = Boolean(player.itemRuntime.processedRequests[action.requestId]);
+        const use = (0, item_v1_1.useActiveItem)(player.itemRuntime, {
+            type: 'USE_ACTIVE_ITEM',
+            requestId: action.requestId,
+            playerId: player.playerId,
+            slotIndex: action.slotIndex,
+            itemId: action.itemId,
+            target: action.target,
+            expectedItemRuntimeVersion: action.expectedItemRuntimeVersion,
+        }, {
+            currentTick: this.currentTick,
+            tickDurationMs: this.tickRateMs,
+            phase: this.itemMatchPhase(),
+            validateTarget: (definition, target) => this.validateActiveItemTarget(player, definition.itemId, target),
+        });
+        player.itemRuntime = use.state;
+        if (!use.ok) {
+            this.emit('ACTIVE_ITEM_REJECTED', { playerId: player.playerId, itemId: action.itemId, error: use.error });
+            return this.actionResult(action, false, use.error, { itemRuntimeVersion: use.runtimeVersion });
+        }
+        if (wasProcessed) {
+            return this.actionResult(action, true, 'ACTIVE_ITEM_REPLAYED', { itemRuntimeVersion: use.runtimeVersion });
+        }
+        this.executeActiveItemPlan(player, use.plan.target, use.plan.actions, use.plan.effects, use.plan.sourceKey);
+        this.emit('ACTIVE_ITEM_USED', {
+            playerId: player.playerId,
+            itemId: action.itemId,
+            slotIndex: action.slotIndex,
+            requestId: action.requestId,
+            itemRuntimeVersion: use.runtimeVersion,
+        });
+        return this.actionResult(action, true, 'ACTIVE_ITEM_USED', { itemRuntimeVersion: use.runtimeVersion });
+    }
+    itemMatchPhase() {
+        if (this.status === 'waiting')
+            return 'idle';
+        if (this.status === 'finished' || this.wavePhase === 'complete')
+            return 'complete';
+        return this.wavePhase === 'idle' ? 'prep' : this.wavePhase;
+    }
+    validateActiveItemTarget(player, itemId, target) {
+        if (target.kind === 'none')
+            return { ok: true };
+        if (target.kind === 'general') {
+            const progress = this.generalFormations.getProgress(player.playerId, target.generalId);
+            if (!progress || !this.isGeneralActive(player.playerId, target.generalId))
+                return { ok: false, error: 'INVALID_ITEM_TARGET' };
+            if ((itemId === 'cultivation_pill' || itemId === 'general_ascension_talisman') && progress.level >= progress.maxLevel) {
+                return { ok: false, error: 'GENERAL_LEVEL_CAP_REACHED' };
+            }
+            return { ok: true };
+        }
+        if (target.kind === 'piece') {
+            const located = this.locateOwnedPiece(player, target.pieceId);
+            if (!located || located.piece.kind !== 'character')
+                return { ok: false, error: 'INVALID_ITEM_TARGET' };
+            const character = located.piece;
+            if (located.revision !== target.expectedRevision)
+                return { ok: false, error: 'TARGET_REVISION_MISMATCH' };
+            if (this.isPieceInFixedFormation(player.playerId, target.pieceId))
+                return { ok: false, error: 'FIXED_GENERAL_MUST_BE_RELEASED' };
+            const hasCandidate = [...player.remainingCharacterTokens.entries()]
+                .some(([glyph, count]) => count > 0 && glyph !== character.glyph);
+            return hasCandidate ? { ok: true } : { ok: false, error: 'NO_CHARACTER_CANDIDATE' };
+        }
+        if (target.kind === 'battlefield_point') {
+            const definition = player.itemSnapshot?.activeItems.find((entry) => entry.itemId === itemId);
+            const radius = definition?.targeting.radiusMilliCells ?? 0;
+            const hasLegalTarget = this.enemies.some((enemy) => enemy.lifecycle === 'alive' && this.isEnemyTargetable(enemy)
+                && this.distanceSquared(target.xMilli, target.yMilli, enemy.xMilli, enemy.yMilli) <= radius ** 2);
+            return hasLegalTarget ? { ok: true, hasLegalTarget } : { ok: false, error: 'INVALID_ITEM_TARGET', hasLegalTarget };
+        }
+        if (target.kind === 'discarded_character_to_empty_slot') {
+            const token = player.discardedCharacters.find((entry) => entry.id === target.tokenId);
+            if (!token || token.createdSequence !== target.expectedTokenRevision)
+                return { ok: false, error: 'TARGET_REVISION_MISMATCH' };
+            const destination = target.destination;
+            const storage = destination.zone === 'summon_tray' ? player.tray : player.reserve;
+            const revision = destination.zone === 'summon_tray' ? player.trayRevision : player.reserveRevision;
+            if (revision !== destination.expectedRevision)
+                return { ok: false, error: 'TARGET_REVISION_MISMATCH' };
+            if (!Number.isInteger(destination.index) || destination.index < 0 || destination.index >= storage.length || storage[destination.index]) {
+                return { ok: false, error: 'NO_EMPTY_DESTINATION' };
+            }
+            return { ok: true };
+        }
+        return { ok: false, error: 'INVALID_ITEM_TARGET' };
+    }
+    executeActiveItemPlan(player, target, actions, effects, sourceKey) {
+        for (const action of actions) {
+            if (action.type === 'replace_character_token' && target.kind === 'piece') {
+                const located = this.locateOwnedPiece(player, target.pieceId);
+                if (!located || located.piece.kind !== 'character')
+                    continue;
+                const character = located.piece;
+                const candidates = [...player.remainingCharacterTokens.entries()]
+                    .filter(([glyph, count]) => count > 0 && glyph !== character.glyph)
+                    .map(([glyph]) => glyph).sort();
+                const glyph = candidates[this.prng.pickIndex(candidates.length)];
+                const replacement = this.createCharacterPiece(player.playerId, glyph);
+                this.consumeCharacterToken(player, glyph);
+                player.discardedCharacters.push(character);
+                located.replace(replacement);
+                this.emit('CHARACTER_DISCARDED', { playerId: player.playerId, pieceId: character.id, glyph: character.glyph });
+                if (located.zone === 'board') {
+                    player.boardRevision += 1;
+                    this.reconcileGeneralFormations(player);
+                }
+                else if (located.zone === 'tray')
+                    player.trayRevision += 1;
+                else
+                    player.reserveRevision += 1;
+            }
+            else if ((action.type === 'grant_general_experience' || action.type === 'grant_general_level') && target.kind === 'general') {
+                const previous = this.generalFormations.getProgress(player.playerId, target.generalId);
+                const definition = this.getGeneralDefinition(target.generalId);
+                if (!previous || !definition)
+                    continue;
+                const requestedPoints = action.type === 'grant_general_experience'
+                    ? action.experiencePoints
+                    : Math.max(0, (0, catalog_1.cumulativeExperienceRequiredForLevel)(definition, Math.min(previous.maxLevel, previous.level + 1)) - previous.experiencePoints);
+                const capExperience = (0, catalog_1.cumulativeExperienceRequiredForLevel)(definition, previous.maxLevel);
+                const points = Math.max(0, Math.min(requestedPoints, capExperience - previous.experiencePoints));
+                const next = this.generalFormations.addExperience(player.playerId, target.generalId, points);
+                if (next)
+                    this.emit('GENERAL_XP_GRANTED', { playerId: player.playerId, enemyId: null,
+                        generalId: target.generalId, xpPoints: points, experiencePoints: next.experiencePoints });
+            }
+            else if (action.type === 'refresh_summon_tray') {
+                this.discardStorageCharacters(player, player.tray);
+                player.tray = Array.from({ length: TRAY_SIZE }, () => this.drawRecruitPiece(player));
+                player.trayRevision += 1;
+            }
+            else if (action.type === 'recover_discarded_character' && target.kind === 'discarded_character_to_empty_slot') {
+                const index = player.discardedCharacters.findIndex((entry) => entry.id === target.tokenId);
+                if (index < 0)
+                    continue;
+                const [token] = player.discardedCharacters.splice(index, 1);
+                if (target.destination.zone === 'summon_tray') {
+                    player.tray[target.destination.index] = token;
+                    player.trayRevision += 1;
+                }
+                else {
+                    player.reserve[target.destination.index] = token;
+                    player.reserveRevision += 1;
+                }
+            }
+        }
+        for (const effect of effects) {
+            if (effect.type === 'current_health_true_damage' && target.kind === 'battlefield_point') {
+                for (const enemy of this.enemies) {
+                    if (enemy.lifecycle !== 'alive' || !this.isEnemyTargetable(enemy)
+                        || this.distanceSquared(target.xMilli, target.yMilli, enemy.xMilli, enemy.yMilli) > effect.radiusMilliCells ** 2)
+                        continue;
+                    const ratio = this.enemyTags(enemy).includes('boss') ? effect.bossCurrentHpRatioBps : effect.normalCurrentHpRatioBps;
+                    const hpBefore = enemy.currentHp;
+                    enemy.currentHp = Math.max(effect.minimumRemainingHp, enemy.currentHp - Math.floor(enemy.currentHp * ratio / 10000));
+                    this.emit('DAMAGE_APPLIED', { enemyId: enemy.id, playerId: player.playerId, generalId: 'active_item',
+                        effectId: effect.effectId, damage: hpBefore - enemy.currentHp, hpBefore, hpAfter: enemy.currentHp,
+                        damageType: 'true', actionKind: 'active_item', isCritical: false, isSecondary: false });
+                }
+            }
+            else if (effect.type === 'status_apply' && target.kind === 'battlefield_point') {
+                for (const enemy of this.enemies) {
+                    if (enemy.lifecycle !== 'alive' || !this.isEnemyTargetable(enemy)
+                        || this.distanceSquared(target.xMilli, target.yMilli, enemy.xMilli, enemy.yMilli) > effect.radiusMilliCells ** 2)
+                        continue;
+                    this.effectSequence += 1;
+                    const durationMs = this.enemyTags(enemy).includes('boss') ? effect.bossBaseDurationMs : effect.normalDurationMs;
+                    this.statuses.push({ instanceId: `status-${this.effectSequence}`, enemyId: enemy.id,
+                        sourceGeneralId: 'active_item', ownerPlayerId: player.playerId, statusId: effect.statusId,
+                        stackGroup: `${sourceKey}:${effect.statusId}`, magnitude: effect.magnitudeBps, stacks: 1,
+                        appliedAtTick: this.currentTick, expiresAtTick: this.currentTick + Math.max(1, Math.ceil(durationMs / this.tickRateMs)) });
+                }
+            }
+            else if (effect.type === 'timed_stat_modifier' && target.kind === 'general') {
+                const formation = this.generalFormations.getActiveFormations(player.playerId)
+                    .find((entry) => entry.generalId === target.generalId);
+                if (!formation)
+                    continue;
+                this.effectSequence += 1;
+                this.generalStatuses.push({ instanceId: `general-status-${this.effectSequence}`, ownerPlayerId: player.playerId,
+                    sourceGeneralId: target.generalId, sourceFormationId: formation.formationId,
+                    statusId: `active_item_${effect.stat}`, stackGroup: effect.stackGroup, magnitude: effect.valueBps, stacks: 1,
+                    appliedAtTick: this.currentTick, expiresAtTick: this.currentTick + Math.max(1, Math.ceil(effect.durationMs / this.tickRateMs)) });
+            }
+        }
+    }
+    consumeCharacterToken(player, glyph) {
+        const count = player.remainingCharacterTokens.get(glyph) ?? 0;
+        if (count <= 1)
+            player.remainingCharacterTokens.delete(glyph);
+        else
+            player.remainingCharacterTokens.set(glyph, count - 1);
+    }
+    locateOwnedPiece(player, pieceId) {
+        const trayIndex = player.tray.findIndex((piece) => piece?.id === pieceId);
+        if (trayIndex >= 0)
+            return { piece: player.tray[trayIndex], zone: 'tray', revision: player.trayRevision,
+                replace: (piece) => { player.tray[trayIndex] = piece; } };
+        const reserveIndex = player.reserve.findIndex((piece) => piece?.id === pieceId);
+        if (reserveIndex >= 0)
+            return { piece: player.reserve[reserveIndex], zone: 'reserve', revision: player.reserveRevision,
+                replace: (piece) => { player.reserve[reserveIndex] = piece; } };
+        for (const [key, entry] of player.board.entries()) {
+            if (entry.piece.id === pieceId)
+                return { piece: entry.piece, zone: 'board', revision: player.boardRevision,
+                    replace: (piece) => { player.board.set(key, { ...entry, piece }); } };
+        }
+        return null;
     }
     handleSwapTrayBoard(player, action) {
         const revisionError = this.validateRevisions(player, action.expectedTrayRevision, action.expectedBoardRevision);
@@ -471,7 +718,7 @@ class PveGameRuntime {
         if (!this.revisionMatches(action.expectedBoardRevision, player.boardRevision)) {
             return this.actionResult(action, false, 'STALE_BOARD_REVISION');
         }
-        if (!Number.isInteger(action.reserveIndex) || action.reserveIndex < 0 || action.reserveIndex >= RESERVE_SIZE) {
+        if (!Number.isInteger(action.reserveIndex) || action.reserveIndex < 0 || action.reserveIndex >= player.reserve.length) {
             return this.actionResult(action, false, 'INVALID_RESERVE_INDEX');
         }
         if (!this.canDeployAt(player.slot, action.boardX, action.boardY)) {
@@ -519,7 +766,8 @@ class PveGameRuntime {
             return this.actionResult(action, false, 'STALE_RESERVE_REVISION');
         }
         const exiledPieceIds = player.reserve.flatMap((piece) => piece ? [piece.id] : []);
-        player.reserve = Array(RESERVE_SIZE).fill(null);
+        this.discardStorageCharacters(player, player.reserve);
+        player.reserve = Array(player.reserve.length).fill(null);
         player.reserveRevision += 1;
         this.emit('RESERVE_EXILED', {
             playerId: player.playerId,
@@ -535,8 +783,8 @@ class PveGameRuntime {
         if (!this.revisionMatches(action.expectedReserveRevision, player.reserveRevision)) {
             return this.actionResult(action, false, 'STALE_RESERVE_REVISION');
         }
-        if (!this.isStorageIndexValid(action.sourceZone, action.sourceIndex)
-            || !this.isStorageIndexValid(action.targetZone, action.targetIndex)) {
+        if (!this.isStorageIndexValid(action.sourceZone, action.sourceIndex, player)
+            || !this.isStorageIndexValid(action.targetZone, action.targetIndex, player)) {
             return this.actionResult(action, false, 'INVALID_STORAGE_INDEX');
         }
         if (action.sourceZone === action.targetZone && action.sourceIndex === action.targetIndex) {
@@ -743,12 +991,13 @@ class PveGameRuntime {
             level: merged.level,
         });
     }
-    drawRecruitPiece(player) {
+    drawRecruitPiece(player, forceCharacter = false) {
         const eligibleGlyphs = [...player.remainingCharacterTokens.entries()]
             .filter(([, count]) => count > 0)
             .map(([glyph]) => glyph)
             .sort((left, right) => left.localeCompare(right));
-        if (eligibleGlyphs.length > 0 && this.prng.rollBps(CHARACTER_BRANCH_BPS)) {
+        const characterProbabilityBps = player.passiveItems?.characterProbabilityBps ?? CHARACTER_BRANCH_BPS;
+        if (eligibleGlyphs.length > 0 && (forceCharacter || this.prng.rollBps(characterProbabilityBps))) {
             const glyph = eligibleGlyphs[this.prng.pickIndex(eligibleGlyphs.length)];
             const nextCount = (player.remainingCharacterTokens.get(glyph) ?? 0) - 1;
             if (nextCount > 0) {
@@ -1058,6 +1307,7 @@ class PveGameRuntime {
                 }
                 emittedCasts.add(action.actionId);
                 this.executeGeneralCombatAction(player, formation, progress.level, action);
+                this.executeWeaponCombatExtensions(player, formation, progress.level, action);
             }
             const trigger = definition.passiveSkill.trigger;
             if (trigger?.kind === 'periodic') {
@@ -1095,6 +1345,26 @@ class PveGameRuntime {
             stat: action.damage.damageType === 'physical' ? 'physicalDamageBonus' : 'magicDamageBonus',
             baseValue: 10000, targetTags, effectTags });
         rawDamage = Math.max(1, Math.floor(rawDamage * synergyDamageRatio / 10000 * typedDamageRatio / 10000));
+        let weaponRatio = 10000;
+        if (action.damage.damageType === 'magic')
+            weaponRatio = Math.floor(weaponRatio
+                * this.weaponStatRatio(player.playerId, action.sourceGeneralId, 'magic_damage', targetTags) / 10000);
+        if (action.actionKind === 'active_skill')
+            weaponRatio = Math.floor(weaponRatio
+                * this.weaponStatRatio(player.playerId, action.sourceGeneralId, 'direct_skill_damage', targetTags) / 10000);
+        if (targetTags.includes('boss'))
+            weaponRatio = Math.floor(weaponRatio
+                * this.weaponStatRatio(player.playerId, action.sourceGeneralId, 'boss_damage', targetTags) / 10000);
+        if (this.hasAnyControlStatus(target.id))
+            weaponRatio = Math.floor(weaponRatio
+                * this.weaponStatRatio(player.playerId, action.sourceGeneralId, 'controlled_target_damage', ['controlled', ...targetTags]) / 10000);
+        rawDamage = Math.max(1, Math.floor(rawDamage * weaponRatio / 10000));
+        let passiveItemRatio = 10000;
+        if (action.damage.damageType === 'magic')
+            passiveItemRatio += this.passiveCombatRatio(player, action.sourceGeneralId, 'magicDamage');
+        if (action.actionKind === 'active_skill')
+            passiveItemRatio += this.activeItemTimedRatio(player.playerId, action.sourceGeneralId, 'activeSkillDamage');
+        rawDamage = Math.max(1, Math.floor(rawDamage * passiveItemRatio / 10000));
         const stats = (0, catalog_1.resolveGeneralStats)(definition, level, this.generalSynergyModifiers(player.playerId, action.sourceGeneralId, targetTags, effectTags), targetTags);
         const isCritical = action.damage.criticalPolicy === 'can_crit' && this.prng.rollBps(stats.critChanceBps);
         if (isCritical)
@@ -1170,7 +1440,8 @@ class PveGameRuntime {
                     flatDamagePerTick: this.patchedNumber(action, 'flatDamagePerTick', action.flatDamagePerTick),
                     nextTick: this.currentTick + Math.max(1, Math.ceil(action.tickIntervalMs / this.tickRateMs)),
                     tickIntervalTicks: Math.max(1, Math.ceil(action.tickIntervalMs / this.tickRateMs)),
-                    expiresAtTick: this.currentTick + Math.max(1, Math.ceil(action.durationMs / this.tickRateMs)),
+                    expiresAtTick: this.currentTick + Math.max(1, Math.ceil(action.durationMs
+                        * this.weaponStatRatio(player.playerId, action.sourceGeneralId, 'dot_duration') / 10000 / this.tickRateMs)),
                     stackGroup: action.stacking.stackGroup,
                 };
                 if (existing && action.stacking.policy !== 'independent' && action.stacking.policy !== 'stack') {
@@ -1228,7 +1499,8 @@ class PveGameRuntime {
                 shape: action.shape,
                 nextTick: this.currentTick,
                 tickIntervalTicks: Math.max(1, Math.ceil(action.tickIntervalMs / this.tickRateMs)),
-                expiresAtTick: this.currentTick + Math.max(1, Math.ceil(action.durationMs / this.tickRateMs)),
+                expiresAtTick: this.currentTick + Math.max(1, Math.ceil(action.durationMs
+                    * this.weaponStatRatio(player.playerId, action.sourceGeneralId, 'zone_duration') / 10000 / this.tickRateMs)),
                 tickEffects: action.tickEffects,
                 sourceInactivePolicy: action.sourceInactivePolicy,
             };
@@ -1241,6 +1513,57 @@ class PveGameRuntime {
             this.effectParameterPatches.set(this.effectParameterPatchKey(action), { operation: action.operation, value: action.value });
             this.emit('GENERAL_EFFECT_APPLIED', { effectType: action.effectType, effectId: action.effectId, targetEffectId: action.targetEffectId });
         }
+    }
+    executeWeaponCombatExtensions(player, formation, level, action) {
+        const sources = this.weaponSources(player.playerId, formation.generalId);
+        if (sources.length === 0)
+            return;
+        // 后羿专武是首个端到端模板：主箭后按路径进度追加 80%/60% 两个目标。
+        const hasHouyiBow = sources.some((source) => source.weaponId === 'houyi_sun_shooting_bow');
+        if (hasHouyiBow && action.effectType === 'damage' && action.actionKind === 'active_skill' && action.targetIndex === 0
+            && action.effectId.includes('houyi_chuanyun')) {
+            const primary = this.enemies.find((enemy) => enemy.id === action.targetEnemyId);
+            const extras = this.enemies.filter((enemy) => enemy.lifecycle === 'alive' && this.isEnemyTargetable(enemy)
+                && enemy.id !== action.targetEnemyId)
+                .sort((left, right) => right.pathProgressMilli - left.pathProgressMilli || left.id.localeCompare(right.id))
+                .slice(0, 2);
+            extras.forEach((enemy, index) => {
+                const ratio = index === 0 ? 8000 : 6000;
+                this.executeGeneralCombatAction(player, formation, level, {
+                    ...action,
+                    actionId: `${action.actionId}:houyi-weapon-${index + 1}`,
+                    targetEnemyId: enemy.id,
+                    primaryTargetEnemyId: primary?.id ?? action.primaryTargetEnemyId,
+                    targetEnemyIds: [enemy.id],
+                    targetIndex: index + 1,
+                    delayMs: 0,
+                    damage: { ...action.damage, coefficientBps: Math.floor(action.damage.coefficientBps * ratio / 10000) },
+                });
+            });
+        }
+        for (const source of sources) {
+            for (const trigger of source.triggers) {
+                if (trigger.kind === 'on_basic_attack_hit' && action.effectType === 'damage'
+                    && action.actionKind === 'basic_attack' && this.prng.rollBps(trigger.chanceBps ?? 0)) {
+                    const enemy = this.enemies.find((entry) => entry.id === action.targetEnemyId && entry.lifecycle === 'alive');
+                    if (!enemy)
+                        continue;
+                    for (const triggerAction of trigger.actions) {
+                        if (triggerAction.type === 'apply_status')
+                            this.applyWeaponStatus(player, formation, enemy, triggerAction.statusId, triggerAction.magnitudeBps, triggerAction.durationMs, source.sourceKey);
+                    }
+                }
+            }
+        }
+    }
+    applyWeaponStatus(player, formation, enemy, statusId, magnitude, durationMs, sourceKey) {
+        this.effectSequence += 1;
+        this.statuses.push({ instanceId: `status-${this.effectSequence}`, enemyId: enemy.id,
+            sourceGeneralId: formation.generalId, ownerPlayerId: player.playerId, statusId,
+            stackGroup: `${sourceKey}:${statusId}`, magnitude, stacks: 1, appliedAtTick: this.currentTick,
+            expiresAtTick: this.currentTick + Math.max(1, Math.ceil(durationMs / this.tickRateMs)) });
+        this.emit('STATUS_APPLIED', { enemyId: enemy.id, generalId: formation.generalId, statusId, magnitude,
+            chanceBps: 10000, durationMs, controlResistanceDownBps: 0 });
     }
     resolvePendingCombatActions() {
         const due = this.pendingCombatActions.filter((entry) => entry.dueTick <= this.currentTick)
@@ -1278,7 +1601,8 @@ class PveGameRuntime {
     }
     resolveCombinedEffectParameter(ownerPlayerId, sourceGeneralId, sourceFormationId, effectId, parameter, baseValue) {
         const internallyPatched = this.patchedNumber({ ownerPlayerId, sourceGeneralId, sourceFormationId, effectId }, parameter, baseValue);
-        return this.resolveSynergyEffectParameter(ownerPlayerId, sourceGeneralId, effectId, parameter, internallyPatched);
+        const weaponPatched = this.resolveWeaponEffectParameter(ownerPlayerId, sourceGeneralId, effectId, parameter, internallyPatched);
+        return this.resolveSynergyEffectParameter(ownerPlayerId, sourceGeneralId, effectId, parameter, weaponPatched);
     }
     resolvePlanningEffectParameter(ownerPlayerId, sourceGeneralId, sourceFormationId, effectId, parameter, baseValue) {
         // 这些参数在目标冻结/实例创建前就必须结算；直伤与状态数值仍在执行时读取
@@ -1289,7 +1613,19 @@ class PveGameRuntime {
         ]);
         return planningParameters.has(parameter)
             ? this.resolveCombinedEffectParameter(ownerPlayerId, sourceGeneralId, sourceFormationId, effectId, parameter, baseValue)
-            : this.resolveSynergyEffectParameter(ownerPlayerId, sourceGeneralId, effectId, parameter, baseValue);
+            : this.resolveSynergyEffectParameter(ownerPlayerId, sourceGeneralId, effectId, parameter, this.resolveWeaponEffectParameter(ownerPlayerId, sourceGeneralId, effectId, parameter, baseValue));
+    }
+    resolveWeaponEffectParameter(ownerPlayerId, sourceGeneralId, effectId, parameter, baseValue) {
+        const matchesEffect = (targetEffectId) => targetEffectId === effectId
+            || (sourceGeneralId === 'houyi' && targetEffectId.startsWith('houyi_chuanyun') && effectId.startsWith('houyi_chuanyun'))
+            || targetEffectId === 'basic_attack' && effectId.includes('basic');
+        const patches = this.weaponSources(ownerPlayerId, sourceGeneralId)
+            .flatMap((source) => source.parameterPatches.map((patch) => ({ source: source.sourceKey, patch })))
+            .filter(({ patch }) => patch.parameter === parameter && matchesEffect(patch.targetEffectId))
+            .sort((left, right) => `${left.source}:${left.patch.patchId}`.localeCompare(`${right.source}:${right.patch.patchId}`));
+        return patches.reduce((value, { patch }) => patch.operation === 'add_flat' ? value + patch.value
+            : patch.operation === 'add_ratio' ? Math.floor(value * (10000 + patch.value) / 10000)
+                : Math.floor(value * patch.value / 10000), baseValue);
     }
     effectParameterPatchKey(action) {
         return [action.ownerPlayerId, action.sourceGeneralId, action.sourceFormationId, action.targetEffectId, action.parameter,
@@ -1310,6 +1646,11 @@ class PveGameRuntime {
         let durationMs = this.settleGeneralSynergyStat({ playerId: player.playerId,
             generalId: action.sourceGeneralId, stat: 'controlDuration', baseValue: action.durationMs,
             targetTags: this.enemyTags(enemy), effectTags: ['status_apply', action.statusId, action.actionKind] });
+        if (CONTROL_STATUS_IDS.has(action.statusId)) {
+            durationMs = Math.floor(durationMs
+                * this.weaponStatRatio(player.playerId, action.sourceGeneralId, 'control_duration', this.enemyTags(enemy)) / 10000
+                * (10000 + this.passiveCombatRatio(player, action.sourceGeneralId, 'controlDuration')) / 10000);
+        }
         if (CONTROL_STATUS_IDS.has(action.statusId)) {
             durationMs = Math.floor(durationMs * (10000 + resistanceDown) / 10000);
         }
@@ -1409,6 +1750,10 @@ class PveGameRuntime {
         return this.statuses.filter((status) => status.enemyId === enemyId && status.statusId === statusId && status.expiresAtTick > this.currentTick)
             .reduce((maximum, status) => Math.max(maximum, status.magnitude * status.stacks), 0);
     }
+    hasAnyControlStatus(enemyId) {
+        return this.statuses.some((status) => status.enemyId === enemyId
+            && CONTROL_STATUS_IDS.has(status.statusId) && status.expiresAtTick > this.currentTick);
+    }
     hasEnemyStatus(enemyId, statusId) {
         return this.statuses.some((status) => status.enemyId === enemyId && status.statusId === statusId
             && status.expiresAtTick > this.currentTick);
@@ -1493,10 +1838,15 @@ class PveGameRuntime {
             return;
         const alive = this.summonedUnits.filter((entry) => entry.ownerPlayerId === player.playerId
             && entry.sourceGeneralId === action.sourceGeneralId && entry.summonUnitId === action.summonUnitId).length;
-        const count = Math.max(0, Math.min(Math.floor(action.count), Math.floor(action.maxOwnedAlive) - alive));
-        const durationMs = this.settleSummonSynergyStat({ ownerPlayerId: player.playerId,
+        const aliveLimitWeapon = this.weaponSummonModifier(player.playerId, action.sourceGeneralId, 'summon_alive_limit');
+        const maxOwnedAlive = Math.max(0, Math.floor(action.maxOwnedAlive + aliveLimitWeapon.flat));
+        const count = Math.max(0, Math.min(Math.floor(action.count), maxOwnedAlive - alive));
+        let durationMs = this.settleSummonSynergyStat({ ownerPlayerId: player.playerId,
             sourceGeneralId: action.sourceGeneralId, summonUnitId: action.summonUnitId,
             stat: 'summonDuration', baseValue: action.durationMs });
+        const durationWeapon = this.weaponSummonModifier(player.playerId, action.sourceGeneralId, 'summon_duration');
+        durationMs = Math.max(1, Math.floor(durationMs * durationWeapon.ratio / 10000
+            * (10000 + this.passiveCombatRatio(player, action.sourceGeneralId, 'summonDuration')) / 10000));
         for (let index = 0; index < count; index += 1) {
             this.effectSequence += 1;
             const spawnPoint = this.resolveSummonSpawnPoint(player, formation, action, index);
@@ -1631,7 +1981,9 @@ class PveGameRuntime {
         for (const summon of this.summonedUnits.slice().sort((left, right) => left.id.localeCompare(right.id))) {
             if (summon.nextAttackTick > this.currentTick)
                 continue;
-            const range = (0, catalog_1.getGeneralLevelValue)(summon.template.baseStats.attackRangeMilliCellsByOwnerLevel, summon.ownerLevel);
+            const rangeWeapon = this.weaponSummonModifier(summon.ownerPlayerId, summon.sourceGeneralId, 'summon_attack_range');
+            const range = Math.max(0, Math.floor((0, catalog_1.getGeneralLevelValue)(summon.template.baseStats.attackRangeMilliCellsByOwnerLevel, summon.ownerLevel) * rangeWeapon.ratio / 10000
+                + rangeWeapon.flat));
             const target = this.enemies.filter((enemy) => enemy.lifecycle === 'alive' && this.isEnemyTargetable(enemy)
                 && this.distanceSquared(summon.xMilli, summon.yMilli, enemy.xMilli, enemy.yMilli) <= range * range)
                 .sort((left, right) => this.compareEnemyPriority(left, right))[0];
@@ -1643,26 +1995,34 @@ class PveGameRuntime {
             const inheritedAttack = Math.floor((ownerStats?.attack ?? 0) * (summon.inheritStatRatiosBps.attack ?? 0) / 10000);
             const allStatsRatio = this.resolveCombinedEffectParameter(summon.ownerPlayerId, summon.sourceGeneralId, summon.sourceFormationId, summon.sourceEffectId, 'summonAllStatsBps', 10000);
             const internalAttackRatio = this.resolveCombinedEffectParameter(summon.ownerPlayerId, summon.sourceGeneralId, summon.sourceFormationId, summon.sourceEffectId, 'summonAttackBps', 10000);
-            const summonAttack = this.settleSummonSynergyStat({ ownerPlayerId: summon.ownerPlayerId,
+            let summonAttack = this.settleSummonSynergyStat({ ownerPlayerId: summon.ownerPlayerId,
                 sourceGeneralId: summon.sourceGeneralId, summonUnitId: summon.summonUnitId,
                 stat: 'summonAttack', baseValue: Math.floor((templateAttack + inheritedAttack)
                     * allStatsRatio / 10000 * internalAttackRatio / 10000) });
+            const summonAttackWeapon = this.weaponSummonModifier(summon.ownerPlayerId, summon.sourceGeneralId, 'summon_attack');
+            summonAttack = Math.max(1, Math.floor(summonAttack * summonAttackWeapon.ratio / 10000 + summonAttackWeapon.flat));
             const internalCritRate = this.resolveCombinedEffectParameter(summon.ownerPlayerId, summon.sourceGeneralId, summon.sourceFormationId, summon.sourceEffectId, 'summonCritRateBps', (0, catalog_1.getGeneralLevelValue)(summon.template.baseStats.critChanceBpsByOwnerLevel, summon.ownerLevel));
+            const critRateWeapon = this.weaponSummonModifier(summon.ownerPlayerId, summon.sourceGeneralId, 'summon_crit_rate');
             const critChance = Math.min(10000, Math.max(0, this.settleSummonSynergyStat({
                 ownerPlayerId: summon.ownerPlayerId, sourceGeneralId: summon.sourceGeneralId,
                 summonUnitId: summon.summonUnitId, stat: 'summonCritRate',
                 baseValue: Math.floor(internalCritRate * allStatsRatio / 10000),
-            })));
+            }) * critRateWeapon.ratio / 10000 + critRateWeapon.flat));
             const bossCritDamage = this.enemyTags(target).includes('boss')
                 ? this.resolveCombinedEffectParameter(summon.ownerPlayerId, summon.sourceGeneralId, summon.sourceFormationId, summon.sourceEffectId, 'bossCritDamageBps', 0) : 0;
+            const critDamageWeapon = this.weaponSummonModifier(summon.ownerPlayerId, summon.sourceGeneralId, 'summon_crit_damage');
             const critDamage = Math.max(10000, this.settleSummonSynergyStat({ ownerPlayerId: summon.ownerPlayerId,
                 sourceGeneralId: summon.sourceGeneralId, summonUnitId: summon.summonUnitId,
                 stat: 'summonCritDamage',
                 baseValue: Math.floor((0, catalog_1.getGeneralLevelValue)(summon.template.baseStats.critDamageBpsByOwnerLevel, summon.ownerLevel)
                     * allStatsRatio / 10000) + bossCritDamage,
-            }));
+            }) * critDamageWeapon.ratio / 10000 + critDamageWeapon.flat);
             const isCritical = summon.template.basicAttack.criticalPolicy === 'can_crit' && this.prng.rollBps(critChance);
             let rawDamage = Math.max(1, Math.floor(summonAttack * summon.template.basicAttack.coefficientBps / 10000));
+            const summonDamageWeapon = this.weaponSummonModifier(summon.ownerPlayerId, summon.sourceGeneralId, 'summon_damage');
+            const ownerPlayer = this.players.get(summon.ownerPlayerId);
+            rawDamage = Math.max(1, Math.floor(rawDamage * summonDamageWeapon.ratio / 10000
+                * (10000 + (ownerPlayer ? this.passiveCombatRatio(ownerPlayer, summon.sourceGeneralId, 'summonDamage') : 0)) / 10000));
             if (isCritical)
                 rawDamage = Math.max(1, Math.floor(rawDamage * critDamage / 10000));
             this.applyRuntimeEffectDamage(target, summon.ownerPlayerId, summon.sourceGeneralId, summon.sourceFormationId, summon.template.basicAttack.attackId, summon.template.damageType, rawDamage, 'summon');
@@ -1670,7 +2030,9 @@ class PveGameRuntime {
             const speedRatio = this.settleSummonSynergyStat({ ownerPlayerId: summon.ownerPlayerId,
                 sourceGeneralId: summon.sourceGeneralId, summonUnitId: summon.summonUnitId,
                 stat: 'summonAttackSpeed', baseValue: allStatsRatio });
-            const settledInterval = Math.max(200, Math.ceil(interval * 10000 / Math.max(1, speedRatio)));
+            const speedWeapon = this.weaponSummonModifier(summon.ownerPlayerId, summon.sourceGeneralId, 'summon_attack_speed');
+            const settledInterval = Math.max(200, Math.ceil(interval * 10000
+                / Math.max(1, speedRatio) * 10000 / Math.max(1, speedWeapon.ratio + speedWeapon.flat)));
             summon.nextAttackTick = this.currentTick + Math.max(1, Math.ceil(settledInterval / this.tickRateMs));
             for (const onHit of summon.template.onHitStatuses) {
                 this.applySimpleStatus(target, summon.ownerPlayerId, summon.sourceGeneralId, onHit.statusId, onHit.magnitudeBps, onHit.durationMs, onHit.chanceBps, onHit.stackGroup);
@@ -2018,11 +2380,15 @@ class PveGameRuntime {
         const modifiers = this.synergyEffects.query({
             subject: { kind: 'player', ownerPlayerId: playerId },
         }).statModifiers;
-        return Math.max(0, Math.floor((0, synergy_v1_1.settleRuntimeSynergyStat)({
+        const synergyReward = Math.max(0, Math.floor((0, synergy_v1_1.settleRuntimeSynergyStat)({
             baseValue: XP_REWARD_POINTS,
             stat: 'generalExperienceGain',
             modifiers,
         })));
+        const player = this.players.get(playerId);
+        return player?.passiveItems
+            ? (0, item_v1_1.resolveGeneralExperience)(synergyReward, player.passiveItems)
+            : synergyReward;
     }
     updateLaneClearRewards() {
         for (const lane of this.laneWaves) {
@@ -2034,7 +2400,7 @@ class PveGameRuntime {
             if (!owner) {
                 continue;
             }
-            const reward = 5 * lane.waveNumber;
+            const reward = 5 * lane.waveNumber + (owner.passiveItems?.ownLaneWaveClearRationsBonus ?? 0);
             owner.rice += reward;
             owner.clearedWaves.add(lane.waveNumber);
             this.emit('LANE_WAVE_CLEARED', {
@@ -2123,8 +2489,28 @@ class PveGameRuntime {
                 characterPieceIds: formation?.characterTokenIds ?? [],
             });
             const progress = this.generalFormations.getProgress(player.playerId, generalId);
-            if (formation && progress)
-                this.executePassivePlan(player, formation, progress.level, 'initialize');
+            const quality = this.getGeneralDefinition(generalId)?.quality;
+            if (quality && player.passiveItems?.generalLevelCaps[quality]) {
+                this.generalFormations.setBreakthrough(player.playerId, generalId, true);
+            }
+            const initializedProgress = this.generalFormations.getProgress(player.playerId, generalId) ?? progress;
+            if (formation && initializedProgress)
+                this.executePassivePlan(player, formation, initializedProgress.level, 'initialize');
+            for (const source of this.weaponSources(player.playerId, generalId)) {
+                for (const trigger of source.triggers) {
+                    const triggerSupported = trigger.kind === 'on_basic_attack_hit'
+                        && trigger.actions.every((action) => action.type === 'apply_status');
+                    if (!triggerSupported)
+                        for (const action of trigger.actions) {
+                            this.emitUnsupportedWeaponEffectOnce(player.playerId, generalId, source, trigger.triggerId, action.type);
+                        }
+                }
+                for (const patch of source.parameterPatches) {
+                    const supported = generalId === 'houyi' && patch.patchId.startsWith('houyi_');
+                    if (!supported)
+                        this.emitUnsupportedWeaponEffectOnce(player.playerId, generalId, source, patch.patchId, 'parameter_patch_requires_matching_effect');
+                }
+            }
         }
         for (const generalId of result.deactivatedGeneralIds) {
             this.emit('GENERAL_DEACTIVATED', { playerId: player.playerId, generalId });
@@ -2236,6 +2622,46 @@ class PveGameRuntime {
                 modifiers.push({ source: { kind: 'passive', sourceId: 'summon_attack_speed_aura' },
                     target: { scope: 'self' }, stat: 'attackSpeed', operation: 'add_ratio', value: auraRatio,
                     stackGroup: 'summon_attack_speed_aura' });
+            for (const status of this.generalStatuses.filter((entry) => entry.ownerPlayerId === playerId
+                && entry.sourceGeneralId === generalId
+                && entry.expiresAtTick > this.currentTick && entry.statusId.startsWith('active_item_'))) {
+                const stat = status.statusId.slice('active_item_'.length);
+                if (stat === 'attack' || stat === 'attackSpeed')
+                    modifiers.push({
+                        source: { kind: 'passive_item', sourceId: status.instanceId }, target: { scope: 'self' },
+                        stat, operation: 'add_ratio', value: status.magnitude * status.stacks, stackGroup: status.stackGroup,
+                    });
+            }
+        }
+        const player = this.players.get(playerId);
+        const definition = this.getGeneralDefinition(generalId);
+        for (const combat of player?.passiveItems?.combatEffects ?? []) {
+            const effect = combat.effect;
+            if (effect.type !== 'persistent_stat_modifier')
+                continue;
+            const applies = effect.target === 'target_general'
+                || (effect.target === 'owner_physical_generals' && definition?.archetype === 'physical')
+                || (effect.target === 'owner_magic_generals' && definition?.archetype === 'magic')
+                || (effect.target === 'owner_control_generals' && definition?.archetype === 'control');
+            if (applies && effect.stat === 'attack')
+                modifiers.push({ source: { kind: 'passive_item', sourceId: combat.sourceKey },
+                    target: { scope: 'self' }, stat: 'attack', operation: 'add_ratio', value: effect.valueBps,
+                    stackGroup: effect.stackGroup });
+        }
+        for (const source of this.weaponSources(playerId, generalId)) {
+            for (const modifier of source.statModifiers) {
+                if (modifier.target !== 'owner_general')
+                    continue;
+                const stat = modifier.stat === 'attack' ? 'attack'
+                    : modifier.stat === 'attack_speed' ? 'attackSpeed'
+                        : modifier.stat === 'attack_range' ? 'attackRange'
+                            : modifier.stat === 'crit_damage' ? 'critDamage' : null;
+                if (stat)
+                    modifiers.push({ source: { kind: 'weapon', sourceId: `${source.sourceKey}:${modifier.effectId}` },
+                        target: { scope: 'self' }, stat, operation: modifier.operation, value: modifier.value,
+                        stackGroup: `${source.sourceKey}:${modifier.effectId}`,
+                        ...(modifier.conditionTagsAny ? { condition: { targetTagsAny: modifier.conditionTagsAny } } : {}) });
+            }
         }
         for (const sourceFormation of this.generalFormations.getActiveFormations(playerId)) {
             if (sourceFormation.generalId === generalId)
@@ -2253,6 +2679,69 @@ class PveGameRuntime {
             }
         }
         return modifiers;
+    }
+    weaponSources(playerId, generalId) {
+        const snapshot = this.players.get(playerId)?.weaponSnapshot;
+        return snapshot ? (0, weapon_v1_1.projectWeaponLoadout)(this.seed, snapshot, generalId) : [];
+    }
+    emitUnsupportedWeaponEffectOnce(playerId, generalId, source, triggerId, actionType) {
+        const key = `${source.sourceKey}:${triggerId}:${actionType}`;
+        if (this.reportedUnsupportedWeaponEffects.has(key))
+            return;
+        this.reportedUnsupportedWeaponEffects.add(key);
+        this.emit('WEAPON_EFFECT_UNSUPPORTED', { playerId, generalId, weaponId: source.weaponId,
+            sourceKey: source.sourceKey, triggerId, actionType });
+    }
+    weaponStatRatio(playerId, generalId, stat, targetTags = []) {
+        let ratio = 10000;
+        let flat = 0;
+        for (const source of this.weaponSources(playerId, generalId)) {
+            for (const modifier of source.statModifiers) {
+                if (modifier.stat !== stat || modifier.target !== 'owner_general')
+                    continue;
+                if (modifier.conditionTagsAny && !modifier.conditionTagsAny.some((tag) => targetTags.includes(tag)))
+                    continue;
+                if (modifier.operation === 'add_ratio')
+                    ratio += modifier.value;
+                else
+                    flat += modifier.value;
+            }
+        }
+        return ratio + flat;
+    }
+    activeItemTimedRatio(playerId, generalId, stat) {
+        return this.generalStatuses.filter((entry) => entry.ownerPlayerId === playerId
+            && entry.sourceGeneralId === generalId && entry.statusId === `active_item_${stat}`
+            && entry.expiresAtTick > this.currentTick)
+            .reduce((sum, entry) => sum + entry.magnitude * entry.stacks, 0);
+    }
+    passiveCombatRatio(player, generalId, stat) {
+        const definition = this.getGeneralDefinition(generalId);
+        return (player.passiveItems?.combatEffects ?? []).reduce((sum, entry) => {
+            const effect = entry.effect;
+            if (effect.type !== 'persistent_stat_modifier' || effect.stat !== stat)
+                return sum;
+            const applies = (stat === 'summonDamage' || stat === 'summonDuration')
+                ? effect.target === 'summons_owned_by_player'
+                : effect.target === 'target_general'
+                    || (effect.target === 'owner_magic_generals' && definition?.archetype === 'magic')
+                    || (effect.target === 'owner_control_generals' && definition?.archetype === 'control');
+            return applies ? sum + effect.valueBps : sum;
+        }, 0);
+    }
+    weaponSummonModifier(playerId, generalId, stat) {
+        let ratio = 10000;
+        let flat = 0;
+        for (const source of this.weaponSources(playerId, generalId))
+            for (const modifier of source.statModifiers) {
+                if (modifier.target !== 'owned_summons' || modifier.stat !== stat)
+                    continue;
+                if (modifier.operation === 'add_ratio')
+                    ratio += modifier.value;
+                else
+                    flat += modifier.value;
+            }
+        return { ratio, flat };
     }
     summonAuraAttackSpeedRatio(ownerPlayerId, xMilli, yMilli) {
         let ratio = 10000;
@@ -2292,7 +2781,7 @@ class PveGameRuntime {
             generalId: definition.generalId,
             stat: 'cooldownReduction',
             baseValue: 10000,
-        }) - 10000;
+        }) - 10000 + Math.max(0, this.weaponStatRatio(playerId, definition.generalId, 'cooldown_reduction') - 10000);
         let ownerAuraRatio = 10000;
         for (const formation of this.generalFormations.getActiveFormations(playerId)) {
             const source = this.getGeneralDefinition(formation.generalId);
@@ -2389,6 +2878,13 @@ class PveGameRuntime {
             boardRevision: player.boardRevision,
             tray: player.tray.map((piece) => piece ? clonePiece(piece) : null),
             reserve: player.reserve.map((piece) => piece ? clonePiece(piece) : null),
+            discardedCharacters: player.discardedCharacters.map((piece) => ({ ...piece })),
+            itemRuntime: player.itemRuntime ? {
+                version: player.itemRuntime.version,
+                slots: player.itemRuntime.slots.map((slot) => slot ? { ...slot } : null),
+            } : null,
+            weaponLoadoutByGeneralId: Object.fromEntries(Object.entries(player.weaponSnapshot?.byGeneralId ?? {})
+                .map(([generalId, loadout]) => [generalId, [...loadout.slots]])),
             boardPieces,
             generalFormations,
             generalProgress,
@@ -2398,7 +2894,8 @@ class PveGameRuntime {
         };
     }
     nextRecruitCost(player) {
-        return 5 + 2 * player.recruitCount;
+        const baseCost = 5 + 2 * player.recruitCount;
+        return player.passiveItems ? (0, item_v1_1.resolvePaidRecruitCost)(baseCost, player.passiveItems) : baseCost;
     }
     populationUsed(player) {
         let used = 0;
@@ -2552,9 +3049,16 @@ class PveGameRuntime {
             ? { ...definition, glyphPool: stageGlyphPool }
             : definition;
     }
-    isStorageIndexValid(zone, index) {
-        const size = zone === 'tray' ? TRAY_SIZE : RESERVE_SIZE;
+    isStorageIndexValid(zone, index, player) {
+        const size = zone === 'tray' ? TRAY_SIZE : (player?.reserve.length ?? RESERVE_SIZE);
         return Number.isInteger(index) && index >= 0 && index < size;
+    }
+    discardStorageCharacters(player, pieces) {
+        for (const piece of pieces) {
+            if (piece?.kind === 'character' && !player.discardedCharacters.some((entry) => entry.id === piece.id)) {
+                player.discardedCharacters.push(piece);
+            }
+        }
     }
     canDeployAt(slot, x, y) {
         return Number.isInteger(x) && Number.isInteger(y) && this.isDeployableCell(slot, x, y);

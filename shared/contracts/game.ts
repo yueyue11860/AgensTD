@@ -138,6 +138,27 @@ export interface MoveFixedGeneralAction extends GridPosition {
   expectedBoardRevision?: number
 }
 
+export type ActiveItemTargetPayload =
+  | { kind: 'none' }
+  | { kind: 'piece'; pieceId: string; expectedRevision: number }
+  | { kind: 'general'; generalId: string }
+  | { kind: 'enemy'; enemyId: string }
+  | { kind: 'battlefield_point'; xMilli: number; yMilli: number }
+  | {
+      kind: 'discarded_character_to_empty_slot'
+      tokenId: string
+      expectedTokenRevision: number
+      destination: { zone: 'summon_tray' | 'reserve'; index: number; expectedRevision: number }
+    }
+
+export interface UseActiveItemAction {
+  action: 'USE_ACTIVE_ITEM'
+  slotIndex: 0 | 1
+  itemId: string
+  target: ActiveItemTargetPayload
+  expectedItemRuntimeVersion: number
+}
+
 export type PveGameAction =
   | RecruitBatchAction
   | DeployTrayPieceAction
@@ -148,6 +169,7 @@ export type PveGameAction =
   | SwapStoragePiecesAction
   | SetGeneralFixedAction
   | MoveFixedGeneralAction
+  | UseActiveItemAction
 
 export type GameAction =
   | BuildTowerAction
@@ -374,6 +396,19 @@ export interface PvePlayerState {
   boardRevision: number
   tray: PveTraySlotState[]
   reserve: PveReserveSlotState[]
+  discardedCharacters: Array<{ entityId: string; glyph: string; createdSequence: number }>
+  itemRuntime: {
+    version: number
+    slots: Array<{
+      itemId: string
+      slotIndex: 0 | 1
+      chargesRemaining: number
+      cooldownEndsAtTick: number
+      usesThisMatch: number
+      enabled: boolean
+    } | null>
+  } | null
+  weaponLoadoutByGeneralId: Record<string, readonly [string | null, string | null]>
   generalFormations: PveGeneralFormationState[]
   generalProgress: PveGeneralProgressState[]
   activeSynergies: PveActiveSynergyState[]

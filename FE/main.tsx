@@ -5,6 +5,7 @@ import { RequireAuth } from './components/require-auth'
 import { AuthCallbackPage } from './pages/auth-callback-page'
 import { GamingPage } from './pages/gaming-page'
 import { LoginPage } from './pages/login-page'
+import { MetaSystemPage } from './pages/meta-system-page'
 import { TowerDefenseFrontendPage } from './pages/tower-defense-frontend-page'
 import './app/globals.css'
 
@@ -30,6 +31,9 @@ createRoot(rootElement).render(
         <Route path="/room" element={<RequireAuth><TowerDefenseFrontendPage /></RequireAuth>} />
         <Route path="/room/:roomId" element={<RequireAuth><TowerDefenseFrontendPage /></RequireAuth>} />
         <Route path="/gaming" element={<RequireAuth><GamingPage /></RequireAuth>} />
+        <Route path="/build" element={<RequireAuth><MetaSystemPage mode="build" /></RequireAuth>} />
+        <Route path="/arsenal" element={<RequireAuth><MetaSystemPage mode="arsenal" /></RequireAuth>} />
+        <Route path="/shop" element={<RequireAuth><MetaSystemPage mode="shop" /></RequireAuth>} />
         <Route path="*" element={<Navigate to="/home" replace />} />
       </Routes>
     </BrowserRouter>

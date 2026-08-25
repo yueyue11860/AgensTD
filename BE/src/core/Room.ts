@@ -14,6 +14,13 @@ import type { GridMapCell } from './grid-map'
 import { GridMap } from './grid-map'
 import { GameEngine, type EngineLaneRoute, type EngineSlotId } from './game-engine'
 import type { WaveConfig } from '../../../shared/contracts/game'
+import type {
+  MatchBuildDefinitionResolver,
+  MatchBuildSnapshot,
+  MatchPlayerSettlement,
+  SettlementReason,
+} from '../account-v1/types'
+import type { PlayerAccountService } from '../account-v1/service'
 
 export type RoomPhase = 'lobby' | 'countdown' | 'waiting_for_level' | 'playing'
 
@@ -22,6 +29,11 @@ export const ROOM_SLOT_ORDER = ['P1', 'P2', 'P3', 'P4'] as const satisfies reado
 export interface RoomCreateOptions {
   displayName?: string
   hasPassword?: boolean
+}
+
+export interface RoomAccountRuntime {
+  accountService: PlayerAccountService
+  buildResolver: MatchBuildDefinitionResolver
 }
 
 export interface RoomSlotSnapshot {
@@ -119,9 +131,18 @@ export class Room {
   // 倒计时定时器句柄（idle 时务必清除）
   private countdownTimer: NodeJS.Timeout | null = null
 
+  private countdownPreparing = false
+
   private pendingLevelId: number | null = null
 
-  constructor(id: string, config: ServerConfig, options?: RoomCreateOptions) {
+  private readonly matchBuildSnapshots = new Map<string, MatchBuildSnapshot>()
+
+  constructor(
+    id: string,
+    config: ServerConfig,
+    options?: RoomCreateOptions,
+    private readonly accountRuntime?: RoomAccountRuntime,
+  ) {
     this.id = id
     this.displayName = options?.displayName?.trim() || id
     this.hasPassword = options?.hasPassword ?? false
@@ -148,6 +169,11 @@ export class Room {
     const existingSlot = this.getPlayerSlot(playerId)
     if (existingSlot) {
       return existingSlot
+    }
+
+    // 构筑在倒计时前已锁定；只允许旧玩家重连，不允许陌生玩家插入。
+    if (!this.isAcceptingNewPlayers()) {
+      return null
     }
 
     const openSlot = ROOM_SLOT_ORDER.find((slot) => !this.slotAssignments.has(slot))
@@ -214,13 +240,20 @@ export class Room {
     return this.phase
   }
 
+  isAcceptingNewPlayers(): boolean {
+    return this.getPhase() === 'lobby' && !this.countdownPreparing
+  }
+
   getHostPlayerId(): string | null {
     return this.hostPlayerId
   }
 
   /** 返回当前房间内全部玩家 ID 列表 */
   getConnectedPlayerIds(): string[] {
-    return [...this.slotAssignments.values()]
+    const connected = new Set(this.engine.getStateSnapshot().players
+      .filter(player => player.connectionStatus === 'connected')
+      .map(player => player.id))
+    return [...this.slotAssignments.values()].filter(playerId => connected.has(playerId))
   }
 
   getSummary(): RoomSummarySnapshot {
@@ -260,13 +293,15 @@ export class Room {
    * - `onComplete` 在 3 秒后自动触发，应由 SocketGateway 向全房广播状态变化
    * @returns 'ok' | 'wrong_phase' | 'forbidden'
    */
-  beginCountdown(
+  async beginCountdown(
     requestorPlayerId: string,
     onComplete: () => void,
-  ): 'ok' | 'wrong_phase' | 'forbidden' {
+  ): Promise<'ok' | 'wrong_phase' | 'forbidden' | 'snapshot_failed'> {
     if (this.getPhase() !== 'lobby') {
       return 'wrong_phase'
     }
+
+    if (this.countdownPreparing) return 'wrong_phase'
 
     if (requestorPlayerId !== this.hostPlayerId) {
       return 'forbidden'
@@ -274,6 +309,19 @@ export class Room {
 
     if (this.phase === 'playing' && !this.engine.resetForRematch()) {
       return 'wrong_phase'
+    }
+
+    this.countdownPreparing = true
+    try {
+      await this.lockMatchBuildSnapshots()
+    }
+    catch (error) {
+      const details = error instanceof Error ? error.message : String(error)
+      console.error(`Room ${this.id} failed to lock match build snapshots: ${details}`)
+      return 'snapshot_failed'
+    }
+    finally {
+      this.countdownPreparing = false
     }
 
     this.phase = 'countdown'
@@ -296,6 +344,30 @@ export class Room {
     this.engine.ignite(waves, startingGold, levelId)
   }
 
+  getMatchBuildSnapshot(playerId: string): MatchBuildSnapshot | null {
+    const snapshot = this.matchBuildSnapshots.get(playerId)
+    return snapshot ? structuredClone(snapshot) : null
+  }
+
+  /**
+   * 权威结算钩子。调用方必须传入已由战斗服务确认的碎片，
+   * Room 不会从 UI 或不完整快照猜测掉落。
+   */
+  async commitPlayerSettlement(input: {
+    requestId: string
+    playerId: string
+    reason: SettlementReason
+    highestCompletedWave: number
+    officialVictory: boolean
+    retainedWeaponFragments: Readonly<Record<string, number>>
+  }): Promise<MatchPlayerSettlement> {
+    if (!this.accountRuntime) throw new Error('PLAYER_ACCOUNT_SERVICE_NOT_CONFIGURED')
+    return this.accountRuntime.accountService.settleMatch({
+      ...input,
+      matchId: this.engine.getStateSnapshot().matchId,
+    })
+  }
+
   setPendingLevelSelection(levelId: number) {
     this.pendingLevelId = levelId
   }
@@ -308,11 +380,43 @@ export class Room {
 
   destroy() {
     this.pendingLevelId = null
+    this.countdownPreparing = false
 
     if (this.countdownTimer) {
       clearTimeout(this.countdownTimer)
       this.countdownTimer = null
     }
+  }
+
+  private async lockMatchBuildSnapshots(): Promise<void> {
+    if (!this.accountRuntime) {
+      this.matchBuildSnapshots.clear()
+      this.engine.setMatchBuildSnapshots({})
+      return
+    }
+    const matchId = this.engine.getStateSnapshot().matchId
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const playerIds = this.getConnectedPlayerIds().sort()
+      const snapshots = await Promise.all(playerIds.map(async (playerId) => {
+        const account = await this.accountRuntime!.accountService.getOrCreate(playerId)
+        return this.accountRuntime!.accountService.createBuildSnapshot({
+          requestId: `lock-build:${matchId}:${playerId}`,
+          matchId,
+          playerId,
+          expectedAccountVersion: account.version,
+        }, this.accountRuntime!.buildResolver)
+      }))
+      const connectedAfterRead = this.getConnectedPlayerIds().sort()
+      if (playerIds.length !== connectedAfterRead.length
+        || playerIds.some((playerId, index) => playerId !== connectedAfterRead[index])) continue
+      this.matchBuildSnapshots.clear()
+      for (const snapshot of snapshots) this.matchBuildSnapshots.set(snapshot.playerId, snapshot)
+      this.engine.setMatchBuildSnapshots(Object.fromEntries(
+        snapshots.map(snapshot => [snapshot.playerId, snapshot]),
+      ))
+      return
+    }
+    throw new Error('CONNECTED_PLAYERS_CHANGED_DURING_BUILD_LOCK')
   }
 
   private syncEngineRoomRules() {
@@ -342,14 +446,17 @@ export class Room {
 export class RoomManager {
   private readonly rooms = new Map<string, Room>()
 
-  constructor(private readonly config: ServerConfig) {}
+  constructor(
+    private readonly config: ServerConfig,
+    private readonly accountRuntime?: RoomAccountRuntime,
+  ) {}
 
   createRoom(roomId: string, options?: RoomCreateOptions) {
     if (this.rooms.has(roomId)) {
       throw new Error(`Room ${roomId} already exists`)
     }
 
-    const room = new Room(roomId, this.config, options)
+    const room = new Room(roomId, this.config, options, this.accountRuntime)
     this.rooms.set(roomId, room)
     return room
   }

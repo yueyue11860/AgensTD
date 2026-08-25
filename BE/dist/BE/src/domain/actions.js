@@ -43,6 +43,20 @@ function parseClientAction(payload) {
                         : {}),
                 }
                 : null;
+        case 'USE_ACTIVE_ITEM':
+            return (payload.slotIndex === 0 || payload.slotIndex === 1)
+                && typeof payload.itemId === 'string'
+                && isObject(payload.target)
+                && typeof payload.target.kind === 'string'
+                && Number.isInteger(payload.expectedItemRuntimeVersion)
+                ? {
+                    action: 'USE_ACTIVE_ITEM',
+                    slotIndex: payload.slotIndex,
+                    itemId: payload.itemId,
+                    target: payload.target,
+                    expectedItemRuntimeVersion: payload.expectedItemRuntimeVersion,
+                }
+                : null;
         case 'DEPLOY_TRAY_PIECE':
             return Number.isInteger(payload.trayIndex)
                 && typeof payload.x === 'number'

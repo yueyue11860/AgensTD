@@ -92,10 +92,12 @@ class GameEngine {
     waveManager;
     laneRoutes;
     pveRuntime;
+    matchBuildSnapshots = {};
     matchSequence = 0;
     playerSlots = new Map();
     pveStarted = false;
     actionSequence = 0;
+    actionRequestReceipts = new Map();
     lastPveWaveNumber = 0;
     pveWaveStartedAtTick = 0;
     activeSlots;
@@ -228,10 +230,24 @@ class GameEngine {
         }
         this.syncPveRuntimeState();
     }
-    enqueueAction(player, action) {
+    resolveActionRequest(playerId, requestId, action) {
+        const receipt = this.actionRequestReceipts.get(`${playerId}:${requestId}`);
+        if (!receipt)
+            return { status: 'new' };
+        if (receipt.fingerprint !== JSON.stringify(action))
+            return { status: 'conflict' };
+        return {
+            status: 'replay',
+            actionId: receipt.actionId,
+            serverTick: receipt.serverTick,
+            rateLimitRemaining: receipt.rateLimitRemaining,
+        };
+    }
+    enqueueAction(player, action, clientRequestId = null, rateLimitRemaining = 0) {
         this.actionSequence += 1;
         const queuedAction = {
             id: `${player.playerId}:${this.actionSequence}`,
+            clientRequestId,
             receivedAt: Date.now(),
             player,
             action,
@@ -249,15 +265,32 @@ class GameEngine {
             playerId: player.playerId,
             action: action.action,
         });
-        return {
+        const receipt = {
             actionId: queuedAction.id,
             serverTick: this.state.tick,
         };
+        if (clientRequestId) {
+            this.actionRequestReceipts.set(`${player.playerId}:${clientRequestId}`, {
+                fingerprint: JSON.stringify(action),
+                ...receipt,
+                rateLimitRemaining,
+            });
+        }
+        return receipt;
     }
     attachPerformanceTelemetry(performanceTelemetry) {
         this.performanceTelemetry = performanceTelemetry;
         this.performanceTelemetry.setGauge('engine.tick.listeners', this.tickListeners.size);
         this.performanceTelemetry.setGauge('engine.action.listeners', this.actionListeners.size);
+    }
+    /**
+     * 房间在 ignite 前注入局外构筑快照。运行时只使用该冻结副本，
+     * 对局中账户后续换装不会污染当前对局。
+     */
+    setMatchBuildSnapshots(snapshots) {
+        if (this.pveStarted)
+            throw new Error('MATCH_BUILD_SNAPSHOTS_LOCKED');
+        this.matchBuildSnapshots = structuredClone(snapshots);
     }
     onTick(listener, options) {
         this.tickListeners.set(listener, options?.label ?? `tick-listener-${this.tickListeners.size + 1}`);
@@ -301,6 +334,7 @@ class GameEngine {
         }
         this.pveStarted = false;
         this.actionSequence = 0;
+        this.actionRequestReceipts.clear();
         this.lastPveWaveNumber = 0;
         this.pveWaveStartedAtTick = 0;
         this.overloadTicks = 0;
@@ -468,6 +502,7 @@ class GameEngine {
             case 'SWAP_STORAGE_PIECES':
             case 'SET_GENERAL_FIXED':
             case 'MOVE_FIXED_GENERAL':
+            case 'USE_ACTIVE_ITEM':
                 this.handlePveAction(queuedAction);
                 return;
         }
@@ -570,6 +605,16 @@ class GameEngine {
                     targetStartX: action.x,
                     targetStartY: action.y,
                     expectedBoardRevision: action.expectedBoardRevision,
+                };
+            case 'USE_ACTIVE_ITEM':
+                return {
+                    type: 'USE_ACTIVE_ITEM',
+                    actionId: queuedAction.id,
+                    requestId: queuedAction.clientRequestId ?? queuedAction.id,
+                    slotIndex: action.slotIndex,
+                    itemId: action.itemId,
+                    target: action.target,
+                    expectedItemRuntimeVersion: action.expectedItemRuntimeVersion,
                 };
             default:
                 return null;
@@ -792,6 +837,26 @@ class GameEngine {
             counts[glyph] = (counts[glyph] ?? 0) + 1;
             return counts;
         }, {});
+        const itemLoadoutSnapshots = {};
+        const weaponLoadoutSnapshots = {};
+        for (const [playerId, build] of Object.entries(this.matchBuildSnapshots)) {
+            itemLoadoutSnapshots[playerId] = {
+                snapshotVersion: 1,
+                catalogVersion: 1,
+                playerId,
+                accountVersion: build.item.accountVersion,
+                activeSlots: build.item.activeSlots,
+                passiveSlots: build.item.passiveSlots,
+                activeItems: build.item.resolvedActiveDefinitions,
+                passiveItems: build.item.resolvedPassiveDefinitions,
+            };
+            weaponLoadoutSnapshots[playerId] = {
+                snapshotVersion: 1,
+                playerId,
+                accountVersion: build.weapon.accountVersion,
+                byGeneralId: build.weapon.byGeneralId,
+            };
+        }
         return new pve_v2_1.PveGameRuntime({
             seed: `${this.config.matchId}:pve-v2${seedSuffix}`,
             tickRateMs: this.config.tickRateMs,
@@ -800,6 +865,8 @@ class GameEngine {
             maxWaves: 20,
             characterTokens,
             waveGlyphPools: stageDefinition?.waveGlyphPools,
+            itemLoadoutSnapshots,
+            weaponLoadoutSnapshots,
         });
     }
     projectPveSnapshot(snapshot) {
@@ -848,6 +915,16 @@ class GameEngine {
                     }
                     : null,
             })),
+            discardedCharacters: player.discardedCharacters.map((piece) => ({
+                entityId: piece.id,
+                glyph: piece.glyph,
+                createdSequence: piece.createdSequence,
+            })),
+            itemRuntime: player.itemRuntime ? {
+                version: player.itemRuntime.version,
+                slots: player.itemRuntime.slots.map((slot) => slot ? { ...slot } : null),
+            } : null,
+            weaponLoadoutByGeneralId: structuredClone(player.weaponLoadoutByGeneralId),
             generalFormations: player.generalFormations.map((formation) => ({
                 formationId: formation.formationId,
                 generalId: formation.generalId,

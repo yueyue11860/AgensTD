@@ -221,6 +221,10 @@ export class SocketGateway {
 
     const existingSlot = runtime.room.getPlayerSlot(identity.playerId)
     const existingConnections = runtime.playerConnections.get(identity.playerId) ?? 0
+    if (!existingSlot && existingConnections === 0 && !runtime.room.isAcceptingNewPlayers()) {
+      this.emitEngineError(socket, 'MATCH_IN_PROGRESS', '对局构筑已锁定，只允许原玩家重连')
+      return
+    }
     const assignedSlot = existingConnections > 0 || existingSlot
       ? existingSlot
       : runtime.room.joinPlayer(identity.playerId)
@@ -306,6 +310,7 @@ export class SocketGateway {
       actionId: submission.actionId,
       serverTick: submission.serverTick,
       rateLimitRemaining: submission.rateLimitRemaining,
+      duplicate: submission.duplicate,
     }
 
     socket.emit('ACTION_ACCEPTED', acceptedPayload)
@@ -333,7 +338,7 @@ export class SocketGateway {
       return
     }
 
-    this.beginRoomCountdown(joinedContext, socket)
+    void this.beginRoomCountdown(joinedContext, socket)
   }
 
   private handleSelectLevel(socket: Socket, payload: unknown) {
@@ -383,7 +388,7 @@ export class SocketGateway {
       joinedContext.room.setPendingLevelSelection(payload.levelId)
 
       if (currentPhase === 'lobby') {
-        this.beginRoomCountdown(joinedContext, socket)
+        void this.beginRoomCountdown(joinedContext, socket)
       }
 
       return
@@ -397,8 +402,8 @@ export class SocketGateway {
     this.activateRoomLevel(joinedContext.room, levelConfig)
   }
 
-  private beginRoomCountdown(joinedContext: JoinedRoomContext, socket: Socket) {
-    const result = joinedContext.room.beginCountdown(joinedContext.identity.playerId, () => {
+  private async beginRoomCountdown(joinedContext: JoinedRoomContext, socket: Socket) {
+    const result = await joinedContext.room.beginCountdown(joinedContext.identity.playerId, () => {
       this.handleCountdownCompleted(joinedContext.room)
     })
 
@@ -409,6 +414,11 @@ export class SocketGateway {
 
     if (result === 'wrong_phase') {
       this.emitEngineError(socket, 'WRONG_PHASE', '当前房间状态不允许启动该操作')
+      return false
+    }
+
+    if (result === 'snapshot_failed') {
+      this.emitEngineError(socket, 'BUILD_SNAPSHOT_FAILED', '局外构筑锁定失败，对局未启动，请重试')
       return false
     }
 
