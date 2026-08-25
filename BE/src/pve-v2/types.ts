@@ -64,6 +64,8 @@ export interface PveGeneralProgressSnapshot {
   experienceToNextLevel: number | null
   nextBasicAttackTick: number
   activeSkillReadyAtTick: number
+  basicAttackCount: number
+  nextPassiveTriggerTick: number
   activeSkillName: string
   attack: number
   attackIntervalMs: number
@@ -71,6 +73,21 @@ export interface PveGeneralProgressSnapshot {
   critChanceBps: number
   critDamageBps: number
   activeSkillCooldownMs: number
+  /** 神将自身的可解释持续状态；敌方状态仍位于顶层 statuses。 */
+  activeStatuses: PveGeneralStatusSnapshot[]
+}
+
+export interface PveGeneralStatusSnapshot {
+  instanceId: string
+  ownerPlayerId: string
+  sourceGeneralId: string
+  sourceFormationId: string
+  statusId: 'next_basic_attack_damage_up' | 'attack_speed_up' | string
+  stackGroup: string
+  magnitude: number
+  stacks: number
+  appliedAtTick: number
+  expiresAtTick: number
 }
 
 export interface PveActiveSynergySnapshot {
@@ -102,6 +119,49 @@ export interface PveEnemySnapshot {
   spawnProtected: boolean
   /** 预留给未来 Boss/技能的战斗无敌，与空间入场锁分离。 */
   invulnerable: boolean
+}
+
+export interface PveEnemyStatusSnapshot {
+  instanceId: string
+  enemyId: string
+  sourceGeneralId: string
+  ownerPlayerId: string
+  statusId: 'slow' | 'stun' | 'root' | 'suppress' | 'vulnerable' | 'armor_break' | string
+  stackGroup: string
+  magnitude: number
+  stacks: number
+  appliedAtTick: number
+  expiresAtTick: number
+}
+
+export interface PveSummonedUnitSnapshot {
+  id: string
+  ownerPlayerId: string
+  sourceGeneralId: string
+  sourceFormationId: string
+  summonUnitId: string
+  glyph: string
+  xMilli: number
+  yMilli: number
+  ownerLevel: SoldierLevel
+  nextAttackTick: number
+  expiresAtTick: number
+}
+
+export interface PveEffectZoneSnapshot {
+  id: string
+  ownerPlayerId: string
+  sourceGeneralId: string
+  sourceFormationId: string
+  effectId: string
+  zoneId: string
+  xMilli: number
+  yMilli: number
+  shape:
+    | { kind: 'circle', radiusMilliCells: number }
+    | { kind: 'line', lengthMilliCells: number, halfWidthMilliCells: number }
+  nextTick: number
+  expiresAtTick: number
 }
 
 export interface PvePlayerSnapshot {
@@ -145,8 +205,22 @@ export interface PveRuntimeEvent {
     | 'GENERAL_SKILL_CAST'
     | 'GENERAL_XP_GRANTED'
     | 'GENERAL_LEVEL_UP'
+    | 'GENERAL_EFFECT_APPLIED'
+    | 'GENERAL_STATUS_APPLIED'
+    | 'GENERAL_STATUS_EXPIRED'
+    | 'GENERAL_STATUS_CONSUMED'
+    | 'STATUS_APPLIED'
+    | 'STATUS_EXPIRED'
+    | 'SUMMON_SPAWNED'
+    | 'SUMMON_EXPIRED'
+    | 'ZONE_SPAWNED'
+    | 'ZONE_EXPIRED'
+    | 'PATH_DISPLACED'
+    | 'COOLDOWN_MODIFIED'
     | 'SYNERGY_ACTIVATED'
     | 'SYNERGY_DEACTIVATED'
+    | 'SYNERGY_LEVEL_CHANGED'
+    | 'SYNERGY_RECONFIGURED'
     | 'WAVE_STARTED'
     | 'ENEMY_SPAWNED'
     | 'ENEMY_ENTERED_BATTLEFIELD'
@@ -193,6 +267,9 @@ export interface PveRuntimeSnapshot {
   }
   players: PvePlayerSnapshot[]
   enemies: PveEnemySnapshot[]
+  statuses: PveEnemyStatusSnapshot[]
+  summonedUnits: PveSummonedUnitSnapshot[]
+  zones: PveEffectZoneSnapshot[]
   recentEvents: PveRuntimeEvent[]
 }
 
@@ -305,4 +382,7 @@ export interface PveGameRuntimeOptions {
   /** 可选的关卡每波字池；数量由波次数值表统一控制。 */
   waveGlyphPools?: readonly (readonly string[])[]
   eventHistoryLimit?: number
+  /** 测试、回放和对局配置快照注入；未传时使用默认目录。 */
+  generalCatalog?: Readonly<Record<string, GeneralDefinition>>
 }
+import type { GeneralDefinition } from '../core/hero-v1/types'

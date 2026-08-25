@@ -1018,6 +1018,12 @@ export class GameEngine {
         formation,
       ] as const))
     )))
+    const generalProgressByOwnerAndId = new Map(snapshot.players.flatMap((player) => (
+      player.generalProgress.map((progress) => [
+        `${player.playerId}:${progress.generalId}`,
+        progress,
+      ] as const)
+    )))
     const players = snapshot.players.map((player) => ({
       playerId: player.playerId,
       slotId: player.slot,
@@ -1089,6 +1095,13 @@ export class GameEngine {
             ? {
                 formationId: formation.formationId,
                 generalId: formation.generalId,
+                generalName: formation.name,
+                generalQuality: generalProgressByOwnerAndId.get(
+                  `${piece.ownerPlayerId}:${formation.generalId}`,
+                )?.quality,
+                generalArchetype: generalProgressByOwnerAndId.get(
+                  `${piece.ownerPlayerId}:${formation.generalId}`,
+                )?.archetype,
                 generalFixed: formation.fixed,
               }
             : {}),
@@ -1131,6 +1144,34 @@ export class GameEngine {
       players,
       boardPieces,
       enemies,
+      statuses: snapshot.statuses.map((status) => ({ ...status })),
+      summonedUnits: snapshot.summonedUnits.map((summon) => ({
+        entityId: summon.id,
+        ownerPlayerId: summon.ownerPlayerId,
+        sourceGeneralId: summon.sourceGeneralId,
+        sourceFormationId: summon.sourceFormationId,
+        summonUnitId: summon.summonUnitId,
+        glyph: summon.glyph,
+        ownerLevel: summon.ownerLevel,
+        nextAttackTick: summon.nextAttackTick,
+        expiresAtTick: summon.expiresAtTick,
+        x: summon.xMilli / 1000,
+        y: summon.yMilli / 1000,
+      })),
+      zones: snapshot.zones.map((zone) => ({
+        entityId: zone.id,
+        ownerPlayerId: zone.ownerPlayerId,
+        sourceGeneralId: zone.sourceGeneralId,
+        sourceFormationId: zone.sourceFormationId,
+        effectId: zone.effectId,
+        zoneId: zone.zoneId,
+        shape: { ...zone.shape },
+        nextTick: zone.nextTick,
+        expiresAtTick: zone.expiresAtTick,
+        x: zone.xMilli / 1000,
+        y: zone.yMilli / 1000,
+      })),
+      recentEvents: snapshot.recentEvents.map((event) => ({ ...event, data: structuredClone(event.data) })),
       laneWaves: snapshot.wave.lanes.map((lane) => ({
         playerId: lane.playerId,
         slotId: lane.slot,

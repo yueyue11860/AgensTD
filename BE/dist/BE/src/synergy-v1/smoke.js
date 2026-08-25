@@ -6,10 +6,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.runSynergyV1SmokeChecks = runSynergyV1SmokeChecks;
 const strict_1 = __importDefault(require("node:assert/strict"));
 const catalog_1 = require("./catalog");
+const roster_1 = require("../core/hero-v1/roster");
 const engine_1 = require("./engine");
 const settlement_1 = require("./settlement");
 const catalog_2 = require("../core/hero-v1/catalog");
 const hero_v1_adapter_1 = require("./hero-v1-adapter");
+const runtime_projection_smoke_1 = require("./runtime-projection-smoke");
 function formed(generalId, overrides = {}) {
     return {
         ownerPlayerId: 'player-1',
@@ -22,10 +24,128 @@ function formed(generalId, overrides = {}) {
     };
 }
 function runSynergyV1SmokeChecks() {
+    (0, runtime_projection_smoke_1.runSynergyRuntimeProjectionSmokeChecks)();
+    strict_1.default.equal(roster_1.GENERAL_ROSTER.length, 21);
+    strict_1.default.equal(catalog_1.GENERAL_SYNERGY_PROFILES.length, 21);
+    strict_1.default.equal(catalog_1.SYNERGY_V1_CATALOG.length, 22);
+    strict_1.default.deepEqual(catalog_1.GENERAL_SYNERGY_PROFILES.map((profile) => profile.generalId).sort(), roster_1.GENERAL_ROSTER.map((entry) => entry.generalId).sort(), '羁绊画像必须从权威 roster 一对一派生');
     (0, engine_1.validateSynergyCatalog)({
         profiles: catalog_1.GENERAL_SYNERGY_PROFILES,
         definitions: catalog_1.SYNERGY_V1_CATALOG,
     });
+    (0, catalog_1.validateGeneralDevelopmentSequence)();
+    strict_1.default.equal(catalog_1.GENERAL_DEVELOPMENT_SEQUENCE.length, roster_1.GENERAL_ROSTER.length);
+    strict_1.default.equal(new Set(catalog_1.GENERAL_DEVELOPMENT_SEQUENCE.map((step) => step.generalId)).size, roster_1.GENERAL_ROSTER.length);
+    const closedSynergies = catalog_1.GENERAL_DEVELOPMENT_SEQUENCE.flatMap((step) => [...step.closesSynergies]);
+    strict_1.default.equal(closedSynergies.length, catalog_1.SYNERGY_V1_CATALOG.length);
+    strict_1.default.equal(new Set(closedSynergies).size, catalog_1.SYNERGY_V1_CATALOG.length);
+    const knownGeneralIds = new Set(roster_1.GENERAL_ROSTER.map((entry) => entry.generalId));
+    for (const definition of catalog_1.SYNERGY_V1_CATALOG) {
+        strict_1.default.equal(definition.levels.length, 1, `${definition.synergyId} 首版必须只有一个固定成员档位`);
+        const fixedMembers = definition.levels[0].requirements.flatMap((requirement) => requirement.kind === 'all_generals' ? [...requirement.generalIds] : []);
+        strict_1.default.ok(fixedMembers.length >= 2, `${definition.synergyId} 必须是至少二人的固定组合`);
+        fixedMembers.forEach((generalId) => strict_1.default.ok(knownGeneralIds.has(generalId), `${definition.synergyId} 引用了未注册神将 ${generalId}`));
+        strict_1.default.ok(definition.levels[0].effects.length > 0, `${definition.synergyId} 不得使用空效果占位`);
+    }
+    for (const profile of catalog_1.GENERAL_SYNERGY_PROFILES) {
+        strict_1.default.ok((catalog_1.GENERAL_SYNERGY_IDS_BY_GENERAL[profile.generalId]?.length ?? 0) >= 1, `${profile.displayName} 必须至少参与一条羁绊`);
+    }
+    strict_1.default.equal(JSON.stringify(catalog_1.SYNERGY_V1_CATALOG).includes('allAttributes'), false);
+    const buddhistFerry = catalog_1.SYNERGY_V1_CATALOG.find((entry) => entry.synergyId === 'buddhist_ferry');
+    strict_1.default.ok(buddhistFerry.levels[0].effects.some((effect) => effect.type === 'stat_modifier'
+        && effect.stat === 'controlDuration'
+        && effect.value === 2000));
+    strict_1.default.equal(buddhistFerry.levels[0].effects.filter((effect) => effect.type === 'effect_parameter_patch'
+        && effect.parameter === 'magnitude'
+        && effect.operation === 'add_ratio'
+        && effect.value === 1000).length, 2);
+    const curtainDragon = catalog_1.SYNERGY_V1_CATALOG.find((entry) => entry.synergyId === 'curtain_dragon');
+    strict_1.default.ok(curtainDragon.levels[0].effects.some((effect) => effect.type === 'stat_modifier'
+        && effect.stat === 'damageDealt'
+        && effect.value === 1500
+        && effect.condition?.effectTagsAny?.includes('active_skill')));
+    strict_1.default.ok(curtainDragon.levels[0].effects.some((effect) => effect.type === 'stat_modifier'
+        && effect.stat === 'attackSpeed'
+        && effect.value === 1000));
+    const pilgrimageFive = catalog_1.SYNERGY_V1_CATALOG.find((entry) => entry.synergyId === 'pilgrimage_five');
+    strict_1.default.ok(pilgrimageFive.levels[0].effects.some((effect) => effect.type === 'stat_modifier'
+        && effect.target.scope === 'owner_player'
+        && effect.stat === 'generalExperienceGain'
+        && effect.value === 2000));
+    const longevityDefinition = catalog_1.SYNERGY_V1_CATALOG.find((entry) => entry.synergyId === 'longevity_immortals');
+    strict_1.default.deepEqual(longevityDefinition.levels[0].effects.map((effect) => effect.type === 'stat_modifier' ? [effect.stat, effect.operation, effect.value] : null), [
+        ['controlDuration', 'add_ratio', 1500],
+        ['cooldownReduction', 'add_ratio', 1000],
+    ]);
+    const heavenlyCluster = (0, engine_1.evaluatePlayerSynergies)({
+        ownerPlayerId: 'player-1',
+        formations: [
+            roster_1.GENERAL_IDS.YANGJIAN,
+            roster_1.GENERAL_IDS.NAZHA,
+            roster_1.GENERAL_IDS.LIJING,
+            roster_1.GENERAL_IDS.HOUYI,
+            roster_1.GENERAL_IDS.YU_HUANG_DADI,
+            roster_1.GENERAL_IDS.LEI_GONG,
+            roster_1.GENERAL_IDS.DIAN_MU,
+        ].map((generalId) => formed(generalId)),
+        profiles: catalog_1.GENERAL_SYNERGY_PROFILES,
+        definitions: catalog_1.SYNERGY_V1_CATALOG,
+    });
+    strict_1.default.deepEqual(heavenlyCluster.activeSynergies.map((entry) => entry.synergyId), [
+        'heaven_vanguard',
+        'heavenly_court_saints',
+        'lotus_father_and_son',
+        'physical_heavenly_venerates',
+        'piercing_cloud_duo',
+        'thunder_duo',
+    ]);
+    const pilgrimageFormations = [
+        roster_1.GENERAL_IDS.TANG_SANZANG,
+        roster_1.GENERAL_IDS.SUNWUKONG,
+        roster_1.GENERAL_IDS.ZHU_BAJIE,
+        roster_1.GENERAL_IDS.SHA_WUJING,
+        roster_1.GENERAL_IDS.BAI_LONGMA,
+    ].map((generalId) => formed(generalId));
+    const pilgrimageCluster = (0, engine_1.evaluatePlayerSynergies)({
+        ownerPlayerId: 'player-1',
+        formations: pilgrimageFormations,
+        profiles: catalog_1.GENERAL_SYNERGY_PROFILES,
+        definitions: catalog_1.SYNERGY_V1_CATALOG,
+    });
+    strict_1.default.deepEqual(pilgrimageCluster.activeSynergies.map((entry) => entry.synergyId), [
+        'curtain_canopy',
+        'curtain_dragon',
+        'mentor_and_disciple',
+        'pilgrimage_five',
+        'pilgrimage_three_disciples',
+        'senior_brothers',
+    ]);
+    const pilgrimageWithoutWhiteDragon = (0, engine_1.evaluatePlayerSynergies)({
+        ownerPlayerId: 'player-1',
+        formations: pilgrimageFormations.filter((formation) => formation.generalId !== roster_1.GENERAL_IDS.BAI_LONGMA),
+        profiles: catalog_1.GENERAL_SYNERGY_PROFILES,
+        definitions: catalog_1.SYNERGY_V1_CATALOG,
+    });
+    const pilgrimageRemoval = (0, engine_1.reconcilePlayerSynergies)({
+        previous: pilgrimageCluster,
+        next: pilgrimageWithoutWhiteDragon,
+        definitions: catalog_1.SYNERGY_V1_CATALOG,
+    });
+    strict_1.default.deepEqual(pilgrimageRemoval.deactivated.map((entry) => entry.synergyId), [
+        'curtain_dragon',
+        'pilgrimage_five',
+    ]);
+    strict_1.default.deepEqual(pilgrimageRemoval.commands.filter((command) => command.kind === 'remove_source').map((command) => command.sourceId), [
+        'curtain_dragon',
+        'pilgrimage_five',
+    ]);
+    const longevity = (0, engine_1.evaluatePlayerSynergies)({
+        ownerPlayerId: 'player-1',
+        formations: [formed(roster_1.GENERAL_IDS.SHOU_XING), formed(roster_1.GENERAL_IDS.TAI_SHANG_LAOJUN)],
+        profiles: catalog_1.GENERAL_SYNERGY_PROFILES,
+        definitions: catalog_1.SYNERGY_V1_CATALOG,
+    });
+    strict_1.default.deepEqual(longevity.activeSynergies.map((entry) => entry.synergyId), ['longevity_immortals']);
     const noPartner = (0, engine_1.evaluatePlayerSynergies)({
         ownerPlayerId: 'player-1',
         formations: [formed('houyi')],

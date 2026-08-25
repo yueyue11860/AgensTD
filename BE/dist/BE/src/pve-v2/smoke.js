@@ -8,6 +8,8 @@ const strict_1 = __importDefault(require("node:assert/strict"));
 const pve_stage_config_1 = require("../../../shared/contracts/pve-stage-config");
 const arena_1 = require("./arena");
 const runtime_1 = require("./runtime");
+const catalog_1 = require("../core/hero-v1/catalog");
+const spawn_pattern_smoke_1 = require("./spawn-pattern-smoke");
 function firstSoldier(snapshot) {
     const tray = snapshot.players[0]?.tray ?? [];
     for (let index = 0; index < tray.length; index += 1) {
@@ -35,6 +37,32 @@ function createPreparedRuntime(seed) {
     strict_1.default.equal(runtime.registerPlayer('player-1', 'P1').ok, true);
     strict_1.default.equal(runtime.handleAction('player-1', { type: 'RECRUIT_BATCH', actionId: 'recruit-1' }).ok, true);
     return runtime;
+}
+function createFormedGeneralRuntime(definition, seedPrefix) {
+    const [leftGlyph, rightGlyph] = definition.recipe.glyphs;
+    for (let seedIndex = 0; seedIndex < 5000; seedIndex += 1) {
+        const candidate = new runtime_1.PveGameRuntime({
+            seed: `${seedPrefix}-${seedIndex}`,
+            tickRateMs: 100,
+            prepDurationMs: 0,
+            maxWaves: 1,
+            characterTokens: { [leftGlyph]: 1, [rightGlyph]: 1 },
+            generalCatalog: { [definition.generalId]: definition },
+            eventHistoryLimit: 2000,
+        });
+        candidate.registerPlayer('effect-player', 'P1');
+        candidate.handleAction('effect-player', { type: 'RECRUIT_BATCH', actionId: 'effect-recruit' });
+        const tray = candidate.snapshot().players[0].tray;
+        const leftIndex = tray.findIndex((piece) => piece?.kind === 'character' && piece.glyph === leftGlyph);
+        const rightIndex = tray.findIndex((piece) => piece?.kind === 'character' && piece.glyph === rightGlyph);
+        if (leftIndex < 0 || rightIndex < 0)
+            continue;
+        strict_1.default.equal(candidate.handleAction('effect-player', { type: 'SWAP_TRAY_BOARD', actionId: 'effect-left', trayIndex: leftIndex, boardX: 10, boardY: 17 }).ok, true);
+        strict_1.default.equal(candidate.handleAction('effect-player', { type: 'SWAP_TRAY_BOARD', actionId: 'effect-right', trayIndex: rightIndex, boardX: 11, boardY: 17 }).ok, true);
+        strict_1.default.equal(candidate.snapshot().players[0].generalFormations[0]?.generalId, definition.generalId);
+        return candidate;
+    }
+    throw new Error(`Unable to recruit recipe for ${definition.generalId}`);
 }
 function runPveV2SmokeChecks() {
     strict_1.default.equal((0, arena_1.isDefaultDeployableCell)('P1', 12, 16), true);
@@ -426,6 +454,12 @@ function runPveV2SmokeChecks() {
     strict_1.default.equal((0, arena_1.hasEnemyBodyFullyExitedPveSpawnSquareMilli)(14000, 15906), false);
     strict_1.default.equal((0, arena_1.hasEnemyBodyFullyExitedPveSpawnSquareMilli)(14000, 15907), true);
     strict_1.default.equal(arena_1.PVE_ENEMY_BODY_RADIUS_MILLI, 406);
+    // 后期波次原始配置即使低于 1.5s，同一路出生器也不能更快补刷。
+    // 较慢的早期波次仍保留自己的原始节奏。
+    strict_1.default.equal(runtime_1.PVE_MIN_LANE_SPAWN_INTERVAL_MS, 1500);
+    strict_1.default.equal((0, runtime_1.resolvePveLaneSpawnIntervalMs)(300), 1500);
+    strict_1.default.equal((0, runtime_1.resolvePveLaneSpawnIntervalMs)(500), 1500);
+    strict_1.default.equal((0, runtime_1.resolvePveLaneSpawnIntervalMs)(1800), 1800);
     strict_1.default.equal(pve_stage_config_1.PVE_STAGE_DEFINITIONS.length, 10);
     strict_1.default.deepEqual(pve_stage_config_1.PVE_STAGE_DEFINITIONS.map(({ levelId }) => levelId), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     const configuredMinionGlyphs = new Set();
@@ -537,6 +571,158 @@ function runPveV2SmokeChecks() {
     strict_1.default.ok(firstExitEvent);
     strict_1.default.ok(secondSpawnEvent);
     strict_1.default.ok(secondSpawnEvent.tick > firstExitEvent.tick);
+    const long = [20000, 20000, 20000, 20000, 20000];
+    const fullEffectDefinition = {
+        ...catalog_1.HOUYI_DEFINITION,
+        generalId: 'effect_tester',
+        name: '法师',
+        recipe: { glyphs: ['法', '师'], orientation: 'horizontal_left_to_right', priority: 999 },
+        baseStats: { ...catalog_1.HOUYI_DEFINITION.baseStats, attackByLevel: [1, 1, 1, 1, 1] },
+        basicAttack: { ...catalog_1.HOUYI_DEFINITION.basicAttack,
+            effect: { ...catalog_1.HOUYI_DEFINITION.basicAttack.effect,
+                coefficientBpsByLevel: [100, 100, 100, 100, 100] } },
+        activeSkill: {
+            skillId: 'effect_suite',
+            skillName: '统一效果测试',
+            trigger: 'auto',
+            cooldownMsByLevel: [5000, 5000, 5000, 5000, 5000],
+            targeting: { kind: 'global', scope: 'all_targetable_enemies', priority: 'furthest_progress', targetLimit: 3 },
+            effects: [
+                { effectId: 'active_patch', type: 'effect_parameter_patch', targeting: { kind: 'self', scope: 'self', targetLimit: 0 }, targetEffectId: 'multi_damage', parameter: 'coefficientBps', operation: 'add_flat', valueByLevel: [1000, 1000, 1000, 1000, 1000], tags: [] },
+                { effectId: 'multi_damage', type: 'damage', damageType: 'physical', coefficientBpsByLevel: [100, 100, 100, 100, 100], flatDamageByLevel: [0, 0, 0, 0, 0], criticalPolicy: 'cannot_crit', hitCountByLevel: [3, 3, 3, 3, 3], hitIntervalMs: 100, tags: [] },
+                { effectId: 'runtime_dot', type: 'damage_over_time', damageType: 'magic', coefficientBpsPerTickByLevel: [100, 100, 100, 100, 100], flatDamagePerTickByLevel: [1, 1, 1, 1, 1], tickIntervalMs: 200, durationMsByLevel: [3000, 3000, 3000, 3000, 3000], criticalPolicy: 'cannot_crit', stacking: { stackGroup: 'runtime_dot', policy: 'refresh', maxStacks: 1 }, tags: [] },
+                ...['slow', 'stun', 'root', 'suppress', 'vulnerable', 'armor_break'].map((statusId) => ({ effectId: `runtime_${statusId}`, type: 'status_apply', statusId, magnitudeByLevel: [statusId === 'slow' ? 2000 : statusId === 'vulnerable' || statusId === 'armor_break' ? 1000 : 1, statusId === 'slow' ? 2000 : statusId === 'vulnerable' || statusId === 'armor_break' ? 1000 : 1, statusId === 'slow' ? 2000 : statusId === 'vulnerable' || statusId === 'armor_break' ? 1000 : 1, statusId === 'slow' ? 2000 : statusId === 'vulnerable' || statusId === 'armor_break' ? 1000 : 1, statusId === 'slow' ? 2000 : statusId === 'vulnerable' || statusId === 'armor_break' ? 1000 : 1], durationMsByLevel: long, chanceBpsByLevel: [10000, 10000, 10000, 10000, 10000], stacking: { stackGroup: `runtime_${statusId}`, policy: 'strongest_refresh', maxStacks: 1 }, tags: [] })),
+                { effectId: 'runtime_push', type: 'path_displacement', direction: 'backward', distanceMilliCellsByLevel: [500, 500, 500, 500, 500], bossDistanceRatioBps: 5000, tags: [] },
+                { effectId: 'runtime_summon', type: 'summon_unit', targeting: { kind: 'self', scope: 'self', targetLimit: 0 }, summonUnitId: 'moon_rabbit', countByLevel: [2, 2, 2, 2, 2], durationMsByLevel: long, maxOwnedAliveByLevel: [2, 2, 2, 2, 2], spawnPattern: 'self_surrounding_empty_cells', inheritStatRatiosBps: { attack: 5000 }, sourceInactivePolicy: 'finish_duration', tags: [] },
+                { effectId: 'runtime_zone', type: 'spawn_zone', zoneId: 'runtime_circle', shape: { kind: 'circle', radiusMilliCellsByLevel: [2000, 2000, 2000, 2000, 2000] }, durationMsByLevel: long, tickIntervalMs: 200, tickEffects: [{ effectId: 'runtime_zone_tick', type: 'damage', damageType: 'magic', coefficientBpsByLevel: [100, 100, 100, 100, 100], flatDamageByLevel: [1, 1, 1, 1, 1], criticalPolicy: 'cannot_crit', tags: [] }], sourceInactivePolicy: 'finish_duration', tags: [] },
+                { effectId: 'runtime_cooldown', type: 'cooldown_modify', targeting: { kind: 'self', scope: 'self', targetLimit: 0 }, targetSkill: 'active_skill', operation: 'add_ms', valueByLevel: [-1000, -1000, -1000, -1000, -1000], maxTriggersPerCast: 1, tags: [] },
+            ],
+        },
+        passiveSkill: {
+            ...catalog_1.HOUYI_DEFINITION.passiveSkill,
+            trigger: { kind: 'periodic', intervalMsByLevel: [5000, 5000, 5000, 5000, 5000] },
+            structuredEffects: [
+                { effectId: 'passive_patch', type: 'effect_parameter_patch', targeting: { kind: 'self', scope: 'self', targetLimit: 0 }, targetEffectId: 'multi_damage', parameter: 'coefficientBps', operation: 'add_flat', valueByLevel: [2000, 2000, 2000, 2000, 2000], tags: [] },
+                { effectId: 'periodic_cooldown', type: 'cooldown_modify', targeting: { kind: 'self', scope: 'self', targetLimit: 0 }, targetSkill: 'basic_attack', operation: 'add_ms', valueByLevel: [-100, -100, -100, -100, -100], maxTriggersPerCast: 1, tags: [] },
+            ],
+        },
+    };
+    const effectRuntime = createFormedGeneralRuntime(fullEffectDefinition, 'runtime-effects');
+    strict_1.default.equal(effectRuntime.start().ok, true);
+    let effectSnapshot = effectRuntime.snapshot();
+    for (let tick = 0; tick < 120 && effectSnapshot.statuses.length < 6; tick += 1)
+        effectSnapshot = effectRuntime.tick();
+    strict_1.default.deepEqual(new Set(effectSnapshot.statuses.map((status) => status.statusId)), new Set(['slow', 'stun', 'root', 'suppress', 'vulnerable', 'armor_break']));
+    strict_1.default.equal(effectSnapshot.summonedUnits.length, 2);
+    strict_1.default.equal(effectSnapshot.zones.length, 1);
+    const controlledEnemy = effectSnapshot.enemies.find((enemy) => effectSnapshot.statuses.some((status) => status.enemyId === enemy.id));
+    strict_1.default.ok(controlledEnemy);
+    const hardControlStatuses = effectSnapshot.statuses.filter((status) => status.enemyId === controlledEnemy.id
+        && (status.statusId === 'stun' || status.statusId === 'root' || status.statusId === 'suppress'));
+    strict_1.default.equal(hardControlStatuses.length, 3);
+    strict_1.default.ok(hardControlStatuses.every((status) => status.expiresAtTick > effectSnapshot.tick));
+    for (let tick = 0; tick < 220; tick += 1)
+        effectRuntime.tick();
+    effectSnapshot = effectRuntime.snapshot();
+    const effectEvents = effectSnapshot.recentEvents;
+    strict_1.default.ok(effectEvents.some((event) => event.type === 'DAMAGE_APPLIED' && event.data.effectId === 'multi_damage'));
+    strict_1.default.ok(effectEvents.some((event) => event.type === 'DAMAGE_APPLIED' && event.data.sourceKind === 'damage_over_time'));
+    strict_1.default.ok(effectEvents.some((event) => event.type === 'DAMAGE_APPLIED' && event.data.sourceKind === 'spawn_zone'));
+    strict_1.default.ok(effectEvents.some((event) => event.type === 'DAMAGE_APPLIED' && event.data.sourceKind === 'summon'));
+    strict_1.default.ok(effectEvents.some((event) => event.type === 'PATH_DISPLACED'));
+    strict_1.default.ok(effectEvents.some((event) => event.type === 'COOLDOWN_MODIFIED'));
+    strict_1.default.ok(effectEvents.some((event) => event.type === 'GENERAL_EFFECT_APPLIED' && event.data.effectId === 'active_patch'));
+    strict_1.default.ok(effectEvents.some((event) => event.type === 'GENERAL_EFFECT_APPLIED' && event.data.effectId === 'passive_patch'));
+    const multiDamageEvents = effectEvents.filter((event) => (event.type === 'DAMAGE_APPLIED' && event.data.effectId === 'multi_damage'));
+    strict_1.default.ok(new Set(multiDamageEvents.map((event) => event.data.enemyId)).size >= 2);
+    strict_1.default.ok([...new Set(multiDamageEvents.map((event) => String(event.data.enemyId)))].some((enemyId) => (multiDamageEvents.filter((event) => event.data.enemyId === enemyId).length >= 3)));
+    strict_1.default.equal(multiDamageEvents[0]?.data.rawDamage, Math.max(1, Math.floor(fullEffectDefinition.baseStats.attackByLevel[0] * 3100 / 10000)));
+    strict_1.default.ok(effectSnapshot.statuses.every((status) => effectSnapshot.enemies.some((enemy) => enemy.id === status.enemyId)));
+    const protectedDefinition = {
+        ...catalog_1.HOUYI_DEFINITION,
+        generalId: 'protected_effect_tester',
+        name: '护界',
+        recipe: { glyphs: ['护', '界'], orientation: 'horizontal_left_to_right', priority: 996 },
+        passiveSkill: {
+            ...catalog_1.HOUYI_DEFINITION.passiveSkill,
+            trigger: { kind: 'always' },
+            structuredEffects: [
+                { effectId: 'protected_summon', type: 'summon_unit', targeting: { kind: 'self', scope: 'self', targetLimit: 0 }, summonUnitId: 'moon_rabbit', countByLevel: [1, 1, 1, 1, 1], durationMsByLevel: long, maxOwnedAliveByLevel: [1, 1, 1, 1, 1], spawnPattern: 'self_surrounding_empty_cells', inheritStatRatiosBps: { attack: 5000 }, sourceInactivePolicy: 'finish_duration', tags: [] },
+                { effectId: 'protected_zone', type: 'spawn_zone', targeting: { kind: 'self', scope: 'self', targetLimit: 0 }, zoneId: 'protected_zone', shape: { kind: 'circle', radiusMilliCellsByLevel: long }, durationMsByLevel: long, tickIntervalMs: 100, tickEffects: [
+                        { effectId: 'protected_zone_damage', type: 'damage', damageType: 'magic', coefficientBpsByLevel: [1000, 1000, 1000, 1000, 1000], flatDamageByLevel: [1, 1, 1, 1, 1], criticalPolicy: 'cannot_crit', tags: [] },
+                        { effectId: 'protected_zone_dot', type: 'damage_over_time', damageType: 'magic', coefficientBpsPerTickByLevel: [1000, 1000, 1000, 1000, 1000], flatDamagePerTickByLevel: [1, 1, 1, 1, 1], tickIntervalMs: 100, durationMsByLevel: [1000, 1000, 1000, 1000, 1000], criticalPolicy: 'cannot_crit', stacking: { stackGroup: 'protected_dot', policy: 'refresh', maxStacks: 1 }, tags: [] },
+                        { effectId: 'protected_zone_slow', type: 'status_apply', statusId: 'slow', magnitudeByLevel: [1000, 1000, 1000, 1000, 1000], durationMsByLevel: [1000, 1000, 1000, 1000, 1000], chanceBpsByLevel: [10000, 10000, 10000, 10000, 10000], stacking: { stackGroup: 'protected_slow', policy: 'refresh', maxStacks: 1 }, tags: [] },
+                        { effectId: 'protected_zone_push', type: 'path_displacement', direction: 'backward', distanceMilliCellsByLevel: [500, 500, 500, 500, 500], bossDistanceRatioBps: 10000, tags: [] },
+                    ], sourceInactivePolicy: 'finish_duration', tags: [] },
+            ],
+        },
+    };
+    const protectedRuntime = createFormedGeneralRuntime(protectedDefinition, 'protected-effects');
+    protectedRuntime.start();
+    let protectedSnapshot = protectedRuntime.snapshot();
+    for (let tick = 0; tick < 60 && !protectedSnapshot.recentEvents.some((event) => event.type === 'ENEMY_ENTERED_BATTLEFIELD'); tick += 1) {
+        protectedSnapshot = protectedRuntime.tick();
+        for (const enemy of protectedSnapshot.enemies.filter((candidate) => candidate.spawnProtected)) {
+            strict_1.default.equal(enemy.currentHp, enemy.maxHp);
+            strict_1.default.equal(protectedSnapshot.statuses.some((status) => status.enemyId === enemy.id), false);
+            strict_1.default.equal(protectedSnapshot.recentEvents.some((event) => event.data.enemyId === enemy.id
+                && (event.type === 'DAMAGE_APPLIED' || event.type === 'PATH_DISPLACED')), false);
+        }
+    }
+    const protectedEntry = protectedSnapshot.recentEvents.find((event) => event.type === 'ENEMY_ENTERED_BATTLEFIELD');
+    strict_1.default.ok(protectedEntry);
+    strict_1.default.ok(protectedSnapshot.recentEvents.filter((event) => event.type === 'DAMAGE_APPLIED')
+        .every((event) => event.tick >= protectedEntry.tick));
+    const nthPassiveDefinition = {
+        ...catalog_1.HOUYI_DEFINITION,
+        generalId: 'nth_passive_tester',
+        name: '次数',
+        recipe: { glyphs: ['次', '数'], orientation: 'horizontal_left_to_right', priority: 998 },
+        passiveSkill: { ...catalog_1.HOUYI_DEFINITION.passiveSkill, trigger: { kind: 'on_nth_basic_attack', every: 2 },
+            structuredEffects: [{ effectId: 'nth_passive_effect', type: 'cooldown_modify', targeting: { kind: 'self', scope: 'self', targetLimit: 0 }, targetSkill: 'active_skill', operation: 'add_ms', valueByLevel: [-100, -100, -100, -100, -100], maxTriggersPerCast: 1, tags: [] }] },
+    };
+    const nthRuntime = createFormedGeneralRuntime(nthPassiveDefinition, 'nth-passive');
+    nthRuntime.start();
+    for (let tick = 0; tick < 120 && !nthRuntime.snapshot().recentEvents.some((event) => event.type === 'COOLDOWN_MODIFIED' && event.data.effectId === 'nth_passive_effect'); tick += 1)
+        nthRuntime.tick();
+    strict_1.default.ok(nthRuntime.snapshot().recentEvents.some((event) => event.type === 'COOLDOWN_MODIFIED' && event.data.effectId === 'nth_passive_effect'));
+    const displacementPassiveDefinition = {
+        ...catalog_1.HOUYI_DEFINITION,
+        generalId: 'displacement_passive_tester',
+        name: '挪移',
+        recipe: { glyphs: ['挪', '移'], orientation: 'horizontal_left_to_right', priority: 995 },
+        activeSkill: {
+            ...catalog_1.HOUYI_DEFINITION.activeSkill,
+            skillId: 'displacement_skill',
+            cooldownMsByLevel: [5000, 5000, 5000, 5000, 5000],
+            targeting: { kind: 'global', scope: 'all_targetable_enemies', priority: 'furthest_progress', targetLimit: 1 },
+            effects: [{ effectId: 'displacement_active', type: 'path_displacement', direction: 'backward', distanceMilliCellsByLevel: [500, 500, 500, 500, 500], bossDistanceRatioBps: 5000, tags: [] }],
+        },
+        passiveSkill: {
+            ...catalog_1.HOUYI_DEFINITION.passiveSkill,
+            trigger: { kind: 'on_displacement_success' },
+            structuredEffects: [{ effectId: 'displacement_passive_effect', type: 'cooldown_modify', targeting: { kind: 'self', scope: 'self', targetLimit: 0 }, targetSkill: 'basic_attack', operation: 'set_ready', valueByLevel: [0, 0, 0, 0, 0], maxTriggersPerCast: 1, tags: [] }],
+        },
+    };
+    const displacementRuntime = createFormedGeneralRuntime(displacementPassiveDefinition, 'displacement-passive');
+    displacementRuntime.start();
+    for (let tick = 0; tick < 120 && !displacementRuntime.snapshot().recentEvents.some((event) => event.type === 'COOLDOWN_MODIFIED' && event.data.effectId === 'displacement_passive_effect'); tick += 1)
+        displacementRuntime.tick();
+    strict_1.default.ok(displacementRuntime.snapshot().recentEvents.some((event) => event.type === 'PATH_DISPLACED'));
+    strict_1.default.ok(displacementRuntime.snapshot().recentEvents.some((event) => event.type === 'COOLDOWN_MODIFIED' && event.data.effectId === 'displacement_passive_effect'));
+    const killPassiveDefinition = {
+        ...catalog_1.HOUYI_DEFINITION,
+        generalId: 'kill_passive_tester',
+        name: '杀敌',
+        recipe: { glyphs: ['杀', '敌'], orientation: 'horizontal_left_to_right', priority: 997 },
+        passiveSkill: { ...catalog_1.HOUYI_DEFINITION.passiveSkill, trigger: { kind: 'on_enemy_killed' },
+            structuredEffects: [{ effectId: 'kill_passive_summon', type: 'summon_unit', targeting: { kind: 'self', scope: 'self', targetLimit: 0 }, summonUnitId: 'moon_rabbit', countByLevel: [1, 1, 1, 1, 1], durationMsByLevel: [5000, 5000, 5000, 5000, 5000], maxOwnedAliveByLevel: [1, 1, 1, 1, 1], spawnPattern: 'self_surrounding_empty_cells', inheritStatRatiosBps: { attack: 5000 }, sourceInactivePolicy: 'finish_duration', tags: [] }] },
+    };
+    const killRuntime = createFormedGeneralRuntime(killPassiveDefinition, 'kill-passive');
+    killRuntime.start();
+    for (let tick = 0; tick < 200 && !killRuntime.snapshot().recentEvents.some((event) => event.type === 'SUMMON_SPAWNED' && event.data.generalId === 'kill_passive_tester'); tick += 1)
+        killRuntime.tick();
+    strict_1.default.ok(killRuntime.snapshot().recentEvents.some((event) => event.type === 'SUMMON_SPAWNED' && event.data.generalId === 'kill_passive_tester'));
     const deterministicA = createPreparedRuntime('same-seed');
     const deterministicB = createPreparedRuntime('same-seed');
     strict_1.default.deepEqual(deterministicA.snapshot(), deterministicB.snapshot());
@@ -567,6 +753,7 @@ function runPveV2SmokeChecks() {
     strict_1.default.equal(retiredLane?.spawnedCount, spawnedBeforeLeave);
     strict_1.default.equal(retiredLane?.totalCount, spawnedBeforeLeave);
     strict_1.default.equal(retiredLane?.clearRewardGranted, false);
+    (0, spawn_pattern_smoke_1.runSummonSpawnPatternSmokeChecks)();
     return {
         deterministic: true,
         economy: true,
@@ -580,4 +767,8 @@ function runPveV2SmokeChecks() {
 }
 function isSoldierForSmoke(piece) {
     return piece?.kind === 'soldier';
+}
+if (require.main === module) {
+    runPveV2SmokeChecks();
+    console.log('pve-v2 full smoke checks passed');
 }

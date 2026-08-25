@@ -85,26 +85,39 @@ function reconcilePlayerSynergies(input) {
     const activated = [];
     const deactivated = [];
     const changedLevels = [];
+    const reconfigured = [];
     for (const [synergyId, previous] of previousById) {
         const next = nextById.get(synergyId);
         if (!next)
             deactivated.push(previous);
         else if (next.level !== previous.level)
             changedLevels.push({ previous, next });
+        else if (next.contributingGeneralIds.length !== previous.contributingGeneralIds.length
+            || next.contributingGeneralIds.some((generalId, index) => generalId !== previous.contributingGeneralIds[index])) {
+            reconfigured.push({ previous, next });
+        }
     }
     for (const [synergyId, next] of nextById) {
         if (!previousById.has(synergyId))
             activated.push(next);
     }
     const commands = [];
-    for (const synergy of [...deactivated, ...changedLevels.map((entry) => entry.previous)]) {
+    for (const synergy of [
+        ...deactivated,
+        ...changedLevels.map((entry) => entry.previous),
+        ...reconfigured.map((entry) => entry.previous),
+    ]) {
         commands.push({
             kind: 'remove_source',
             sourceKind: 'synergy',
             sourceId: synergy.synergyId,
         });
     }
-    for (const synergy of [...activated, ...changedLevels.map((entry) => entry.next)]) {
+    for (const synergy of [
+        ...activated,
+        ...changedLevels.map((entry) => entry.next),
+        ...reconfigured.map((entry) => entry.next),
+    ]) {
         const definition = definitionsById.get(synergy.synergyId);
         const activation = definition?.levels.find((level) => level.level === synergy.level);
         if (!definition || !activation) {
@@ -127,12 +140,17 @@ function reconcilePlayerSynergies(input) {
         change.previous.contributingGeneralIds.forEach((generalId) => affectedGenerals.add(generalId));
         change.next.contributingGeneralIds.forEach((generalId) => affectedGenerals.add(generalId));
     }
+    for (const change of reconfigured) {
+        change.previous.contributingGeneralIds.forEach((generalId) => affectedGenerals.add(generalId));
+        change.next.contributingGeneralIds.forEach((generalId) => affectedGenerals.add(generalId));
+    }
     const invalidateGeneralIds = [...affectedGenerals].sort();
     return {
         next: input.next,
         activated,
         deactivated,
         changedLevels,
+        reconfigured,
         commands,
         invalidateGeneralIds,
         // 统一效果系统依继承白名单重算存活召唤物，不是把成员加成盲目复制给召唤物。
@@ -142,16 +160,33 @@ function reconcilePlayerSynergies(input) {
 function validateSynergyCatalog(input) {
     const profileIds = new Set();
     for (const profile of input.profiles) {
+        if (!profile.generalId.trim() || !profile.displayName.trim()) {
+            throw new Error('General synergy profile requires non-empty identity and display name');
+        }
         if (profileIds.has(profile.generalId)) {
             throw new Error(`Duplicate general synergy profile: ${profile.generalId}`);
         }
         if (profile.glyphs.length < 2 || profile.glyphs.length > 4) {
             throw new Error(`General ${profile.generalId} must contain 2-4 glyphs`);
         }
+        if (profile.glyphs.some((glyph) => [...glyph].length !== 1)) {
+            throw new Error(`General ${profile.generalId} synergy glyphs must be single characters`);
+        }
+        if (new Set(profile.glyphs).size !== profile.glyphs.length) {
+            throw new Error(`General ${profile.generalId} contains duplicate recipe glyphs`);
+        }
+        for (const facets of [profile.factions, profile.playstyles, profile.namedCollections]) {
+            if (facets.some((facet) => !facet.trim()) || new Set(facets).size !== facets.length) {
+                throw new Error(`General ${profile.generalId} contains invalid or duplicate facets`);
+            }
+        }
         profileIds.add(profile.generalId);
     }
     const synergyIds = new Set();
     for (const definition of input.definitions) {
+        if (!definition.synergyId.trim() || !definition.displayName.trim()) {
+            throw new Error('Synergy definition requires non-empty identity and display name');
+        }
         if (synergyIds.has(definition.synergyId)) {
             throw new Error(`Duplicate synergy definition: ${definition.synergyId}`);
         }
@@ -200,6 +235,38 @@ function validateSynergyCatalog(input) {
                 if ((effect.operation === 'add_flat' || effect.operation === 'add_ratio')
                     && !Number.isInteger(effect.value)) {
                     throw new Error(`V1 modifier value must be an integer: ${effect.effectId}`);
+                }
+                if (!effect.effectId.trim() || !effect.stackGroup.trim()) {
+                    throw new Error(`Synergy effect requires non-empty identity and stack group in ${definition.synergyId}`);
+                }
+                const effectTarget = effect.target;
+                if (effectTarget.scope === 'owner_generals_with_facet'
+                    && !input.profiles.some((profile) => valuesForDimension(profile, effectTarget.dimension).includes(effectTarget.facetId))) {
+                    throw new Error(`Unknown effect target facet ${effectTarget.facetId} in ${definition.synergyId}`);
+                }
+                if (effect.type === 'effect_parameter_patch'
+                    && (!effect.targetEffectId.trim() || !effect.parameter.trim())) {
+                    throw new Error(`Parameter patch requires target effect and parameter in ${definition.synergyId}`);
+                }
+                if (effect.type === 'stat_modifier') {
+                    if (effect.target.scope === 'owner_player' && effect.stat !== 'generalExperienceGain') {
+                        throw new Error(`Player-scoped synergy stat must be generalExperienceGain: ${effect.effectId}`);
+                    }
+                    if (effect.stat === 'generalExperienceGain' && effect.target.scope !== 'owner_player') {
+                        throw new Error(`generalExperienceGain must target owner_player: ${effect.effectId}`);
+                    }
+                    if (effect.condition) {
+                        const targetTags = effect.condition.targetTagsAny ?? [];
+                        const effectTags = effect.condition.effectTagsAny ?? [];
+                        if (targetTags.length === 0 && effectTags.length === 0) {
+                            throw new Error(`Empty effect condition in ${effect.effectId}`);
+                        }
+                        if ([...targetTags, ...effectTags].some((tag) => !tag.trim())
+                            || new Set(targetTags).size !== targetTags.length
+                            || new Set(effectTags).size !== effectTags.length) {
+                            throw new Error(`Invalid or duplicate effect condition tags in ${effect.effectId}`);
+                        }
+                    }
                 }
                 effectIds.add(effect.effectId);
             }

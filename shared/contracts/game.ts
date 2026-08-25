@@ -237,6 +237,9 @@ export interface PveBoardPieceState extends GridPosition {
   nextAttackTick?: number
   formationId?: string
   generalId?: string
+  generalName?: string
+  generalQuality?: 'purple' | 'orange' | 'red'
+  generalArchetype?: 'physical' | 'magic' | 'summon' | 'control'
   generalFixed?: boolean
 }
 
@@ -261,6 +264,8 @@ export interface PveGeneralProgressState {
   experienceToNextLevel: number | null
   nextBasicAttackTick: number
   activeSkillReadyAtTick: number
+  basicAttackCount: number
+  nextPassiveTriggerTick: number
   activeSkillName: string
   attack: number
   attackIntervalMs: number
@@ -268,6 +273,20 @@ export interface PveGeneralProgressState {
   critChanceBps: number
   critDamageBps: number
   activeSkillCooldownMs: number
+  activeStatuses: PveGeneralStatusState[]
+}
+
+export interface PveGeneralStatusState {
+  instanceId: string
+  ownerPlayerId: string
+  sourceGeneralId: string
+  sourceFormationId: string
+  statusId: string
+  stackGroup: string
+  magnitude: number
+  stacks: number
+  appliedAtTick: number
+  expiresAtTick: number
 }
 
 export interface PveActiveSynergyState {
@@ -294,6 +313,52 @@ export interface PveEnemyState extends GridPosition {
   lapCount: number
   spawnProtected: boolean
   invulnerable: boolean
+}
+
+export interface PveEnemyStatusState {
+  instanceId: string
+  enemyId: string
+  sourceGeneralId: string
+  ownerPlayerId: string
+  statusId: string
+  stackGroup: string
+  magnitude: number
+  stacks: number
+  appliedAtTick: number
+  expiresAtTick: number
+}
+
+export interface PveSummonedUnitState extends GridPosition {
+  entityId: string
+  ownerPlayerId: string
+  sourceGeneralId: string
+  sourceFormationId: string
+  summonUnitId: string
+  glyph: string
+  ownerLevel: 1 | 2 | 3 | 4 | 5
+  nextAttackTick: number
+  expiresAtTick: number
+}
+
+export interface PveEffectZoneState extends GridPosition {
+  entityId: string
+  ownerPlayerId: string
+  sourceGeneralId: string
+  sourceFormationId: string
+  effectId: string
+  zoneId: string
+  shape:
+    | { kind: 'circle', radiusMilliCells: number }
+    | { kind: 'line', lengthMilliCells: number, halfWidthMilliCells: number }
+  nextTick: number
+  expiresAtTick: number
+}
+
+export interface PveCombatEventState {
+  id: string
+  tick: number
+  type: string
+  data: Record<string, string | number | boolean | string[] | number[] | null>
 }
 
 export interface PvePlayerState {
@@ -334,6 +399,10 @@ export interface PveMatchState {
   players: PvePlayerState[]
   boardPieces: PveBoardPieceState[]
   enemies: PveEnemyState[]
+  statuses: PveEnemyStatusState[]
+  summonedUnits: PveSummonedUnitState[]
+  zones: PveEffectZoneState[]
+  recentEvents: PveCombatEventState[]
   laneWaves: PveLaneWaveState[]
   currentWave: number
   maxWaves: number

@@ -35,6 +35,9 @@ interface ServerBoardPieceState {
   y: number
   formationId?: string
   generalId?: string
+  generalName?: string
+  generalQuality?: 'purple' | 'orange' | 'red'
+  generalArchetype?: 'physical' | 'magic' | 'summon' | 'control'
   generalFixed?: boolean
 }
 
@@ -91,6 +94,48 @@ interface ServerEnemyState {
   invulnerable?: boolean
 }
 
+interface ServerEnemyStatusState {
+  instanceId: string
+  enemyId: string
+  sourceGeneralId: string
+  statusId: string
+  magnitude: number
+  stacks: number
+  expiresAtTick: number
+}
+
+interface ServerSummonedUnitState {
+  entityId: string
+  ownerPlayerId: string
+  sourceGeneralId: string
+  summonUnitId: string
+  glyph: string
+  ownerLevel: number
+  x: number
+  y: number
+  expiresAtTick: number
+}
+
+interface ServerEffectZoneState {
+  entityId: string
+  ownerPlayerId: string
+  sourceGeneralId: string
+  zoneId: string
+  x: number
+  y: number
+  shape:
+    | { kind: 'circle', radiusMilliCells: number }
+    | { kind: 'line', lengthMilliCells: number, halfWidthMilliCells: number }
+  expiresAtTick: number
+}
+
+interface ServerCombatEventState {
+  id: string
+  tick: number
+  type: string
+  data: Record<string, string | number | boolean | string[] | number[] | null>
+}
+
 interface ServerWaveState {
   index: number
   label?: string
@@ -125,6 +170,10 @@ interface ServerDrivenGameState {
   generalFormations: ServerGeneralFormationState[]
   generalProgress: ServerGeneralProgressState[]
   activeSynergies: ServerActiveSynergyState[]
+  statuses: ServerEnemyStatusState[]
+  summonedUnits: ServerSummonedUnitState[]
+  zones: ServerEffectZoneState[]
+  recentEvents: ServerCombatEventState[]
   overloadTicks: number
   overloadCountdownSec: number
   maxCapacity: number
@@ -141,6 +190,42 @@ const SOLDIER_LABELS: Record<string, string> = {
   spear: '天枪兵',
   bow: '天弓兵',
   cavalry: '天骑兵',
+}
+
+const GENERAL_QUALITY_LABELS = {
+  purple: '紫品',
+  orange: '橙品',
+  red: '红品',
+} as const
+
+const GENERAL_ARCHETYPE_LABELS = {
+  physical: '物理',
+  magic: '魔法',
+  summon: '召唤',
+  control: '控制',
+} as const
+
+const STATUS_LABELS: Record<string, string> = {
+  slow: '减速',
+  stun: '眩晕',
+  root: '定身',
+  suppress: '压制',
+  vulnerable: '易损',
+  armor_break: '破甲',
+}
+
+const COMBAT_EVENT_LABELS: Record<string, string> = {
+  GENERAL_SKILL_CAST: '神将释放技能',
+  GENERAL_EFFECT_APPLIED: '神将效果生效',
+  STATUS_APPLIED: '控制效果施加',
+  STATUS_EXPIRED: '控制效果结束',
+  PATH_DISPLACED: '小怪被位移',
+  SUMMON_SPAWNED: '召唤物登场',
+  SUMMON_EXPIRED: '召唤物退场',
+  ZONE_SPAWNED: '效果区域生成',
+  ZONE_EXPIRED: '效果区域消散',
+  SYNERGY_ACTIVATED: '羁绊激活',
+  SYNERGY_DEACTIVATED: '羁绊解除',
 }
 
 const ENEMY_GLYPHS: Record<string, string> = {
@@ -234,6 +319,16 @@ function normalizePiece(rawPiece: unknown, ownerPlayerId = ''): ServerBoardPiece
     level: typeof rawPiece.level === 'number' ? rawPiece.level : 1,
     formationId: typeof rawPiece.formationId === 'string' ? rawPiece.formationId : undefined,
     generalId: typeof rawPiece.generalId === 'string' ? rawPiece.generalId : undefined,
+    generalName: typeof rawPiece.generalName === 'string' ? rawPiece.generalName : undefined,
+    generalQuality: rawPiece.generalQuality === 'orange' || rawPiece.generalQuality === 'red' || rawPiece.generalQuality === 'purple'
+      ? rawPiece.generalQuality
+      : undefined,
+    generalArchetype: rawPiece.generalArchetype === 'magic'
+      || rawPiece.generalArchetype === 'summon'
+      || rawPiece.generalArchetype === 'control'
+      || rawPiece.generalArchetype === 'physical'
+      ? rawPiece.generalArchetype
+      : undefined,
     generalFixed: rawPiece.generalFixed === true,
     x,
     y,
@@ -279,6 +374,85 @@ function normalizeEnemy(rawEnemy: unknown): ServerEnemyState | null {
   }
 }
 
+function normalizeEnemyStatus(rawStatus: unknown): ServerEnemyStatusState | null {
+  if (!isObject(rawStatus)
+    || typeof rawStatus.instanceId !== 'string'
+    || typeof rawStatus.enemyId !== 'string'
+    || typeof rawStatus.statusId !== 'string') return null
+  return {
+    instanceId: rawStatus.instanceId,
+    enemyId: rawStatus.enemyId,
+    sourceGeneralId: typeof rawStatus.sourceGeneralId === 'string' ? rawStatus.sourceGeneralId : '',
+    statusId: rawStatus.statusId,
+    magnitude: readNumber(rawStatus, 'magnitude', 0),
+    stacks: Math.max(1, readNumber(rawStatus, 'stacks', 1)),
+    expiresAtTick: readNumber(rawStatus, 'expiresAtTick', 0),
+  }
+}
+
+function normalizeSummonedUnit(rawUnit: unknown): ServerSummonedUnitState | null {
+  if (!isObject(rawUnit)
+    || typeof rawUnit.entityId !== 'string'
+    || typeof rawUnit.glyph !== 'string'
+    || typeof rawUnit.x !== 'number'
+    || typeof rawUnit.y !== 'number') return null
+  return {
+    entityId: rawUnit.entityId,
+    ownerPlayerId: typeof rawUnit.ownerPlayerId === 'string' ? rawUnit.ownerPlayerId : '',
+    sourceGeneralId: typeof rawUnit.sourceGeneralId === 'string' ? rawUnit.sourceGeneralId : '',
+    summonUnitId: typeof rawUnit.summonUnitId === 'string' ? rawUnit.summonUnitId : rawUnit.entityId,
+    glyph: rawUnit.glyph,
+    ownerLevel: Math.max(1, readNumber(rawUnit, 'ownerLevel', 1)),
+    x: rawUnit.x,
+    y: rawUnit.y,
+    expiresAtTick: readNumber(rawUnit, 'expiresAtTick', 0),
+  }
+}
+
+function normalizeEffectZone(rawZone: unknown): ServerEffectZoneState | null {
+  if (!isObject(rawZone)
+    || typeof rawZone.entityId !== 'string'
+    || typeof rawZone.x !== 'number'
+    || typeof rawZone.y !== 'number'
+    || !isObject(rawZone.shape)) return null
+  const shape = rawZone.shape.kind === 'circle'
+    ? { kind: 'circle' as const, radiusMilliCells: readNumber(rawZone.shape, 'radiusMilliCells', 500) }
+    : rawZone.shape.kind === 'line'
+      ? {
+          kind: 'line' as const,
+          lengthMilliCells: readNumber(rawZone.shape, 'lengthMilliCells', 1000),
+          halfWidthMilliCells: readNumber(rawZone.shape, 'halfWidthMilliCells', 500),
+        }
+      : null
+  if (!shape) return null
+  return {
+    entityId: rawZone.entityId,
+    ownerPlayerId: typeof rawZone.ownerPlayerId === 'string' ? rawZone.ownerPlayerId : '',
+    sourceGeneralId: typeof rawZone.sourceGeneralId === 'string' ? rawZone.sourceGeneralId : '',
+    zoneId: typeof rawZone.zoneId === 'string' ? rawZone.zoneId : rawZone.entityId,
+    x: rawZone.x,
+    y: rawZone.y,
+    shape,
+    expiresAtTick: readNumber(rawZone, 'expiresAtTick', 0),
+  }
+}
+
+function normalizeCombatEvent(rawEvent: unknown): ServerCombatEventState | null {
+  if (!isObject(rawEvent)
+    || typeof rawEvent.id !== 'string'
+    || typeof rawEvent.tick !== 'number'
+    || typeof rawEvent.type !== 'string') return null
+  const data: ServerCombatEventState['data'] = {}
+  if (isObject(rawEvent.data)) {
+    for (const [key, value] of Object.entries(rawEvent.data)) {
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || value === null) data[key] = value
+      else if (Array.isArray(value) && value.every((item) => typeof item === 'string')) data[key] = value
+      else if (Array.isArray(value) && value.every((item) => typeof item === 'number')) data[key] = value
+    }
+  }
+  return { id: rawEvent.id, tick: rawEvent.tick, type: rawEvent.type, data }
+}
+
 function normalizeSyncState(payload: unknown, playerId: string): ServerDrivenGameState | null {
   const candidate = extractSyncCandidate(payload)
   if (!candidate || typeof candidate.tick !== 'number') return null
@@ -291,6 +465,18 @@ function normalizeSyncState(payload: unknown, playerId: string): ServerDrivenGam
   const boardPieces = rawBoardPieces.map((piece) => normalizePiece(piece, playerId)).filter((piece): piece is ServerBoardPieceState => piece !== null)
   const rawEnemies = pve && Array.isArray(pve.enemies) ? pve.enemies : Array.isArray(candidate.enemies) ? candidate.enemies : []
   const enemies = rawEnemies.map(normalizeEnemy).filter((enemy): enemy is ServerEnemyState => enemy !== null)
+  const statuses = pve && Array.isArray(pve.statuses)
+    ? pve.statuses.map(normalizeEnemyStatus).filter((status): status is ServerEnemyStatusState => status !== null)
+    : []
+  const summonedUnits = pve && Array.isArray(pve.summonedUnits)
+    ? pve.summonedUnits.map(normalizeSummonedUnit).filter((unit): unit is ServerSummonedUnitState => unit !== null)
+    : []
+  const zones = pve && Array.isArray(pve.zones)
+    ? pve.zones.map(normalizeEffectZone).filter((zone): zone is ServerEffectZoneState => zone !== null)
+    : []
+  const recentEvents = pve && Array.isArray(pve.recentEvents)
+    ? pve.recentEvents.map(normalizeCombatEvent).filter((event): event is ServerCombatEventState => event !== null)
+    : []
   const tray = Array<ServerTrayPieceState | null>(5).fill(null)
   const reserve = Array<ServerTrayPieceState | null>(2).fill(null)
   const generalFormations: ServerGeneralFormationState[] = currentPlayer && Array.isArray(currentPlayer.generalFormations)
@@ -402,6 +588,10 @@ function normalizeSyncState(payload: unknown, playerId: string): ServerDrivenGam
     generalFormations,
     generalProgress,
     activeSynergies,
+    statuses,
+    summonedUnits,
+    zones,
+    recentEvents,
     overloadTicks: readNumber(roomRuntime, 'overloadTicks', 0),
     overloadCountdownSec: pve ? readNumber(pve, 'overloadCountdownSec', 0) : readNumber(roomRuntime, 'overloadCountdownSec', 0),
     maxCapacity: pve ? readNumber(pve, 'maxCapacity', 10) : readNumber(roomRuntime, 'maxCapacity', 10),
@@ -531,7 +721,14 @@ function GamingBoard({ gameState, sceneTheme, selectedPieceId, placementMode, ho
   return (
     <Suspense fallback={<section className="gaming-board-frame" aria-busy="true"><div className="gaming-board-viewport">正在加载战场引擎…</div></section>}>
       <PhaserBattlefield
-        snapshot={gameState ? { tick: gameState.tick, pieces: gameState.boardPieces, enemies: gameState.enemies } : null}
+        snapshot={gameState ? {
+          tick: gameState.tick,
+          pieces: gameState.boardPieces,
+          enemies: gameState.enemies,
+          statuses: gameState.statuses,
+          summonedUnits: gameState.summonedUnits,
+          zones: gameState.zones,
+        } : null}
         terrainMatrix={ARENA_TERRAIN_MATRIX}
         sceneTheme={sceneTheme}
         hoveredCell={hoveredCell}
@@ -584,6 +781,22 @@ export function GamingPage() {
   const selectedGeneralProgress = selectedFormation
     ? gameState?.generalProgress.find((progress) => progress.generalId === selectedFormation.generalId) ?? null
     : null
+  const selectedFormationPieces = selectedFormation
+    ? (gameState?.boardPieces.filter((piece) => piece.formationId === selectedFormation.formationId)
+        .sort((left, right) => left.y - right.y || left.x - right.x) ?? [])
+    : []
+  const selectedFormationGlyphs = selectedFormationPieces.map((piece) => piece.glyph)
+  const selectedGeneralSynergies = selectedFormation
+    ? gameState?.activeSynergies.filter((synergy) => synergy.contributingGeneralIds.includes(selectedFormation.generalId)) ?? []
+    : []
+  const selectedGeneralExperienceRatio = selectedGeneralProgress
+    ? selectedGeneralProgress.experienceToNextLevel === null
+      ? 1
+      : selectedGeneralProgress.experiencePoints / Math.max(1, selectedGeneralProgress.experiencePoints + selectedGeneralProgress.experienceToNextLevel)
+    : 0
+  const generalDisplayName = (generalId: string) => gameState?.generalProgress.find((progress) => progress.generalId === generalId)?.name
+    ?? gameState?.generalFormations.find((formation) => formation.generalId === generalId)?.name
+    ?? generalId
   const selectedReservePiece = selectedReserveIndex === null ? null : gameState?.reserve[selectedReserveIndex] ?? null
   const recruitDisabled = !gameState || gameState.status !== 'running' || gameState.rice < gameState.nextRecruitCost
 
@@ -1115,9 +1328,12 @@ export function GamingPage() {
               </section>
 
               {selectedPiece ? (
-                <section className="gaming-selected-card gaming-selected-card-compact">
+                <section className={cx(
+                  'gaming-selected-card gaming-selected-card-compact',
+                  selectedGeneralProgress && `gaming-general-card gaming-general-quality-${selectedGeneralProgress.quality}`,
+                )}>
                   <div className="gaming-piece-summary">
-                    <span className="gaming-piece-summary-glyph">{selectedPiece.glyph}</span>
+                    <span className="gaming-piece-summary-glyph">{selectedFormationGlyphs.length > 0 ? selectedFormationGlyphs.join('') : selectedPiece.glyph}</span>
                     <div>
                       <p className="font-semibold text-white">{selectedFormation?.name ?? (selectedPiece.kind === 'soldier' ? SOLDIER_LABELS[selectedPiece.soldierType ?? ''] ?? '天兵' : '神将字符')}</p>
                       <p className="text-xs text-cyan-100/65">{selectedGeneralProgress
@@ -1128,15 +1344,32 @@ export function GamingPage() {
                     </div>
                   </div>
                   {selectedFormation && selectedGeneralProgress ? (
-                    <div className="mt-3 space-y-2 text-xs text-cyan-100/70">
-                      <p>经验：{(selectedGeneralProgress.experiencePoints / 1000).toFixed(1)}{selectedGeneralProgress.experienceToNextLevel === null ? ' · 当前品质已达等级上限' : ` · 距升级 ${(selectedGeneralProgress.experienceToNextLevel / 1000).toFixed(1)}`}</p>
-                      <p>组合：后 + 羿 · 半径3格远程物理 · 自动释放技能</p>
-                      <p>攻击 {selectedGeneralProgress.attack} · 间隔 {(selectedGeneralProgress.attackIntervalMs / 1000).toFixed(2)}s · 射程 {(selectedGeneralProgress.attackRangeMilliCells / 1000).toFixed(1)}格</p>
-                      <p>暴击 {(selectedGeneralProgress.critChanceBps / 100).toFixed(0)}% · 暴伤 {(selectedGeneralProgress.critDamageBps / 100).toFixed(0)}% · 技能CD {(selectedGeneralProgress.activeSkillCooldownMs / 1000).toFixed(1)}s</p>
-                      <p>羁绊：{gameState?.activeSynergies.filter((synergy) => synergy.contributingGeneralIds.includes(selectedFormation.generalId)).map((synergy) => synergy.name).join('、') || '尚未激活（月宫旧侣需嫦娥）'}</p>
-                      <button type="button" className="gaming-exile-button" onClick={handleToggleGeneralFixed}>
-                        {selectedFormation.fixed ? '解除固定' : '固定神将'}
-                      </button>
+                    <div className="gaming-general-details">
+                      <div className="gaming-general-badges">
+                        <span>{GENERAL_QUALITY_LABELS[selectedGeneralProgress.quality]}</span>
+                        <span>{GENERAL_ARCHETYPE_LABELS[selectedGeneralProgress.archetype]}</span>
+                        <span>Lv.{selectedGeneralProgress.level}/{selectedGeneralProgress.maxLevel}</span>
+                      </div>
+                      <p className="gaming-general-recipe">组合字：{selectedFormationGlyphs.join(' + ') || selectedFormation.name}</p>
+                      <div className="gaming-general-experience">
+                        <div><span>经验 {(selectedGeneralProgress.experiencePoints / 1000).toFixed(1)}</span><span>{selectedGeneralProgress.experienceToNextLevel === null ? '已满级' : `还需 ${(selectedGeneralProgress.experienceToNextLevel / 1000).toFixed(1)}`}</span></div>
+                        <i><b style={{ width: `${Math.max(0, Math.min(100, selectedGeneralExperienceRatio * 100))}%` }} /></i>
+                      </div>
+                      <div className="gaming-general-stat-grid" aria-label="神将五维属性">
+                        <span><small>攻击</small><strong>{selectedGeneralProgress.attack}</strong></span>
+                        <span><small>攻速</small><strong>{selectedGeneralProgress.attackIntervalMs > 0 ? (1000 / selectedGeneralProgress.attackIntervalMs).toFixed(2) : '0.00'}/s</strong></span>
+                        <span><small>射程</small><strong>{(selectedGeneralProgress.attackRangeMilliCells / 1000).toFixed(1)}格</strong></span>
+                        <span><small>暴击</small><strong>{(selectedGeneralProgress.critChanceBps / 100).toFixed(0)}%</strong></span>
+                        <span><small>暴伤</small><strong>{(selectedGeneralProgress.critDamageBps / 100).toFixed(0)}%</strong></span>
+                      </div>
+                      <p className="gaming-general-skill"><strong>{selectedGeneralProgress.activeSkillName}</strong><span>自动释放 · CD {(selectedGeneralProgress.activeSkillCooldownMs / 1000).toFixed(1)}s · {selectedGeneralProgress.activeSkillReadyAtTick <= (gameState?.tick ?? 0) ? '已就绪' : '冷却中'}</span></p>
+                      <p className="gaming-general-synergies">羁绊：{selectedGeneralSynergies.map((synergy) => `${synergy.name} Lv.${synergy.level}`).join('、') || '尚未激活'}</p>
+                      <div className="gaming-general-fixed-row">
+                        <span>{selectedFormation.fixed ? '组合已固定，可整体迁移' : '组合未固定，可拆分字符'}</span>
+                        <button type="button" className="gaming-exile-button" onClick={handleToggleGeneralFixed}>
+                          {selectedFormation.fixed ? '解除固定' : '固定神将'}
+                        </button>
+                      </div>
                     </div>
                   ) : null}
                 </section>
@@ -1169,13 +1402,50 @@ export function GamingPage() {
               </div>
             </section>
             <section className="gaming-panel-card">
+              <p className="gaming-section-label">已激活羁绊</p>
+              <div className="gaming-synergy-list">
+                {(gameState?.activeSynergies.length ?? 0) > 0 ? gameState?.activeSynergies.map((synergy) => (
+                  <div className="gaming-synergy-entry" key={synergy.synergyId}>
+                    <div><strong>{synergy.name}</strong><span>Lv.{synergy.level}</span></div>
+                    <p>成员：{synergy.contributingGeneralIds.map(generalDisplayName).join('、') || '等待成员投影'}</p>
+                  </div>
+                )) : <p className="gaming-synergy-empty">当前阵容暂无已激活羁绊</p>}
+              </div>
+            </section>
+            <section className="gaming-panel-card">
+              <p className="gaming-section-label">战斗效果</p>
+              <div className="gaming-effect-summary" aria-label="召唤物、效果区域和敌人状态">
+                <span><strong>{gameState?.summonedUnits.length ?? 0}</strong><small>召唤物</small></span>
+                <span><strong>{gameState?.zones.length ?? 0}</strong><small>效果区域</small></span>
+                <span><strong>{gameState?.statuses.length ?? 0}</strong><small>状态层</small></span>
+              </div>
+              {(gameState?.statuses.length ?? 0) > 0 ? (
+                <div className="gaming-effect-list">
+                  {gameState?.statuses.slice(0, 5).map((status) => (
+                    <p key={status.instanceId}>
+                      <strong>{STATUS_LABELS[status.statusId] ?? status.statusId}</strong>
+                      <span>{gameState.enemies.find((enemy) => enemy.entityId === status.enemyId)?.glyph ?? '怪'} · {status.stacks > 1 ? `${status.stacks}层 · ` : ''}{status.magnitude !== 0 ? `强度 ${status.magnitude}` : '生效中'}</span>
+                    </p>
+                  ))}
+                  {gameState && gameState.statuses.length > 5 ? <small>另有 {gameState.statuses.length - 5} 个状态，战场上以黄字标记</small> : null}
+                </div>
+              ) : <p className="gaming-synergy-empty gaming-effect-empty">当前没有持续中的控制或易损效果</p>}
+              {(gameState?.recentEvents.length ?? 0) > 0 ? (
+                <div className="gaming-event-list">
+                  {[...(gameState?.recentEvents ?? [])].slice(-4).reverse().map((event) => (
+                    <p key={event.id}><span>{COMBAT_EVENT_LABELS[event.type] ?? event.type}</span><small>T{event.tick}</small></p>
+                  ))}
+                </div>
+              ) : null}
+            </section>
+            <section className="gaming-panel-card">
               <p className="gaming-section-label">操作提示</p>
               <div className="gaming-operation-guide">
                 <p>托盘天兵 → 同类同级天兵：直接升级</p>
                 <p>托盘、备战席、棋盘任意两处可交换或合成</p>
                 <p>备战席单位不占人口</p>
                 <p>流放：清空备战席中的全部单位</p>
-                <p>后+羿横向相邻自动组成后羿；固定后可整体迁移</p>
+                <p>2/3/4 字神将按配方横向连续排列自动组成；固定后可整体迁移</p>
               </div>
             </section>
             {selectedLevelPreview ? <section className="gaming-panel-card"><p className="gaming-section-label">已选关卡</p><h2 className="mt-2 text-lg font-semibold text-white">{selectedLevelPreview.label}</h2><p className="mt-2 text-sm leading-6 text-slate-300">{selectedLevelPreview.description}</p></section> : null}

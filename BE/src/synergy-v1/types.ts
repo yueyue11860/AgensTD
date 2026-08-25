@@ -55,6 +55,16 @@ export type SynergyEffectTarget =
   | {
       scope: 'owned_summons_of_synergy_members'
     }
+  | {
+      scope: 'owner_player'
+    }
+
+export interface SynergyEffectCondition {
+  /** 例如 boss、normal、yao、mo。条件在伤害目标上求交集。 */
+  targetTagsAny?: readonly string[]
+  /** 例如 active_skill、damage_over_time。条件在被修改效果上求交集。 */
+  effectTagsAny?: readonly string[]
+}
 
 export type SynergyStat =
   | 'attack'
@@ -62,16 +72,22 @@ export type SynergyStat =
   | 'attackRange'
   | 'critRate'
   | 'critDamage'
+  | 'damageDealt'
   | 'physicalDamageBonus'
   | 'magicDamageBonus'
   | 'cooldownReduction'
   | 'controlDuration'
   | 'summonAttack'
   | 'summonAttackSpeed'
+  | 'summonCritRate'
+  | 'summonCritDamage'
+  | 'summonDuration'
+  | 'generalExperienceGain'
 
 export type SynergyModifierOperation =
   | 'add_flat'
   | 'add_ratio'
+  /** 直接倍率：2 表示 ×2，不是 2 基点。 */
   | 'multiply'
   | 'min'
   | 'max'
@@ -82,9 +98,10 @@ export interface SynergyStatModifierEffect {
   target: SynergyEffectTarget
   stat: SynergyStat
   operation: SynergyModifierOperation
-  /** add_ratio 使用基点（10000=100%）；add_flat 使用属性自身整数单位（射程为 milli-cells）。 */
+  /** add_ratio 使用基点（10000=100%）；add_flat 使用属性自身整数单位（射程为 milli-cells）；multiply 使用直接倍率。 */
   value: number
   stackGroup: string
+  condition?: SynergyEffectCondition
 }
 
 export interface SynergyEffectParameterPatch {
@@ -93,6 +110,7 @@ export interface SynergyEffectParameterPatch {
   target: SynergyEffectTarget
   targetEffectId: string
   parameter: string
+  /** add_ratio 使用基点；multiply 使用直接倍率。 */
   operation: 'add_flat' | 'add_ratio' | 'multiply'
   value: number
   stackGroup: string
@@ -155,6 +173,11 @@ export interface SynergyReconcileResult {
   activated: readonly ActiveSynergyState[]
   deactivated: readonly ActiveSynergyState[]
   changedLevels: readonly {
+    previous: ActiveSynergyState
+    next: ActiveSynergyState
+  }[]
+  /** 档位未变但 facet 贡献者发生变化，需精确移除旧源并重投影。 */
+  reconfigured: readonly {
     previous: ActiveSynergyState
     next: ActiveSynergyState
   }[]

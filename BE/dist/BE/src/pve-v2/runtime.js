@@ -1,12 +1,14 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PveGameRuntime = exports.PVE_WAVE_PREP_DURATION_MS = void 0;
+exports.PveGameRuntime = exports.PVE_MIN_LANE_SPAWN_INTERVAL_MS = exports.PVE_WAVE_PREP_DURATION_MS = void 0;
+exports.resolvePveLaneSpawnIntervalMs = resolvePveLaneSpawnIntervalMs;
 const catalogs_1 = require("./catalogs");
 const arena_1 = require("./arena");
 const prng_1 = require("./prng");
 const catalog_1 = require("../core/hero-v1/catalog");
 const combat_engine_1 = require("../core/hero-v1/combat-engine");
 const formation_manager_1 = require("../core/hero-v1/formation-manager");
+const summon_catalog_1 = require("../core/hero-v1/summon-catalog");
 const synergy_v1_1 = require("../synergy-v1");
 const TRAY_SIZE = 5;
 const RESERVE_SIZE = 2;
@@ -15,8 +17,28 @@ const CHARACTER_BRANCH_BPS = 1000;
 const ENEMY_CAPACITY_PER_PLAYER = 10;
 const OVERLOAD_DURATION_MS = 10000;
 const XP_REWARD_POINTS = 1000;
+const SELF_GENERAL_STATUS_IDS = new Set([
+    'next_basic_attack_damage_up',
+    'attack_speed_up',
+]);
+const CONTROL_STATUS_IDS = new Set([
+    'slow',
+    'stun',
+    'root',
+    'suppress',
+    'suppress_active_trait',
+]);
 /** 选关并开始对局后，首波与后续波次统一使用的准备时间。 */
 exports.PVE_WAVE_PREP_DURATION_MS = 5000;
+/**
+ * 同一路出生器两次正常刷怪的最小间隔。
+ *
+ * 这只是刷怪调度规则，不是怪物碰撞或防重叠规则：怪物进入战场后仍可以被技能聚集在一起。
+ */
+exports.PVE_MIN_LANE_SPAWN_INTERVAL_MS = 1500;
+function resolvePveLaneSpawnIntervalMs(configuredIntervalMs) {
+    return Math.max(exports.PVE_MIN_LANE_SPAWN_INTERVAL_MS, configuredIntervalMs);
+}
 function boardKey(x, y) {
     return `${x},${y}`;
 }
@@ -85,9 +107,24 @@ class PveGameRuntime {
     slotAssignments = new Map();
     processedActions = new Map();
     recentEvents = [];
-    generalFormations = new formation_manager_1.GeneralFormationManager();
+    generalCatalog;
+    generalFormations;
     synergyByPlayer = new Map();
+    /** 羁绊效果唯一运行时来源；重配与失活由 reconcile commands 精确替换/移除。 */
+    synergyEffects = new synergy_v1_1.SynergyRuntimeProjectionRegistry(synergy_v1_1.GENERAL_SYNERGY_PROFILES);
     enemies = [];
+    statuses = [];
+    /** 神将自身 buff 与敌方 debuff 分开存储，避免 self targeting 被误解为敌人状态。 */
+    generalStatuses = [];
+    damageOverTime = [];
+    summonedUnits = [];
+    zones = [];
+    /**
+     * 参数补丁按玩家、神将阵型、目标效果、参数、补丁来源效果和主动/被动来源共同隔离。
+     * 同一个补丁重复触发会刷新自身，不会覆盖另一个主动/被动补丁；读取时再按稳定键顺序组合。
+     */
+    effectParameterPatches = new Map();
+    pendingCombatActions = [];
     laneWaves = [];
     currentTick = 0;
     status = 'waiting';
@@ -102,6 +139,7 @@ class PveGameRuntime {
     pieceSequence = 0;
     enemySequence = 0;
     eventSequence = 0;
+    effectSequence = 0;
     constructor(options) {
         (0, catalogs_1.validatePveV2Catalogs)();
         validateRuntimeOptions(options);
@@ -115,6 +153,8 @@ class PveGameRuntime {
         this.initialCharacterTokens = sanitizeCharacterTokens(options.characterTokens);
         this.waveGlyphPools = sanitizeWaveGlyphPools(options.waveGlyphPools, this.maxWaves);
         this.eventHistoryLimit = Math.max(20, options.eventHistoryLimit ?? 300);
+        this.generalCatalog = options.generalCatalog ?? catalog_1.GENERAL_CATALOG;
+        this.generalFormations = new formation_manager_1.GeneralFormationManager(this.generalCatalog);
     }
     registerPlayer(playerId, slot) {
         if (this.status !== 'waiting') {
@@ -162,6 +202,8 @@ class PveGameRuntime {
                 currentLane.retired = true;
             }
         }
+        this.synergyEffects.removePlayer(playerId);
+        this.synergyByPlayer.delete(playerId);
         this.players.delete(playerId);
         this.slotAssignments.delete(player.slot);
         return this.commandResult(true, 'PLAYER_UNREGISTERED');
@@ -252,10 +294,16 @@ class PveGameRuntime {
             }
         }
         this.spawnDueEnemies();
+        this.expireEffectInstances();
+        this.resolvePendingCombatActions();
         this.moveEnemies();
+        this.resolveDamageOverTime();
+        this.resolveZones();
+        this.resolveSummonedUnitAttacks();
         this.resolveSoldierAttacks();
         this.resolveGeneralAttacks();
         this.enemies = this.enemies.filter((enemy) => enemy.lifecycle === 'alive');
+        this.removeEffectsForMissingEnemies();
         this.updateLaneClearRewards();
         this.updateWavePhaseAndProgression();
         this.evaluateOverload();
@@ -304,11 +352,30 @@ class PveGameRuntime {
                 .slice()
                 .sort((left, right) => left.spawnSequence - right.spawnSequence)
                 .map(({ lifecycle: _lifecycle, generalContributions: _generalContributions, ...enemy }) => ({ ...enemy })),
+            statuses: this.statuses
+                .slice()
+                .sort((left, right) => left.instanceId.localeCompare(right.instanceId))
+                .map((status) => ({ ...status })),
+            summonedUnits: this.summonedUnits
+                .slice()
+                .sort((left, right) => left.id.localeCompare(right.id))
+                .map(({ template: _template, inheritStatRatiosBps: _inherit, sourceEffectId: _sourceEffectId, ...summon }) => ({ ...summon })),
+            zones: this.zones
+                .slice()
+                .sort((left, right) => left.id.localeCompare(right.id))
+                .map(({ tickIntervalTicks: _interval, tickEffects: _effects, ...zone }) => ({ ...zone })),
             recentEvents: this.recentEvents.map((event) => ({
                 ...event,
                 data: structuredClone(event.data),
             })),
         };
+    }
+    /**
+     * 未来 Boss/精英怪主动特性的统一门禁。
+     * 它故意不与眩晕、定身或普通移动共用，调用方只应在尝试释放“主动特性”时查询。
+     */
+    isEnemyActiveTraitSuppressed(enemyId) {
+        return this.hasEnemyStatus(enemyId, 'suppress_active_trait');
     }
     handleRecruit(player, action) {
         if (!this.revisionMatches(action.expectedTrayRevision, player.trayRevision)) {
@@ -774,7 +841,7 @@ class PveGameRuntime {
         if (!definition) {
             return;
         }
-        const intervalTicks = Math.max(1, Math.ceil(definition.spawnIntervalMs / this.tickRateMs));
+        const intervalTicks = Math.max(1, Math.ceil(resolvePveLaneSpawnIntervalMs(definition.spawnIntervalMs) / this.tickRateMs));
         const currentLanes = this.currentLaneWaves();
         for (const lane of currentLanes) {
             if (lane.spawnedCount >= lane.totalCount
@@ -785,6 +852,8 @@ class PveGameRuntime {
             lane.spawnedCount += 1;
             lane.lastSpawnedEnemyId = enemy.id;
             // 以实际生成 Tick 为基准，禁止因历史积压在同一 Tick 连续补刷多个单位。
+            // 下一只还必须同时通过 hasPreviousSpawnFullyExited 空间门：
+            // “最小时间间隔”和“上一只完整离开出生方格”缺一不可。
             lane.nextSpawnTick = this.currentTick + intervalTicks;
         }
     }
@@ -840,7 +909,12 @@ class PveGameRuntime {
             if (enemy.lifecycle !== 'alive') {
                 continue;
             }
-            this.moveEnemy(enemy, distancePerTick);
+            if (this.statusMagnitude(enemy.id, 'stun') <= 0
+                && this.statusMagnitude(enemy.id, 'root') <= 0
+                && this.statusMagnitude(enemy.id, 'suppress') <= 0) {
+                const slow = Math.min(8000, this.statusMagnitude(enemy.id, 'slow'));
+                this.moveEnemy(enemy, Math.floor(distancePerTick * (10000 - slow) / 10000));
+            }
             if (enemy.spawnProtected
                 && (0, arena_1.hasEnemyBodyFullyExitedPveSpawnSquareMilli)(enemy.xMilli, enemy.yMilli)) {
                 enemy.spawnProtected = false;
@@ -889,6 +963,45 @@ class PveGameRuntime {
             }
         }
     }
+    /** 用绝对路径进度重建位置，位移效果不直接修改任意二维坐标。 */
+    setEnemyPathProgress(enemy, requestedProgress) {
+        const route = this.laneRoutes[enemy.laneSlot];
+        const progress = Math.max(0, Math.floor(requestedProgress));
+        enemy.xMilli = route.waypoints[0].x * 1000;
+        enemy.yMilli = route.waypoints[0].y * 1000;
+        enemy.routeWaypointIndex = 0;
+        enemy.lapCount = 0;
+        enemy.pathProgressMilli = 0;
+        let remaining = progress;
+        let guard = 0;
+        const maxSegments = route.waypoints.length * 2 + Math.ceil(progress / 1000) + 8;
+        while (remaining > 0 && guard < maxSegments) {
+            guard += 1;
+            let nextIndex = enemy.routeWaypointIndex + 1;
+            if (nextIndex >= route.waypoints.length) {
+                nextIndex = route.loopStartIndex;
+                enemy.lapCount += 1;
+            }
+            const target = route.waypoints[nextIndex];
+            const targetX = target.x * 1000;
+            const targetY = target.y * 1000;
+            const dx = targetX - enemy.xMilli;
+            const dy = targetY - enemy.yMilli;
+            const distance = Math.abs(dx) + Math.abs(dy);
+            if (distance === 0) {
+                enemy.routeWaypointIndex = nextIndex;
+                continue;
+            }
+            const travel = Math.min(remaining, distance);
+            const xTravel = Math.min(Math.abs(dx), travel);
+            enemy.xMilli += Math.sign(dx) * xTravel;
+            enemy.yMilli += Math.sign(dy) * Math.min(Math.abs(dy), travel - xTravel);
+            enemy.pathProgressMilli += travel;
+            remaining -= travel;
+            if (travel === distance)
+                enemy.routeWaypointIndex = nextIndex;
+        }
+    }
     resolveGeneralAttacks() {
         const formations = [...this.players.values()]
             .flatMap((player) => this.generalFormations.getActiveFormations(player.playerId).map((formation) => ({
@@ -898,10 +1011,11 @@ class PveGameRuntime {
             .sort((left, right) => slotOrder(left.player.slot) - slotOrder(right.player.slot)
             || left.formation.generalId.localeCompare(right.formation.generalId));
         for (const { player, formation } of formations) {
-            const definition = (0, catalog_1.getGeneralDefinition)(formation.generalId);
+            const catalogDefinition = this.getGeneralDefinition(formation.generalId);
             const progress = this.generalFormations.getProgress(player.playerId, formation.generalId);
-            if (!definition || !progress)
+            if (!catalogDefinition || !progress)
                 continue;
+            const definition = this.definitionWithSynergyCooldown(player.playerId, catalogDefinition);
             const combatPlan = (0, combat_engine_1.planGeneralCombatFrame)({
                 definition,
                 formation,
@@ -909,6 +1023,7 @@ class PveGameRuntime {
                 currentTick: this.currentTick,
                 tickRateMs: this.tickRateMs,
                 modifiers: this.generalSynergyModifiers(player.playerId, formation.generalId),
+                parameterResolver: (effectId, parameter, baseValue) => this.resolvePlanningEffectParameter(player.playerId, formation.generalId, formation.formationId, effectId, parameter, baseValue),
                 enemies: this.enemies.map((enemy) => ({
                     id: enemy.id,
                     xMilli: enemy.xMilli,
@@ -917,65 +1032,81 @@ class PveGameRuntime {
                     pathProgressMilli: enemy.pathProgressMilli,
                     spawnSequence: enemy.spawnSequence,
                     targetable: enemy.lifecycle === 'alive' && this.isEnemyTargetable(enemy),
-                    tags: [],
+                    tags: this.enemyTags(enemy),
                 })),
             });
             this.generalFormations.replaceProgress(combatPlan.nextProgress);
-            const executedActionIds = new Set();
-            for (const action of combatPlan.actions) {
-                const target = this.enemies.find((enemy) => enemy.id === action.targetEnemyId);
-                if ((!target || target.lifecycle !== 'alive' || !this.isEnemyTargetable(target))
-                    && !executedActionIds.has(action.actionId)) {
-                    const currentProgress = this.generalFormations.getProgress(player.playerId, formation.generalId);
-                    if (currentProgress) {
-                        this.generalFormations.replaceProgress({
-                            ...currentProgress,
-                            ...(action.actionKind === 'active_skill'
-                                ? { activeSkillReadyAtTick: this.currentTick }
-                                : { nextBasicAttackTick: this.currentTick }),
-                        });
-                    }
-                    continue;
-                }
-                if (!target || target.lifecycle !== 'alive' || !this.isEnemyTargetable(target))
-                    continue;
-                if (action.actionKind === 'active_skill') {
+            const emittedCasts = new Set();
+            for (const action of combatPlan.combatActions) {
+                if (!emittedCasts.has(action.actionId) && action.actionKind === 'active_skill') {
                     this.emit('GENERAL_SKILL_CAST', {
                         playerId: player.playerId,
                         generalId: action.sourceGeneralId,
                         formationId: action.sourceFormationId,
                         skillId: definition.activeSkill.skillId,
                         skillName: definition.activeSkill.skillName,
-                        targetEnemyId: target.id,
+                        targetEnemyId: action.primaryTargetEnemyId,
                     });
                 }
-                else {
+                else if (!emittedCasts.has(action.actionId) && action.actionKind === 'basic_attack') {
                     this.emit('GENERAL_BASIC_ATTACK_STARTED', {
                         playerId: player.playerId,
                         generalId: action.sourceGeneralId,
                         formationId: action.sourceFormationId,
-                        targetEnemyId: target.id,
+                        targetEnemyId: action.primaryTargetEnemyId,
                     });
                 }
-                this.applyGeneralDamage(player, formation, progress.level, action, target);
-                executedActionIds.add(action.actionId);
+                emittedCasts.add(action.actionId);
+                this.executeGeneralCombatAction(player, formation, progress.level, action);
+            }
+            const trigger = definition.passiveSkill.trigger;
+            if (trigger?.kind === 'periodic') {
+                this.executePassivePlan(player, formation, progress.level, 'initialize');
+            }
+            if (combatPlan.combatActions.some((action) => action.actionKind === 'basic_attack')) {
+                this.executePassivePlan(player, formation, progress.level, 'basic_attack');
+            }
+            if (combatPlan.combatActions.some((action) => action.actionKind === 'active_skill' && action.targetEnemyIds.length > 0)) {
+                this.executePassivePlan(player, formation, progress.level, 'skill_hit');
             }
         }
     }
     applyGeneralDamage(player, formation, level, action, target) {
-        const definition = (0, catalog_1.getGeneralDefinition)(action.sourceGeneralId);
+        const definition = this.getGeneralDefinition(action.sourceGeneralId);
         if (!definition || !this.isEnemyTargetable(target))
             return;
+        const targetTags = this.enemyTags(target);
+        const effectTags = [action.actionKind, 'damage', action.damage.damageType];
         let rawDamage = Math.max(1, Math.floor((action.damage.baseAttack * action.damage.coefficientBps / 10000 + action.damage.flatDamage)
             * action.damage.damageDealtRatioBps / 10000));
-        const stats = (0, catalog_1.resolveGeneralStats)(definition, level, this.generalSynergyModifiers(player.playerId, action.sourceGeneralId), []);
+        if (action.actionKind === 'basic_attack') {
+            const empowered = this.consumeGeneralStatus(action.ownerPlayerId, action.sourceGeneralId, action.sourceFormationId, 'next_basic_attack_damage_up');
+            if (empowered) {
+                rawDamage = Math.max(1, Math.floor(rawDamage * (10000 + empowered.magnitude * empowered.stacks) / 10000));
+            }
+        }
+        const bounceFalloff = Math.max(0, this.resolveCombinedEffectParameter(player.playerId, action.sourceGeneralId, action.sourceFormationId, action.effectId, 'bounceDamageFalloffBps', action.bounceDamageFalloffBps));
+        rawDamage = Math.max(1, Math.floor(rawDamage
+            * Math.max(0, 10000 - action.targetIndex * bounceFalloff) / 10000));
+        const synergyDamageRatio = this.settleGeneralSynergyStat({ playerId: player.playerId,
+            generalId: action.sourceGeneralId, stat: 'damageDealt', baseValue: 10000, targetTags, effectTags });
+        const typedDamageRatio = this.settleGeneralSynergyStat({ playerId: player.playerId,
+            generalId: action.sourceGeneralId,
+            stat: action.damage.damageType === 'physical' ? 'physicalDamageBonus' : 'magicDamageBonus',
+            baseValue: 10000, targetTags, effectTags });
+        rawDamage = Math.max(1, Math.floor(rawDamage * synergyDamageRatio / 10000 * typedDamageRatio / 10000));
+        const stats = (0, catalog_1.resolveGeneralStats)(definition, level, this.generalSynergyModifiers(player.playerId, action.sourceGeneralId, targetTags, effectTags), targetTags);
         const isCritical = action.damage.criticalPolicy === 'can_crit' && this.prng.rollBps(stats.critChanceBps);
         if (isCritical)
             rawDamage = Math.floor(rawDamage * stats.critDamageBps / 10000);
-        const defense = action.damage.damageType === 'physical' ? target.armor : target.magicResistance;
+        const armorBreak = this.statusMagnitude(target.id, 'armor_break');
+        const physicalDefense = Math.max(0, Math.floor(target.armor * Math.max(0, 10000 - armorBreak) / 10000));
+        const defense = action.damage.damageType === 'physical' ? physicalDefense : target.magicResistance;
         const finalDamage = Math.max(1, Math.floor(rawDamage * 100 / (100 + Math.max(0, defense))));
+        const vulnerable = this.damageVulnerabilityMagnitude(target.id, action.actionKind, action.damage.damageType);
+        const resolvedDamage = Math.max(1, Math.floor(finalDamage * (10000 + vulnerable) / 10000));
         const hpBefore = target.currentHp;
-        target.currentHp = Math.max(0, target.currentHp - finalDamage);
+        target.currentHp = Math.max(0, target.currentHp - resolvedDamage);
         target.lastDamagePlayerId = player.playerId;
         target.generalContributions.set(`${player.playerId}:${action.sourceGeneralId}`, {
             ownerPlayerId: player.playerId,
@@ -991,12 +1122,684 @@ class PveGameRuntime {
             effectId: action.damage.effectId,
             enemyId: target.id,
             rawDamage,
-            finalDamage,
+            finalDamage: resolvedDamage,
             hpBefore,
             hpAfter: target.currentHp,
             isCritical,
             isSecondary: false,
         });
+        if (target.currentHp <= 0)
+            this.settleEnemyDeath(target);
+    }
+    executeGeneralCombatAction(player, formation, level, action) {
+        if (action.effectType === 'damage') {
+            const target = this.enemies.find((enemy) => enemy.id === action.targetEnemyId);
+            if (!target || target.lifecycle !== 'alive' || !this.isEnemyTargetable(target))
+                return;
+            if (action.delayMs > 0) {
+                this.pendingCombatActions.push({
+                    dueTick: this.currentTick + Math.ceil(action.delayMs / this.tickRateMs),
+                    playerId: player.playerId,
+                    formation: structuredClone(formation),
+                    level,
+                    action: { ...action, delayMs: 0 },
+                });
+                return;
+            }
+            this.applyGeneralDamage(player, formation, level, this.withPatchedDamage(action), target);
+        }
+        else if (action.effectType === 'damage_over_time') {
+            const definition = this.getGeneralDefinition(action.sourceGeneralId);
+            const stats = definition ? (0, catalog_1.resolveGeneralStats)(definition, level, this.generalSynergyModifiers(player.playerId, action.sourceGeneralId)) : null;
+            for (const enemyId of action.targetEnemyIds) {
+                const target = this.enemies.find((enemy) => enemy.id === enemyId);
+                if (!target || target.lifecycle !== 'alive' || !this.isEnemyTargetable(target))
+                    continue;
+                this.effectSequence += 1;
+                const existing = this.damageOverTime.find((entry) => entry.enemyId === enemyId
+                    && entry.ownerPlayerId === player.playerId && entry.stackGroup === action.stacking.stackGroup);
+                const next = {
+                    instanceId: `dot-${this.effectSequence}`,
+                    enemyId,
+                    ownerPlayerId: player.playerId,
+                    sourceGeneralId: action.sourceGeneralId,
+                    sourceFormationId: action.sourceFormationId,
+                    damageType: action.damageType,
+                    baseAttack: stats?.attack ?? 1,
+                    coefficientBpsPerTick: this.patchedNumber(action, 'coefficientBpsPerTick', action.coefficientBpsPerTick),
+                    flatDamagePerTick: this.patchedNumber(action, 'flatDamagePerTick', action.flatDamagePerTick),
+                    nextTick: this.currentTick + Math.max(1, Math.ceil(action.tickIntervalMs / this.tickRateMs)),
+                    tickIntervalTicks: Math.max(1, Math.ceil(action.tickIntervalMs / this.tickRateMs)),
+                    expiresAtTick: this.currentTick + Math.max(1, Math.ceil(action.durationMs / this.tickRateMs)),
+                    stackGroup: action.stacking.stackGroup,
+                };
+                if (existing && action.stacking.policy !== 'independent' && action.stacking.policy !== 'stack') {
+                    Object.assign(existing, next, { instanceId: existing.instanceId });
+                }
+                else
+                    this.damageOverTime.push(next);
+                this.emit('GENERAL_EFFECT_APPLIED', { effectType: action.effectType, effectId: action.effectId, enemyId });
+            }
+        }
+        else if (action.effectType === 'status_apply') {
+            if (SELF_GENERAL_STATUS_IDS.has(action.statusId))
+                this.applyGeneralStatus(action);
+            else
+                for (const enemyId of action.targetEnemyIds)
+                    this.applyStatus(player, action, enemyId);
+        }
+        else if (action.effectType === 'path_displacement') {
+            let displaced = false;
+            const primary = action.primaryTargetEnemyId
+                ? this.enemies.find((candidate) => candidate.id === action.primaryTargetEnemyId) : null;
+            for (const enemyId of action.targetEnemyIds) {
+                const enemy = this.enemies.find((candidate) => candidate.id === enemyId && candidate.lifecycle === 'alive');
+                if (!enemy || !this.isEnemyTargetable(enemy))
+                    continue;
+                const ratio = this.enemyTags(enemy).includes('boss') ? action.bossDistanceRatioBps : 10000;
+                const distance = Math.floor(this.patchedNumber(action, 'distanceMilliCells', action.distanceMilliCells) * ratio / 10000);
+                const before = enemy.pathProgressMilli;
+                const nextProgress = action.direction === 'backward' ? before - distance
+                    : action.direction === 'forward' ? before + distance
+                        : primary ? before + Math.sign(primary.pathProgressMilli - before)
+                            * Math.min(distance, Math.abs(primary.pathProgressMilli - before)) : before;
+                this.setEnemyPathProgress(enemy, Math.max(0, nextProgress));
+                this.recordGeneralContribution(enemy, player.playerId, action.sourceGeneralId, 'control');
+                this.emit('PATH_DISPLACED', { enemyId, generalId: action.sourceGeneralId, before, after: enemy.pathProgressMilli });
+                displaced ||= enemy.pathProgressMilli !== before;
+            }
+            if (displaced && action.actionKind !== 'passive') {
+                this.executePassivePlan(player, formation, level, 'displacement_success');
+            }
+        }
+        else if (action.effectType === 'summon_unit')
+            this.spawnSummonedUnits(player, formation, level, action);
+        else if (action.effectType === 'spawn_zone') {
+            this.effectSequence += 1;
+            const zone = {
+                id: `zone-${this.effectSequence}`,
+                ownerPlayerId: player.playerId,
+                sourceGeneralId: action.sourceGeneralId,
+                sourceFormationId: action.sourceFormationId,
+                effectId: action.effectId,
+                zoneId: action.zoneId,
+                xMilli: action.targetPointMilli?.x ?? formation.anchorMilli.x,
+                yMilli: action.targetPointMilli?.y ?? formation.anchorMilli.y,
+                shape: action.shape,
+                nextTick: this.currentTick,
+                tickIntervalTicks: Math.max(1, Math.ceil(action.tickIntervalMs / this.tickRateMs)),
+                expiresAtTick: this.currentTick + Math.max(1, Math.ceil(action.durationMs / this.tickRateMs)),
+                tickEffects: action.tickEffects,
+                sourceInactivePolicy: action.sourceInactivePolicy,
+            };
+            this.zones.push(zone);
+            this.emit('ZONE_SPAWNED', { zoneId: zone.id, effectId: zone.effectId, generalId: zone.sourceGeneralId });
+        }
+        else if (action.effectType === 'cooldown_modify')
+            this.applyCooldownModification(player, action);
+        else {
+            this.effectParameterPatches.set(this.effectParameterPatchKey(action), { operation: action.operation, value: action.value });
+            this.emit('GENERAL_EFFECT_APPLIED', { effectType: action.effectType, effectId: action.effectId, targetEffectId: action.targetEffectId });
+        }
+    }
+    resolvePendingCombatActions() {
+        const due = this.pendingCombatActions.filter((entry) => entry.dueTick <= this.currentTick)
+            .sort((left, right) => left.dueTick - right.dueTick || left.action.actionId.localeCompare(right.action.actionId));
+        this.pendingCombatActions = this.pendingCombatActions.filter((entry) => entry.dueTick > this.currentTick);
+        for (const entry of due) {
+            const player = this.players.get(entry.playerId);
+            if (player)
+                this.executeGeneralCombatAction(player, entry.formation, entry.level, entry.action);
+        }
+    }
+    withPatchedDamage(action) {
+        return {
+            ...action,
+            damage: {
+                ...action.damage,
+                coefficientBps: this.patchedNumber(action, 'coefficientBps', action.damage.coefficientBps),
+                flatDamage: this.patchedNumber(action, 'flatDamage', action.damage.flatDamage),
+            },
+        };
+    }
+    patchedNumber(action, parameter, value) {
+        const prefix = `${action.ownerPlayerId}\u0000${action.sourceGeneralId}\u0000${action.sourceFormationId}\u0000${action.effectId}\u0000${parameter}\u0000`;
+        const patches = [...this.effectParameterPatches.entries()]
+            .filter(([key]) => key.startsWith(prefix))
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([, patch]) => patch);
+        return patches.reduce((current, patch) => {
+            if (patch.operation === 'add_flat')
+                return current + patch.value;
+            if (patch.operation === 'add_ratio')
+                return Math.floor(current * (10000 + patch.value) / 10000);
+            return Math.floor(current * patch.value / 10000);
+        }, value);
+    }
+    resolveCombinedEffectParameter(ownerPlayerId, sourceGeneralId, sourceFormationId, effectId, parameter, baseValue) {
+        const internallyPatched = this.patchedNumber({ ownerPlayerId, sourceGeneralId, sourceFormationId, effectId }, parameter, baseValue);
+        return this.resolveSynergyEffectParameter(ownerPlayerId, sourceGeneralId, effectId, parameter, internallyPatched);
+    }
+    resolvePlanningEffectParameter(ownerPlayerId, sourceGeneralId, sourceFormationId, effectId, parameter, baseValue) {
+        // 这些参数在目标冻结/实例创建前就必须结算；直伤与状态数值仍在执行时读取
+        // 同帧刚产生的内部补丁，确保旧的“先补丁、后伤害”语义不回退。
+        const planningParameters = new Set([
+            'targetLimit', 'bounceRangeMilliCells', 'radiusMilliCells', 'lengthMilliCells',
+            'halfWidthMilliCells', 'count', 'durationMs', 'maxOwnedAlive',
+        ]);
+        return planningParameters.has(parameter)
+            ? this.resolveCombinedEffectParameter(ownerPlayerId, sourceGeneralId, sourceFormationId, effectId, parameter, baseValue)
+            : this.resolveSynergyEffectParameter(ownerPlayerId, sourceGeneralId, effectId, parameter, baseValue);
+    }
+    effectParameterPatchKey(action) {
+        return [action.ownerPlayerId, action.sourceGeneralId, action.sourceFormationId, action.targetEffectId, action.parameter,
+            action.actionKind, action.effectId].join('\u0000');
+    }
+    applyStatus(player, action, enemyId) {
+        const enemy = this.enemies.find((candidate) => candidate.id === enemyId && candidate.lifecycle === 'alive');
+        if (!enemy || !this.isEnemyTargetable(enemy))
+            return;
+        const magnitude = this.patchedNumber(action, 'magnitude', action.magnitude);
+        const resistanceDown = action.statusId === 'control_resistance_down'
+            ? 0 : this.statusMagnitude(enemyId, 'control_resistance_down');
+        const settledChanceBps = CONTROL_STATUS_IDS.has(action.statusId)
+            ? Math.min(10000, Math.floor(action.chanceBps * (10000 + resistanceDown) / 10000))
+            : action.chanceBps;
+        if (!this.prng.rollBps(settledChanceBps))
+            return;
+        let durationMs = this.settleGeneralSynergyStat({ playerId: player.playerId,
+            generalId: action.sourceGeneralId, stat: 'controlDuration', baseValue: action.durationMs,
+            targetTags: this.enemyTags(enemy), effectTags: ['status_apply', action.statusId, action.actionKind] });
+        if (CONTROL_STATUS_IDS.has(action.statusId)) {
+            durationMs = Math.floor(durationMs * (10000 + resistanceDown) / 10000);
+        }
+        // 杨戬“当前生命斩”是瞬时效果，不创建持续状态；每次都以执行瞬间的当前生命结算。
+        if (action.statusId === 'current_hp_physical_damage') {
+            const rawDamage = Math.max(1, Math.floor(enemy.currentHp * Math.max(0, magnitude) / 10000));
+            this.applyRuntimeEffectDamage(enemy, player.playerId, action.sourceGeneralId, action.sourceFormationId, action.effectId, 'physical', rawDamage, 'passive');
+            this.emit('GENERAL_EFFECT_APPLIED', { effectType: action.effectType, effectId: action.effectId,
+                statusId: action.statusId, enemyId, currentHpRatioBps: magnitude });
+            return;
+        }
+        const expiresAtTick = this.currentTick + Math.max(1, Math.ceil(durationMs / this.tickRateMs));
+        const existing = this.statuses.find((status) => status.enemyId === enemyId && status.stackGroup === action.stacking.stackGroup);
+        if (existing && action.stacking.policy !== 'independent') {
+            if (action.stacking.policy === 'stack') {
+                existing.stacks = Math.min(action.stacking.maxStacks, existing.stacks + 1);
+                existing.magnitude = Math.max(existing.magnitude, magnitude);
+            }
+            else if (action.stacking.policy === 'strongest_refresh')
+                existing.magnitude = Math.max(existing.magnitude, magnitude);
+            else
+                existing.magnitude = magnitude;
+            existing.expiresAtTick = action.stacking.policy === 'extend'
+                ? existing.expiresAtTick + Math.max(1, Math.ceil(durationMs / this.tickRateMs)) : expiresAtTick;
+        }
+        else {
+            this.effectSequence += 1;
+            this.statuses.push({ instanceId: `status-${this.effectSequence}`, enemyId, sourceGeneralId: action.sourceGeneralId,
+                ownerPlayerId: player.playerId, statusId: action.statusId, stackGroup: action.stacking.stackGroup,
+                magnitude, stacks: 1, appliedAtTick: this.currentTick, expiresAtTick });
+        }
+        this.recordGeneralContribution(enemy, player.playerId, action.sourceGeneralId, 'control');
+        this.emit('STATUS_APPLIED', { enemyId, generalId: action.sourceGeneralId, statusId: action.statusId, magnitude,
+            chanceBps: settledChanceBps, durationMs, controlResistanceDownBps: resistanceDown });
+    }
+    applyGeneralStatus(action) {
+        if (!this.isFormationActive(action.ownerPlayerId, action.sourceGeneralId, action.sourceFormationId)
+            || !this.prng.rollBps(action.chanceBps))
+            return;
+        const definition = this.getGeneralDefinition(action.sourceGeneralId);
+        const progressBefore = this.generalFormations.getProgress(action.ownerPlayerId, action.sourceGeneralId);
+        const intervalBefore = definition && progressBefore
+            ? (0, catalog_1.resolveGeneralStats)(definition, progressBefore.level, this.generalSynergyModifiers(action.ownerPlayerId, action.sourceGeneralId)).attackIntervalMs
+            : null;
+        const magnitude = this.patchedNumber(action, 'magnitude', action.magnitude);
+        const durationTicks = Math.max(1, Math.ceil(action.durationMs / this.tickRateMs));
+        const expiresAtTick = this.currentTick + durationTicks;
+        const existing = this.generalStatuses.find((status) => status.ownerPlayerId === action.ownerPlayerId
+            && status.sourceFormationId === action.sourceFormationId && status.stackGroup === action.stacking.stackGroup);
+        if (existing && action.stacking.policy !== 'independent') {
+            if (action.stacking.policy === 'stack') {
+                existing.stacks = Math.min(action.stacking.maxStacks, existing.stacks + 1);
+                existing.magnitude = Math.max(existing.magnitude, magnitude);
+            }
+            else if (action.stacking.policy === 'strongest_refresh')
+                existing.magnitude = Math.max(existing.magnitude, magnitude);
+            else
+                existing.magnitude = magnitude;
+            existing.expiresAtTick = action.stacking.policy === 'extend'
+                ? existing.expiresAtTick + durationTicks : expiresAtTick;
+        }
+        else {
+            this.effectSequence += 1;
+            this.generalStatuses.push({ instanceId: `general-status-${this.effectSequence}`,
+                ownerPlayerId: action.ownerPlayerId, sourceGeneralId: action.sourceGeneralId,
+                sourceFormationId: action.sourceFormationId, statusId: action.statusId,
+                stackGroup: action.stacking.stackGroup, magnitude, stacks: 1,
+                appliedAtTick: this.currentTick, expiresAtTick });
+        }
+        // 攻速 buff 在当帧按新旧间隔等比缩放剩余攻击读条，不重置整条读条。
+        if (action.statusId === 'attack_speed_up' && definition && progressBefore && intervalBefore) {
+            const intervalAfter = (0, catalog_1.resolveGeneralStats)(definition, progressBefore.level, this.generalSynergyModifiers(action.ownerPlayerId, action.sourceGeneralId)).attackIntervalMs;
+            const remaining = Math.max(0, progressBefore.nextBasicAttackTick - this.currentTick);
+            if (remaining > 0 && intervalAfter !== intervalBefore) {
+                this.generalFormations.replaceProgress({ ...progressBefore,
+                    nextBasicAttackTick: this.currentTick + Math.max(1, Math.ceil(remaining * intervalAfter / intervalBefore)) });
+            }
+        }
+        this.emit('GENERAL_STATUS_APPLIED', { playerId: action.ownerPlayerId, generalId: action.sourceGeneralId,
+            formationId: action.sourceFormationId, effectId: action.effectId, statusId: action.statusId,
+            magnitude, expiresAtTick });
+    }
+    applyCooldownModification(player, action) {
+        const progress = this.generalFormations.getProgress(player.playerId, action.sourceGeneralId);
+        if (!progress)
+            return;
+        const apply = (readyAt) => action.operation === 'set_ready' ? this.currentTick
+            : action.operation === 'add_ms' ? Math.max(this.currentTick, readyAt + Math.ceil(action.value / this.tickRateMs))
+                : Math.max(this.currentTick, this.currentTick + Math.ceil((readyAt - this.currentTick) * (10000 + action.value) / 10000));
+        this.generalFormations.replaceProgress({ ...progress,
+            ...(action.targetSkill === 'active_skill' || action.targetSkill === 'all_skills' ? { activeSkillReadyAtTick: apply(progress.activeSkillReadyAtTick) } : {}),
+            ...(action.targetSkill === 'basic_attack' || action.targetSkill === 'all_skills' ? { nextBasicAttackTick: apply(progress.nextBasicAttackTick) } : {}) });
+        this.emit('COOLDOWN_MODIFIED', { playerId: player.playerId, generalId: action.sourceGeneralId, effectId: action.effectId,
+            targetSkill: action.targetSkill, operation: action.operation, value: action.value });
+    }
+    statusMagnitude(enemyId, statusId) {
+        return this.statuses.filter((status) => status.enemyId === enemyId && status.statusId === statusId && status.expiresAtTick > this.currentTick)
+            .reduce((maximum, status) => Math.max(maximum, status.magnitude * status.stacks), 0);
+    }
+    hasEnemyStatus(enemyId, statusId) {
+        return this.statuses.some((status) => status.enemyId === enemyId && status.statusId === statusId
+            && status.expiresAtTick > this.currentTick);
+    }
+    consumeGeneralStatus(ownerPlayerId, sourceGeneralId, sourceFormationId, statusId) {
+        const index = this.generalStatuses.findIndex((status) => status.ownerPlayerId === ownerPlayerId
+            && status.sourceGeneralId === sourceGeneralId && status.sourceFormationId === sourceFormationId
+            && status.statusId === statusId && status.expiresAtTick > this.currentTick);
+        if (index < 0)
+            return null;
+        const [consumed] = this.generalStatuses.splice(index, 1);
+        this.emit('GENERAL_STATUS_CONSUMED', { instanceId: consumed.instanceId, playerId: ownerPlayerId,
+            generalId: sourceGeneralId, formationId: sourceFormationId, statusId });
+        return consumed;
+    }
+    damageVulnerabilityMagnitude(enemyId, sourceKind, damageType) {
+        let magnitude = this.statusMagnitude(enemyId, 'vulnerable')
+            + this.statusMagnitude(enemyId, 'vulnerable_all');
+        if (sourceKind === 'active_skill' || sourceKind === 'passive'
+            || sourceKind === 'spawn_zone' || sourceKind === 'damage_over_time') {
+            magnitude += this.statusMagnitude(enemyId, 'skill_vulnerable');
+        }
+        if (damageType === 'magic')
+            magnitude += this.statusMagnitude(enemyId, 'magic_vulnerable');
+        return magnitude;
+    }
+    recordGeneralContribution(enemy, ownerPlayerId, generalId, category) {
+        const definition = this.getGeneralDefinition(generalId);
+        enemy.generalContributions.set(`${ownerPlayerId}:${generalId}`, { ownerPlayerId, generalId,
+            category: category ?? definition?.archetype ?? 'physical', lastContributionTick: this.currentTick });
+    }
+    expireEffectInstances() {
+        const expiredStatuses = this.statuses.filter((entry) => entry.expiresAtTick <= this.currentTick);
+        this.statuses = this.statuses.filter((entry) => entry.expiresAtTick > this.currentTick
+            && this.enemies.some((enemy) => enemy.id === entry.enemyId && enemy.lifecycle === 'alive'));
+        for (const status of expiredStatuses)
+            this.emit('STATUS_EXPIRED', { instanceId: status.instanceId, enemyId: status.enemyId, statusId: status.statusId });
+        const expiredGeneralStatuses = this.generalStatuses.filter((entry) => entry.expiresAtTick <= this.currentTick
+            || !this.isFormationActive(entry.ownerPlayerId, entry.sourceGeneralId, entry.sourceFormationId));
+        const expiredGeneralStatusIds = new Set(expiredGeneralStatuses.map((entry) => entry.instanceId));
+        this.generalStatuses = this.generalStatuses.filter((entry) => !expiredGeneralStatusIds.has(entry.instanceId));
+        for (const status of expiredGeneralStatuses)
+            this.emit('GENERAL_STATUS_EXPIRED', {
+                instanceId: status.instanceId, playerId: status.ownerPlayerId, generalId: status.sourceGeneralId,
+                formationId: status.sourceFormationId, statusId: status.statusId,
+            });
+        this.damageOverTime = this.damageOverTime.filter((entry) => entry.expiresAtTick > this.currentTick
+            && this.enemies.some((enemy) => enemy.id === entry.enemyId && enemy.lifecycle === 'alive'));
+        const expiredSummons = this.summonedUnits.filter((entry) => entry.expiresAtTick <= this.currentTick
+            || (entry.sourceInactivePolicy === 'despawn' && !this.isGeneralActive(entry.ownerPlayerId, entry.sourceGeneralId)));
+        const expiredSummonIds = new Set(expiredSummons.map((entry) => entry.id));
+        this.summonedUnits = this.summonedUnits.filter((entry) => !expiredSummonIds.has(entry.id));
+        for (const summon of expiredSummons)
+            this.emit('SUMMON_EXPIRED', { summonId: summon.id, summonUnitId: summon.summonUnitId });
+        const expiredZones = this.zones.filter((entry) => entry.expiresAtTick <= this.currentTick
+            || (entry.sourceInactivePolicy === 'despawn' && !this.isGeneralActive(entry.ownerPlayerId, entry.sourceGeneralId)));
+        const expiredZoneIds = new Set(expiredZones.map((entry) => entry.id));
+        this.zones = this.zones.filter((entry) => !expiredZoneIds.has(entry.id));
+        for (const zone of expiredZones)
+            this.emit('ZONE_EXPIRED', { zoneId: zone.id, effectId: zone.effectId });
+    }
+    removeEffectsForMissingEnemies() {
+        const aliveEnemyIds = new Set(this.enemies.map((enemy) => enemy.id));
+        this.statuses = this.statuses.filter((status) => aliveEnemyIds.has(status.enemyId));
+        this.damageOverTime = this.damageOverTime.filter((dot) => aliveEnemyIds.has(dot.enemyId));
+    }
+    resolveDamageOverTime() {
+        for (const dot of this.damageOverTime.slice().sort((left, right) => left.instanceId.localeCompare(right.instanceId))) {
+            if (dot.nextTick > this.currentTick || dot.expiresAtTick < this.currentTick)
+                continue;
+            const target = this.enemies.find((enemy) => enemy.id === dot.enemyId && enemy.lifecycle === 'alive');
+            if (!target || !this.isEnemyTargetable(target))
+                continue;
+            const rawDamage = Math.max(1, Math.floor(dot.baseAttack * dot.coefficientBpsPerTick / 10000 + dot.flatDamagePerTick));
+            this.applyRuntimeEffectDamage(target, dot.ownerPlayerId, dot.sourceGeneralId, dot.sourceFormationId, dot.instanceId, dot.damageType, rawDamage, 'damage_over_time');
+            dot.nextTick += dot.tickIntervalTicks;
+        }
+    }
+    spawnSummonedUnits(player, formation, level, action) {
+        const template = summon_catalog_1.SUMMON_UNIT_CATALOG[action.summonUnitId];
+        if (!template)
+            return;
+        const alive = this.summonedUnits.filter((entry) => entry.ownerPlayerId === player.playerId
+            && entry.sourceGeneralId === action.sourceGeneralId && entry.summonUnitId === action.summonUnitId).length;
+        const count = Math.max(0, Math.min(Math.floor(action.count), Math.floor(action.maxOwnedAlive) - alive));
+        const durationMs = this.settleSummonSynergyStat({ ownerPlayerId: player.playerId,
+            sourceGeneralId: action.sourceGeneralId, summonUnitId: action.summonUnitId,
+            stat: 'summonDuration', baseValue: action.durationMs });
+        for (let index = 0; index < count; index += 1) {
+            this.effectSequence += 1;
+            const spawnPoint = this.resolveSummonSpawnPoint(player, formation, action, index);
+            const summon = {
+                id: `summon-${this.effectSequence}`,
+                ownerPlayerId: player.playerId,
+                sourceGeneralId: action.sourceGeneralId,
+                sourceFormationId: action.sourceFormationId,
+                summonUnitId: action.summonUnitId,
+                sourceEffectId: action.effectId,
+                glyph: template.glyph,
+                xMilli: spawnPoint.xMilli,
+                yMilli: spawnPoint.yMilli,
+                ownerLevel: level,
+                nextAttackTick: this.currentTick + Math.max(1, Math.ceil((0, catalog_1.getGeneralLevelValue)(template.baseStats.attackIntervalMsByOwnerLevel, level) / this.tickRateMs)),
+                expiresAtTick: this.currentTick + Math.max(1, Math.ceil(durationMs / this.tickRateMs)),
+                template,
+                inheritStatRatiosBps: action.inheritStatRatiosBps,
+                sourceInactivePolicy: action.sourceInactivePolicy,
+            };
+            this.summonedUnits.push(summon);
+            this.emit('SUMMON_SPAWNED', {
+                summonId: summon.id,
+                summonUnitId: summon.summonUnitId,
+                generalId: summon.sourceGeneralId,
+                spawnPattern: action.spawnPattern,
+                xMilli: summon.xMilli,
+                yMilli: summon.yMilli,
+                targetXMilli: action.targetPointMilli?.x ?? null,
+                targetYMilli: action.targetPointMilli?.y ?? null,
+            });
+        }
+    }
+    resolveSummonSpawnPoint(player, formation, action, index) {
+        const radius = Math.max(0, Math.floor(action.spawnRadiusMilliCells));
+        const occupied = this.summonSpawnOccupiedPointKeys();
+        const pointKey = (point) => `${point.xMilli},${point.yMilli}`;
+        const surroundingOffsets = [
+            [1, 0], [-1, 0], [0, 1], [0, -1],
+            [1, 1], [-1, 1], [1, -1], [-1, -1],
+        ];
+        if (action.spawnPattern === 'owner_random_empty_board_cell') {
+            const candidates = [];
+            for (let y = 0; y < arena_1.PVE_ARENA_GRID_SIZE; y += 1) {
+                for (let x = 0; x < arena_1.PVE_ARENA_GRID_SIZE; x += 1) {
+                    const candidate = { xMilli: x * 1000, yMilli: y * 1000 };
+                    if (this.isDeployableCell(player.slot, x, y) && !occupied.has(pointKey(candidate)))
+                        candidates.push(candidate);
+                }
+            }
+            return candidates.length > 0
+                ? candidates[this.prng.nextInt(candidates.length)]
+                : { xMilli: formation.anchorMilli.x, yMilli: formation.anchorMilli.y };
+        }
+        if (action.spawnPattern === 'path_side_nearest_empty') {
+            const nearest = this.nearestLanePathPoint(player.slot, formation.anchorMilli.x, formation.anchorMilli.y);
+            const stride = Math.max(500, Math.floor(radius / 2));
+            for (let offset = index; offset < index + 32; offset += 1) {
+                const side = offset % 2 === 0 ? 1 : -1;
+                const along = Math.floor(offset / 2) * stride;
+                const candidate = {
+                    xMilli: nearest.xMilli + nearest.perpendicularX * radius * side + nearest.tangentX * along,
+                    yMilli: nearest.yMilli + nearest.perpendicularY * radius * side + nearest.tangentY * along,
+                };
+                if (!occupied.has(pointKey(candidate)))
+                    return candidate;
+            }
+            return { xMilli: nearest.xMilli, yMilli: nearest.yMilli };
+        }
+        const center = action.spawnPattern === 'target_surrounding' && action.targetPointMilli
+            ? action.targetPointMilli : formation.anchorMilli;
+        for (let offset = index; offset < index + surroundingOffsets.length; offset += 1) {
+            const [offsetX, offsetY] = surroundingOffsets[offset % surroundingOffsets.length];
+            const candidate = { xMilli: center.x + offsetX * radius, yMilli: center.y + offsetY * radius };
+            if (!occupied.has(pointKey(candidate)))
+                return candidate;
+        }
+        return { xMilli: center.x, yMilli: center.y };
+    }
+    /**
+     * “空位”只在召唤瞬间用于选点：不给单位增加持续碰撞或禁止后续技能聚怪。
+     * 前一个同批次召唤物已写入 summonedUnits，因而也会被下一个排除。
+     */
+    summonSpawnOccupiedPointKeys() {
+        const occupied = new Set();
+        for (const player of this.players.values()) {
+            for (const entry of player.board.values())
+                occupied.add(`${entry.x * 1000},${entry.y * 1000}`);
+        }
+        for (const summon of this.summonedUnits)
+            occupied.add(`${summon.xMilli},${summon.yMilli}`);
+        return occupied;
+    }
+    nearestLanePathPoint(slot, xMilli, yMilli) {
+        const route = this.laneRoutes[slot];
+        let best = null;
+        let bestDistanceSquared = Number.POSITIVE_INFINITY;
+        for (let index = 0; index < route.waypoints.length - 1; index += 1) {
+            const from = route.waypoints[index];
+            const to = route.waypoints[index + 1];
+            const fromX = from.x * 1000;
+            const fromY = from.y * 1000;
+            const toX = to.x * 1000;
+            const toY = to.y * 1000;
+            const tangentX = Math.sign(toX - fromX);
+            const tangentY = Math.sign(toY - fromY);
+            const pointX = tangentX === 0 ? fromX : Math.min(Math.max(xMilli, Math.min(fromX, toX)), Math.max(fromX, toX));
+            const pointY = tangentY === 0 ? fromY : Math.min(Math.max(yMilli, Math.min(fromY, toY)), Math.max(fromY, toY));
+            const distanceSquared = this.distanceSquared(xMilli, yMilli, pointX, pointY);
+            if (distanceSquared < bestDistanceSquared) {
+                bestDistanceSquared = distanceSquared;
+                best = {
+                    xMilli: pointX,
+                    yMilli: pointY,
+                    tangentX,
+                    tangentY,
+                    perpendicularX: (-tangentY),
+                    perpendicularY: tangentX,
+                };
+            }
+        }
+        return best ?? {
+            xMilli,
+            yMilli,
+            tangentX: 1,
+            tangentY: 0,
+            perpendicularX: 0,
+            perpendicularY: 1,
+        };
+    }
+    resolveSummonedUnitAttacks() {
+        for (const summon of this.summonedUnits.slice().sort((left, right) => left.id.localeCompare(right.id))) {
+            if (summon.nextAttackTick > this.currentTick)
+                continue;
+            const range = (0, catalog_1.getGeneralLevelValue)(summon.template.baseStats.attackRangeMilliCellsByOwnerLevel, summon.ownerLevel);
+            const target = this.enemies.filter((enemy) => enemy.lifecycle === 'alive' && this.isEnemyTargetable(enemy)
+                && this.distanceSquared(summon.xMilli, summon.yMilli, enemy.xMilli, enemy.yMilli) <= range * range)
+                .sort((left, right) => this.compareEnemyPriority(left, right))[0];
+            if (!target)
+                continue;
+            const definition = this.getGeneralDefinition(summon.sourceGeneralId);
+            const ownerStats = definition ? (0, catalog_1.resolveGeneralStats)(definition, summon.ownerLevel, this.generalSynergyModifiers(summon.ownerPlayerId, summon.sourceGeneralId)) : null;
+            const templateAttack = (0, catalog_1.getGeneralLevelValue)(summon.template.baseStats.attackByOwnerLevel, summon.ownerLevel);
+            const inheritedAttack = Math.floor((ownerStats?.attack ?? 0) * (summon.inheritStatRatiosBps.attack ?? 0) / 10000);
+            const allStatsRatio = this.resolveCombinedEffectParameter(summon.ownerPlayerId, summon.sourceGeneralId, summon.sourceFormationId, summon.sourceEffectId, 'summonAllStatsBps', 10000);
+            const internalAttackRatio = this.resolveCombinedEffectParameter(summon.ownerPlayerId, summon.sourceGeneralId, summon.sourceFormationId, summon.sourceEffectId, 'summonAttackBps', 10000);
+            const summonAttack = this.settleSummonSynergyStat({ ownerPlayerId: summon.ownerPlayerId,
+                sourceGeneralId: summon.sourceGeneralId, summonUnitId: summon.summonUnitId,
+                stat: 'summonAttack', baseValue: Math.floor((templateAttack + inheritedAttack)
+                    * allStatsRatio / 10000 * internalAttackRatio / 10000) });
+            const internalCritRate = this.resolveCombinedEffectParameter(summon.ownerPlayerId, summon.sourceGeneralId, summon.sourceFormationId, summon.sourceEffectId, 'summonCritRateBps', (0, catalog_1.getGeneralLevelValue)(summon.template.baseStats.critChanceBpsByOwnerLevel, summon.ownerLevel));
+            const critChance = Math.min(10000, Math.max(0, this.settleSummonSynergyStat({
+                ownerPlayerId: summon.ownerPlayerId, sourceGeneralId: summon.sourceGeneralId,
+                summonUnitId: summon.summonUnitId, stat: 'summonCritRate',
+                baseValue: Math.floor(internalCritRate * allStatsRatio / 10000),
+            })));
+            const bossCritDamage = this.enemyTags(target).includes('boss')
+                ? this.resolveCombinedEffectParameter(summon.ownerPlayerId, summon.sourceGeneralId, summon.sourceFormationId, summon.sourceEffectId, 'bossCritDamageBps', 0) : 0;
+            const critDamage = Math.max(10000, this.settleSummonSynergyStat({ ownerPlayerId: summon.ownerPlayerId,
+                sourceGeneralId: summon.sourceGeneralId, summonUnitId: summon.summonUnitId,
+                stat: 'summonCritDamage',
+                baseValue: Math.floor((0, catalog_1.getGeneralLevelValue)(summon.template.baseStats.critDamageBpsByOwnerLevel, summon.ownerLevel)
+                    * allStatsRatio / 10000) + bossCritDamage,
+            }));
+            const isCritical = summon.template.basicAttack.criticalPolicy === 'can_crit' && this.prng.rollBps(critChance);
+            let rawDamage = Math.max(1, Math.floor(summonAttack * summon.template.basicAttack.coefficientBps / 10000));
+            if (isCritical)
+                rawDamage = Math.max(1, Math.floor(rawDamage * critDamage / 10000));
+            this.applyRuntimeEffectDamage(target, summon.ownerPlayerId, summon.sourceGeneralId, summon.sourceFormationId, summon.template.basicAttack.attackId, summon.template.damageType, rawDamage, 'summon');
+            const interval = (0, catalog_1.getGeneralLevelValue)(summon.template.baseStats.attackIntervalMsByOwnerLevel, summon.ownerLevel);
+            const speedRatio = this.settleSummonSynergyStat({ ownerPlayerId: summon.ownerPlayerId,
+                sourceGeneralId: summon.sourceGeneralId, summonUnitId: summon.summonUnitId,
+                stat: 'summonAttackSpeed', baseValue: allStatsRatio });
+            const settledInterval = Math.max(200, Math.ceil(interval * 10000 / Math.max(1, speedRatio)));
+            summon.nextAttackTick = this.currentTick + Math.max(1, Math.ceil(settledInterval / this.tickRateMs));
+            for (const onHit of summon.template.onHitStatuses) {
+                this.applySimpleStatus(target, summon.ownerPlayerId, summon.sourceGeneralId, onHit.statusId, onHit.magnitudeBps, onHit.durationMs, onHit.chanceBps, onHit.stackGroup);
+            }
+            const dot = summon.template.onHitDamageOverTime;
+            if (dot) {
+                this.effectSequence += 1;
+                this.damageOverTime.push({ instanceId: `dot-${this.effectSequence}`, enemyId: target.id,
+                    ownerPlayerId: summon.ownerPlayerId, sourceGeneralId: summon.sourceGeneralId,
+                    sourceFormationId: summon.sourceFormationId, damageType: dot.damageType,
+                    baseAttack: ownerStats?.attack ?? templateAttack,
+                    coefficientBpsPerTick: this.resolveCombinedEffectParameter(summon.ownerPlayerId, summon.sourceGeneralId, summon.sourceFormationId, dot.effectId, 'ownerAttackCoefficientBpsPerTick', dot.ownerAttackCoefficientBpsPerTick),
+                    flatDamagePerTick: 0, nextTick: this.currentTick + Math.max(1, Math.ceil(dot.tickIntervalMs / this.tickRateMs)),
+                    tickIntervalTicks: Math.max(1, Math.ceil(dot.tickIntervalMs / this.tickRateMs)),
+                    expiresAtTick: this.currentTick + Math.max(1, Math.ceil(dot.durationMs / this.tickRateMs)), stackGroup: dot.stackGroup });
+            }
+        }
+    }
+    resolveZones() {
+        for (const zone of this.zones.slice().sort((left, right) => left.id.localeCompare(right.id))) {
+            if (zone.nextTick > this.currentTick || zone.expiresAtTick < this.currentTick)
+                continue;
+            const targets = this.enemies.filter((enemy) => enemy.lifecycle === 'alive' && this.isEnemyTargetable(enemy)
+                && this.isEnemyInsideZone(enemy, zone)).sort((left, right) => this.compareEnemyPriority(left, right));
+            for (const effect of zone.tickEffects)
+                this.applyZoneTickEffect(zone, effect, targets);
+            zone.nextTick += zone.tickIntervalTicks;
+        }
+    }
+    isEnemyInsideZone(enemy, zone) {
+        if (zone.shape.kind === 'circle') {
+            return this.distanceSquared(zone.xMilli, zone.yMilli, enemy.xMilli, enemy.yMilli)
+                <= zone.shape.radiusMilliCells * zone.shape.radiusMilliCells;
+        }
+        // 持续直线区域首版以中心点为起点、沿 +X 方向；后续将施法方向加入快照。
+        const dx = enemy.xMilli - zone.xMilli;
+        const dy = Math.abs(enemy.yMilli - zone.yMilli);
+        return dx >= 0 && dx <= zone.shape.lengthMilliCells && dy <= zone.shape.halfWidthMilliCells;
+    }
+    applyZoneTickEffect(zone, effect, targets) {
+        const definition = this.getGeneralDefinition(zone.sourceGeneralId);
+        const progress = this.generalFormations.getProgress(zone.ownerPlayerId, zone.sourceGeneralId);
+        const level = progress?.level ?? 1;
+        const stats = definition ? (0, catalog_1.resolveGeneralStats)(definition, level, this.generalSynergyModifiers(zone.ownerPlayerId, zone.sourceGeneralId)) : null;
+        const configuredLimit = effect.targeting?.scope === 'self' ? 0 : effect.targeting?.targetLimit ?? targets.length;
+        const targetLimit = Math.max(0, Math.floor(this.resolveCombinedEffectParameter(zone.ownerPlayerId, zone.sourceGeneralId, zone.sourceFormationId, effect.effectId, 'targetLimit', configuredLimit)));
+        for (const target of targets.slice(0, targetLimit)) {
+            if (effect.type === 'damage') {
+                const coefficient = this.resolveCombinedEffectParameter(zone.ownerPlayerId, zone.sourceGeneralId, zone.sourceFormationId, effect.effectId, 'coefficientBps', (0, catalog_1.getGeneralLevelValue)(effect.coefficientBpsByLevel, level));
+                const flatDamage = this.resolveCombinedEffectParameter(zone.ownerPlayerId, zone.sourceGeneralId, zone.sourceFormationId, effect.effectId, 'flatDamage', (0, catalog_1.getGeneralLevelValue)(effect.flatDamageByLevel, level));
+                const raw = Math.max(1, Math.floor((stats?.attack ?? 1) * coefficient / 10000 + flatDamage));
+                this.applyRuntimeEffectDamage(target, zone.ownerPlayerId, zone.sourceGeneralId, zone.sourceFormationId, effect.effectId, effect.damageType, raw, 'spawn_zone');
+            }
+            else if (effect.type === 'status_apply')
+                this.applySimpleStatus(target, zone.ownerPlayerId, zone.sourceGeneralId, effect.statusId, this.resolveCombinedEffectParameter(zone.ownerPlayerId, zone.sourceGeneralId, zone.sourceFormationId, effect.effectId, 'magnitude', (0, catalog_1.getGeneralLevelValue)(effect.magnitudeByLevel, level)), this.resolveCombinedEffectParameter(zone.ownerPlayerId, zone.sourceGeneralId, zone.sourceFormationId, effect.effectId, 'durationMs', (0, catalog_1.getGeneralLevelValue)(effect.durationMsByLevel, level)), this.resolveCombinedEffectParameter(zone.ownerPlayerId, zone.sourceGeneralId, zone.sourceFormationId, effect.effectId, 'chanceBps', (0, catalog_1.getGeneralLevelValue)(effect.chanceBpsByLevel, level)), effect.stacking.stackGroup);
+            else if (effect.type === 'path_displacement') {
+                const before = target.pathProgressMilli;
+                const distance = this.resolveCombinedEffectParameter(zone.ownerPlayerId, zone.sourceGeneralId, zone.sourceFormationId, effect.effectId, 'distanceMilliCells', (0, catalog_1.getGeneralLevelValue)(effect.distanceMilliCellsByLevel, level));
+                this.setEnemyPathProgress(target, Math.max(0, before + (effect.direction === 'backward' ? -distance : distance)));
+            }
+            else {
+                this.effectSequence += 1;
+                this.damageOverTime.push({ instanceId: `dot-${this.effectSequence}`, enemyId: target.id,
+                    ownerPlayerId: zone.ownerPlayerId, sourceGeneralId: zone.sourceGeneralId, sourceFormationId: zone.sourceFormationId,
+                    damageType: effect.damageType, baseAttack: stats?.attack ?? 1,
+                    coefficientBpsPerTick: this.resolveCombinedEffectParameter(zone.ownerPlayerId, zone.sourceGeneralId, zone.sourceFormationId, effect.effectId, 'coefficientBpsPerTick', (0, catalog_1.getGeneralLevelValue)(effect.coefficientBpsPerTickByLevel, level)),
+                    flatDamagePerTick: this.resolveCombinedEffectParameter(zone.ownerPlayerId, zone.sourceGeneralId, zone.sourceFormationId, effect.effectId, 'flatDamagePerTick', (0, catalog_1.getGeneralLevelValue)(effect.flatDamagePerTickByLevel, level)),
+                    nextTick: this.currentTick + Math.max(1, Math.ceil(effect.tickIntervalMs / this.tickRateMs)),
+                    tickIntervalTicks: Math.max(1, Math.ceil(effect.tickIntervalMs / this.tickRateMs)),
+                    expiresAtTick: this.currentTick + Math.max(1, Math.ceil(this.resolveCombinedEffectParameter(zone.ownerPlayerId, zone.sourceGeneralId, zone.sourceFormationId, effect.effectId, 'durationMs', (0, catalog_1.getGeneralLevelValue)(effect.durationMsByLevel, level)) / this.tickRateMs)),
+                    stackGroup: effect.stacking.stackGroup });
+            }
+        }
+    }
+    applySimpleStatus(enemy, ownerPlayerId, sourceGeneralId, statusId, magnitude, durationMs, chanceBps, stackGroup) {
+        if (!this.isEnemyTargetable(enemy))
+            return;
+        const resistanceDown = statusId === 'control_resistance_down'
+            ? 0 : this.statusMagnitude(enemy.id, 'control_resistance_down');
+        const settledChanceBps = CONTROL_STATUS_IDS.has(statusId)
+            ? Math.min(10000, Math.floor(chanceBps * (10000 + resistanceDown) / 10000))
+            : chanceBps;
+        if (!this.prng.rollBps(settledChanceBps))
+            return;
+        this.effectSequence += 1;
+        const existing = this.statuses.find((entry) => entry.enemyId === enemy.id && entry.stackGroup === stackGroup);
+        const settledDurationMs = this.settleGeneralSynergyStat({ playerId: ownerPlayerId,
+            generalId: sourceGeneralId, stat: 'controlDuration', baseValue: durationMs,
+            targetTags: this.enemyTags(enemy), effectTags: ['status_apply', statusId] });
+        const controlAdjustedDurationMs = CONTROL_STATUS_IDS.has(statusId)
+            ? Math.floor(settledDurationMs * (10000 + resistanceDown) / 10000) : settledDurationMs;
+        const expiresAtTick = this.currentTick + Math.max(1, Math.ceil(controlAdjustedDurationMs / this.tickRateMs));
+        if (existing) {
+            existing.magnitude = Math.max(existing.magnitude, magnitude);
+            existing.expiresAtTick = expiresAtTick;
+        }
+        else
+            this.statuses.push({ instanceId: `status-${this.effectSequence}`, enemyId: enemy.id, sourceGeneralId,
+                ownerPlayerId, statusId, stackGroup, magnitude, stacks: 1, appliedAtTick: this.currentTick, expiresAtTick });
+        this.recordGeneralContribution(enemy, ownerPlayerId, sourceGeneralId, 'control');
+    }
+    applyRuntimeEffectDamage(target, ownerPlayerId, sourceGeneralId, sourceFormationId, effectId, damageType, rawDamage, sourceKind) {
+        if (target.lifecycle !== 'alive' || !this.isEnemyTargetable(target))
+            return;
+        const targetTags = this.enemyTags(target);
+        const effectTags = [sourceKind, damageType];
+        const generalDamageRatio = this.settleGeneralSynergyStat({
+            playerId: ownerPlayerId, generalId: sourceGeneralId, stat: 'damageDealt', baseValue: 10000,
+            targetTags, effectTags
+        });
+        const typedDamageRatio = damageType === 'true' ? 10000 : this.settleGeneralSynergyStat({
+            playerId: ownerPlayerId, generalId: sourceGeneralId,
+            stat: damageType === 'physical' ? 'physicalDamageBonus' : 'magicDamageBonus',
+            baseValue: 10000, targetTags, effectTags,
+        });
+        rawDamage = Math.max(1, Math.floor(rawDamage * generalDamageRatio / 10000 * typedDamageRatio / 10000));
+        const armorBreak = this.statusMagnitude(target.id, 'armor_break');
+        const armor = Math.floor(target.armor * Math.max(0, 10000 - armorBreak) / 10000);
+        const defense = damageType === 'true' ? 0 : damageType === 'physical' ? armor : target.magicResistance;
+        const reduced = damageType === 'true' ? rawDamage : Math.max(1, Math.floor(rawDamage * 100 / (100 + Math.max(0, defense))));
+        const finalDamage = Math.max(1, Math.floor(reduced * (10000
+            + this.damageVulnerabilityMagnitude(target.id, sourceKind, damageType)) / 10000));
+        const hpBefore = target.currentHp;
+        target.currentHp = Math.max(0, target.currentHp - finalDamage);
+        target.lastDamagePlayerId = ownerPlayerId;
+        this.recordGeneralContribution(target, ownerPlayerId, sourceGeneralId, sourceKind === 'summon' ? 'summon' : undefined);
+        this.emit('DAMAGE_APPLIED', { attackerId: sourceFormationId, playerId: ownerPlayerId, generalId: sourceGeneralId,
+            sourceKind, effectId, enemyId: target.id, rawDamage, finalDamage, hpBefore, hpAfter: target.currentHp,
+            isCritical: false, isSecondary: false });
         if (target.currentHp <= 0)
             this.settleEnemyDeath(target);
     }
@@ -1021,7 +1824,8 @@ class PveGameRuntime {
                 continue;
             }
             const targets = this.freezeAttackTargets(entry, soldier, definition, primary);
-            soldier.nextAttackTick = this.currentTick + this.attackIntervalTicks(soldier);
+            const auraSpeedRatio = this.summonAuraAttackSpeedRatio(player.playerId, entry.x * 1000, entry.y * 1000);
+            soldier.nextAttackTick = this.currentTick + Math.max(1, Math.ceil(this.attackIntervalTicks(soldier) * 10000 / Math.max(1, auraSpeedRatio)));
             this.emit('BASIC_ATTACK_STARTED', {
                 attackerId: soldier.id,
                 playerId: player.playerId,
@@ -1149,9 +1953,14 @@ class PveGameRuntime {
             this.emit('GENERAL_XP_SETTLEMENT_AVAILABLE', {
                 playerId: killer.playerId,
                 enemyId: enemy.id,
-                xpPoints: XP_REWARD_POINTS,
+                xpPoints: this.generalExperienceReward(killer.playerId),
             });
             this.settleGeneralExperience(killer, enemy);
+            for (const formation of this.generalFormations.getActiveFormations(killer.playerId)) {
+                const progress = this.generalFormations.getProgress(killer.playerId, formation.generalId);
+                if (progress)
+                    this.executePassivePlan(killer, formation, progress.level, 'enemy_killed');
+            }
         }
     }
     settleGeneralExperience(player, enemy) {
@@ -1164,16 +1973,17 @@ class PveGameRuntime {
             .sort((left, right) => left.generalId.localeCompare(right.generalId));
         if (eligible.length === 0)
             return;
+        const rewardPoints = this.generalExperienceReward(player.playerId);
         const totalWeight = eligible.reduce((sum, entry) => sum + weights[entry.category], 0);
         const allocations = eligible.map((entry) => {
-            const weightedPoints = XP_REWARD_POINTS * weights[entry.category];
+            const weightedPoints = rewardPoints * weights[entry.category];
             return {
                 entry,
                 points: Math.floor(weightedPoints / totalWeight),
                 remainder: weightedPoints % totalWeight,
             };
         });
-        let unallocated = XP_REWARD_POINTS - allocations.reduce((sum, allocation) => sum + allocation.points, 0);
+        let unallocated = rewardPoints - allocations.reduce((sum, allocation) => sum + allocation.points, 0);
         allocations.sort((left, right) => right.remainder - left.remainder
             || left.entry.generalId.localeCompare(right.entry.generalId));
         for (const allocation of allocations) {
@@ -1203,6 +2013,16 @@ class PveGameRuntime {
                 });
             }
         }
+    }
+    generalExperienceReward(playerId) {
+        const modifiers = this.synergyEffects.query({
+            subject: { kind: 'player', ownerPlayerId: playerId },
+        }).statModifiers;
+        return Math.max(0, Math.floor((0, synergy_v1_1.settleRuntimeSynergyStat)({
+            baseValue: XP_REWARD_POINTS,
+            stat: 'generalExperienceGain',
+            modifiers,
+        })));
     }
     updateLaneClearRewards() {
         for (const lane of this.laneWaves) {
@@ -1302,6 +2122,9 @@ class PveGameRuntime {
                 formationId: formation?.formationId ?? null,
                 characterPieceIds: formation?.characterTokenIds ?? [],
             });
+            const progress = this.generalFormations.getProgress(player.playerId, generalId);
+            if (formation && progress)
+                this.executePassivePlan(player, formation, progress.level, 'initialize');
         }
         for (const generalId of result.deactivatedGeneralIds) {
             this.emit('GENERAL_DEACTIVATED', { playerId: player.playerId, generalId });
@@ -1333,6 +2156,7 @@ class PveGameRuntime {
             next,
             definitions: synergy_v1_1.SYNERGY_V1_CATALOG,
         });
+        this.synergyEffects.applyReconcileCommands({ ownerPlayerId: playerId, commands: reconciliation.commands });
         this.synergyByPlayer.set(playerId, next);
         for (const synergy of reconciliation.activated) {
             this.emit('SYNERGY_ACTIVATED', {
@@ -1349,24 +2173,145 @@ class PveGameRuntime {
                 level: synergy.level,
             });
         }
+        for (const changed of reconciliation.changedLevels) {
+            this.emit('SYNERGY_LEVEL_CHANGED', {
+                playerId,
+                synergyId: changed.next.synergyId,
+                previousLevel: changed.previous.level,
+                level: changed.next.level,
+                contributingGeneralIds: [...changed.next.contributingGeneralIds],
+            });
+        }
+        for (const changed of reconciliation.reconfigured) {
+            this.emit('SYNERGY_RECONFIGURED', {
+                playerId,
+                synergyId: changed.next.synergyId,
+                level: changed.next.level,
+                previousContributingGeneralIds: [...changed.previous.contributingGeneralIds],
+                contributingGeneralIds: [...changed.next.contributingGeneralIds],
+            });
+        }
     }
-    generalSynergyModifiers(playerId, generalId) {
-        const active = this.synergyByPlayer.get(playerId)?.activeSynergies ?? [];
-        const modifiers = [];
-        for (const activeSynergy of active) {
-            if (!activeSynergy.contributingGeneralIds.includes(generalId))
+    enemyTags(enemy) {
+        const tags = ['normal'];
+        if (enemy.glyph === '妖')
+            tags.push('yao');
+        if (enemy.glyph === '魔')
+            tags.push('mo');
+        return tags;
+    }
+    generalSynergyModifiers(playerId, generalId, targetTags = [], effectTags = []) {
+        const modifiers = this.synergyEffects.query({
+            subject: { kind: 'general', ownerPlayerId: playerId, generalId },
+            targetTags,
+            effectTags,
+        }).statModifiers.flatMap((modifier) => {
+            if (!['attack', 'attackSpeed', 'attackRange', 'critRate', 'critDamage'].includes(modifier.stat))
+                return [];
+            if (modifier.operation !== 'add_flat' && modifier.operation !== 'add_ratio')
+                return [];
+            return [{
+                    source: { kind: 'synergy', sourceId: modifier.sourceId },
+                    target: { scope: 'self' },
+                    stat: modifier.stat,
+                    operation: modifier.operation,
+                    value: modifier.value,
+                    stackGroup: modifier.stackGroup,
+                }];
+        });
+        const formation = this.generalFormations.getActiveFormations(playerId)
+            .find((candidate) => candidate.generalId === generalId);
+        if (formation) {
+            const attackSpeedUp = this.generalStatuses
+                .filter((status) => status.ownerPlayerId === playerId && status.sourceGeneralId === generalId
+                && status.sourceFormationId === formation.formationId && status.statusId === 'attack_speed_up'
+                && status.expiresAtTick > this.currentTick)
+                .reduce((total, status) => total + status.magnitude * status.stacks, 0);
+            if (attackSpeedUp > 0)
+                modifiers.push({ source: { kind: 'passive', sourceId: 'attack_speed_up' },
+                    target: { scope: 'self' }, stat: 'attackSpeed', operation: 'add_ratio', value: attackSpeedUp,
+                    stackGroup: 'attack_speed_up' });
+            const auraRatio = this.summonAuraAttackSpeedRatio(playerId, formation.anchorMilli.x, formation.anchorMilli.y) - 10000;
+            if (auraRatio > 0)
+                modifiers.push({ source: { kind: 'passive', sourceId: 'summon_attack_speed_aura' },
+                    target: { scope: 'self' }, stat: 'attackSpeed', operation: 'add_ratio', value: auraRatio,
+                    stackGroup: 'summon_attack_speed_aura' });
+        }
+        for (const sourceFormation of this.generalFormations.getActiveFormations(playerId)) {
+            if (sourceFormation.generalId === generalId)
                 continue;
-            const definition = synergy_v1_1.SYNERGY_V1_CATALOG.find((candidate) => candidate.synergyId === activeSynergy.synergyId);
-            const level = definition?.levels.find((candidate) => candidate.level === activeSynergy.level);
-            if (!level)
+            const sourceDefinition = this.getGeneralDefinition(sourceFormation.generalId);
+            if (!sourceDefinition)
                 continue;
-            modifiers.push(...(0, synergy_v1_1.toHeroV1GeneralStatModifiers)({
-                sourceSynergyId: activeSynergy.synergyId,
-                contributingGeneralIds: activeSynergy.contributingGeneralIds,
-                effects: level.effects,
-            }));
+            for (const effect of sourceDefinition.passiveSkill.effects) {
+                if (effect.target.scope !== 'owner_generals')
+                    continue;
+                if (effect.condition?.targetTagsAny
+                    && !effect.condition.targetTagsAny.some((tag) => targetTags.includes(tag)))
+                    continue;
+                modifiers.push({ ...effect, source: { ...effect.source } });
+            }
         }
         return modifiers;
+    }
+    summonAuraAttackSpeedRatio(ownerPlayerId, xMilli, yMilli) {
+        let ratio = 10000;
+        for (const summon of this.summonedUnits) {
+            if (summon.ownerPlayerId !== ownerPlayerId || !summon.template.aura)
+                continue;
+            if (this.distanceSquared(xMilli, yMilli, summon.xMilli, summon.yMilli)
+                <= summon.template.aura.radiusMilliCells ** 2)
+                ratio += summon.template.aura.valueBps;
+        }
+        return ratio;
+    }
+    settleGeneralSynergyStat(input) {
+        const modifiers = this.synergyEffects.query({
+            subject: { kind: 'general', ownerPlayerId: input.playerId, generalId: input.generalId },
+            targetTags: input.targetTags,
+            effectTags: input.effectTags,
+        }).statModifiers;
+        return (0, synergy_v1_1.settleRuntimeSynergyStat)({ baseValue: input.baseValue, stat: input.stat, modifiers });
+    }
+    settleSummonSynergyStat(input) {
+        const modifiers = this.synergyEffects.query({ subject: { kind: 'summon',
+                ownerPlayerId: input.ownerPlayerId, sourceGeneralId: input.sourceGeneralId,
+                summonUnitId: input.summonUnitId } }).statModifiers;
+        return (0, synergy_v1_1.settleRuntimeSynergyStat)({ baseValue: input.baseValue, stat: input.stat, modifiers });
+    }
+    resolveSynergyEffectParameter(ownerPlayerId, sourceGeneralId, targetEffectId, parameter, baseValue) {
+        const patches = this.synergyEffects.query({
+            subject: { kind: 'general', ownerPlayerId, generalId: sourceGeneralId },
+            targetEffectId,
+        }).parameterPatches;
+        return (0, synergy_v1_1.settleRuntimeSynergyParameter)({ baseValue, parameter, patches });
+    }
+    definitionWithSynergyCooldown(playerId, definition) {
+        const reduction = this.settleGeneralSynergyStat({
+            playerId,
+            generalId: definition.generalId,
+            stat: 'cooldownReduction',
+            baseValue: 10000,
+        }) - 10000;
+        let ownerAuraRatio = 10000;
+        for (const formation of this.generalFormations.getActiveFormations(playerId)) {
+            const source = this.getGeneralDefinition(formation.generalId);
+            const progress = this.generalFormations.getProgress(playerId, formation.generalId);
+            if (!source || !progress)
+                continue;
+            for (const effect of source.passiveSkill.structuredEffects ?? []) {
+                if (effect.type !== 'cooldown_modify' || !effect.tags.includes('owner_aura')
+                    || (effect.targetSkill !== 'active_skill' && effect.targetSkill !== 'all_skills'))
+                    continue;
+                const value = (0, catalog_1.getGeneralLevelValue)(effect.valueByLevel, progress.level);
+                if (effect.operation === 'add_ratio')
+                    ownerAuraRatio = Math.max(0, Math.floor(ownerAuraRatio * (10000 + value) / 10000));
+            }
+        }
+        if (reduction === 0 && ownerAuraRatio === 10000)
+            return definition;
+        const cooldownMsByLevel = definition.activeSkill.cooldownMsByLevel.map((base) => (Math.max(1, Math.floor(base * Math.max(0, 10000 - reduction) / 10000 * ownerAuraRatio / 10000))));
+        return { ...definition, activeSkill: { ...definition.activeSkill, cooldownMsByLevel } };
     }
     playerSnapshot(player) {
         const remainingCharacterTokens = {};
@@ -1377,7 +2322,7 @@ class PveGameRuntime {
             .sort((left, right) => left.y - right.y || left.x - right.x || left.piece.id.localeCompare(right.piece.id))
             .map((entry) => ({ x: entry.x, y: entry.y, piece: clonePiece(entry.piece) }));
         const generalFormations = this.generalFormations.getActiveFormations(player.playerId).map((formation) => {
-            const definition = (0, catalog_1.getGeneralDefinition)(formation.generalId);
+            const definition = this.getGeneralDefinition(formation.generalId);
             return {
                 formationId: formation.formationId,
                 generalId: formation.generalId,
@@ -1390,7 +2335,7 @@ class PveGameRuntime {
             };
         });
         const generalProgress = this.generalFormations.getAllProgress(player.playerId).flatMap((progress) => {
-            const definition = (0, catalog_1.getGeneralDefinition)(progress.generalId);
+            const definition = this.getGeneralDefinition(progress.generalId);
             if (!definition)
                 return [];
             const experienceToNextLevel = progress.level >= progress.maxLevel
@@ -1408,6 +2353,8 @@ class PveGameRuntime {
                     experienceToNextLevel,
                     nextBasicAttackTick: progress.nextBasicAttackTick,
                     activeSkillReadyAtTick: progress.activeSkillReadyAtTick,
+                    basicAttackCount: progress.basicAttackCount ?? 0,
+                    nextPassiveTriggerTick: progress.nextPassiveTriggerTick ?? 0,
                     activeSkillName: definition.activeSkill.skillName,
                     attack: stats.attack,
                     attackIntervalMs: stats.attackIntervalMs,
@@ -1415,6 +2362,11 @@ class PveGameRuntime {
                     critChanceBps: stats.critChanceBps,
                     critDamageBps: stats.critDamageBps,
                     activeSkillCooldownMs: (0, catalog_1.getGeneralLevelValue)(definition.activeSkill.cooldownMsByLevel, progress.level),
+                    activeStatuses: this.generalStatuses
+                        .filter((status) => status.ownerPlayerId === player.playerId && status.sourceGeneralId === progress.generalId
+                        && status.expiresAtTick > this.currentTick)
+                        .sort((left, right) => left.instanceId.localeCompare(right.instanceId))
+                        .map((status) => ({ ...status })),
                 }];
         });
         const activeSynergies = (this.synergyByPlayer.get(player.playerId)?.activeSynergies ?? []).map((synergy) => ({
@@ -1561,6 +2513,37 @@ class PveGameRuntime {
     }
     isEnemyTargetable(enemy) {
         return !enemy.spawnProtected && !enemy.invulnerable;
+    }
+    getGeneralDefinition(generalId) {
+        return this.generalCatalog[generalId] ?? null;
+    }
+    isGeneralActive(playerId, generalId) {
+        return this.generalFormations.getActiveFormations(playerId).some((formation) => formation.generalId === generalId);
+    }
+    isFormationActive(playerId, generalId, formationId) {
+        return this.generalFormations.getActiveFormations(playerId).some((formation) => (formation.generalId === generalId && formation.formationId === formationId));
+    }
+    executePassivePlan(player, formation, level, event) {
+        const catalogDefinition = this.getGeneralDefinition(formation.generalId);
+        const progress = this.generalFormations.getProgress(player.playerId, formation.generalId);
+        if (!catalogDefinition || !progress)
+            return;
+        const definition = this.definitionWithSynergyCooldown(player.playerId, catalogDefinition);
+        const plan = (0, combat_engine_1.planGeneralPassiveTrigger)({ definition, formation, progress, currentTick: this.currentTick,
+            tickRateMs: this.tickRateMs, event, modifiers: this.generalSynergyModifiers(player.playerId, formation.generalId),
+            parameterResolver: (effectId, parameter, baseValue) => this.resolvePlanningEffectParameter(player.playerId, formation.generalId, formation.formationId, effectId, parameter, baseValue),
+            enemies: this.enemies.map((enemy) => ({ id: enemy.id, xMilli: enemy.xMilli, yMilli: enemy.yMilli,
+                currentHp: enemy.currentHp, pathProgressMilli: enemy.pathProgressMilli, spawnSequence: enemy.spawnSequence,
+                targetable: enemy.lifecycle === 'alive' && this.isEnemyTargetable(enemy), tags: this.enemyTags(enemy) })) });
+        this.generalFormations.replaceProgress({ ...progress, basicAttackCount: plan.nextBasicAttackCount,
+            nextPassiveTriggerTick: plan.nextPassiveTriggerTick });
+        const ownerAuraEffectIds = new Set((definition.passiveSkill.structuredEffects ?? [])
+            .filter((effect) => effect.type === 'cooldown_modify' && effect.tags.includes('owner_aura'))
+            .map((effect) => effect.effectId));
+        for (const action of plan.actions) {
+            if (!ownerAuraEffectIds.has(action.effectId))
+                this.executeGeneralCombatAction(player, formation, level, action);
+        }
     }
     getWaveDefinition(waveNumber) {
         const definition = (0, catalogs_1.getWaveMinionCatalogEntry)(waveNumber);
