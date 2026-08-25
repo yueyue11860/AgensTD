@@ -197,7 +197,8 @@ export function createRestApiRouter(
     if (!accountService) return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' })
     try {
       const account = await accountService.getOrCreate(principal.playerId)
-      response.json({ ok: true, account: publicAccount(account), catalogs: ACCOUNT_CATALOGS })
+      const pveProgression = await accountService.getPveProgression(principal.playerId)
+      response.json({ ok: true, account: publicAccount(account), pveProgression, catalogs: ACCOUNT_CATALOGS })
     }
     catch (error) {
       sendAccountError(response, error)

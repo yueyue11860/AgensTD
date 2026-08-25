@@ -4,6 +4,38 @@ export const PVE_MINION_GLYPHS = [
 
 export type PveMinionGlyph = (typeof PVE_MINION_GLYPHS)[number]
 
+export const PVE_DIFFICULTIES = ['easy', 'normal', 'hard'] as const
+
+export type PveDifficulty = (typeof PVE_DIFFICULTIES)[number]
+
+export const PVE_DIFFICULTY_LABELS: Readonly<Record<PveDifficulty, string>> = Object.freeze({
+  easy: '简单',
+  normal: '普通',
+  hard: '困难',
+})
+
+export interface PveStageSelection {
+  levelId: number
+  difficulty: PveDifficulty
+}
+
+/** 稳定局外主键；不要将难度编码进 levelId。 */
+export type PveStageKey = `${PveDifficulty}:${number}`
+
+export interface PveStageUnlockState extends PveStageSelection {
+  stageKey: PveStageKey
+  cleared: boolean
+  unlocked: boolean
+  lockedReason: string | null
+  prerequisiteStageKeys: readonly PveStageKey[]
+}
+
+export interface PveProgressionView {
+  schemaVersion: 1
+  clearedStageKeys: readonly PveStageKey[]
+  stages: readonly PveStageUnlockState[]
+}
+
 export interface PveSceneTheme {
   environment: string
   landmark: string
@@ -221,3 +253,29 @@ export const PVE_STAGE_BY_LEVEL_ID: Readonly<Record<number, PveStageDefinition>>
 export function getPveStageDefinition(levelId: number): PveStageDefinition | null {
   return PVE_STAGE_BY_LEVEL_ID[levelId] ?? null
 }
+
+export function isPveDifficulty(value: unknown): value is PveDifficulty {
+  return typeof value === 'string' && (PVE_DIFFICULTIES as readonly string[]).includes(value)
+}
+
+export function isPveStageSelection(value: unknown): value is PveStageSelection {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as Partial<PveStageSelection>
+  return Number.isInteger(candidate.levelId)
+    && getPveStageDefinition(candidate.levelId as number) !== null
+    && isPveDifficulty(candidate.difficulty)
+}
+
+export function pveStageKey(selection: PveStageSelection): PveStageKey {
+  if (!isPveStageSelection(selection)) {
+    throw new Error('Invalid PVE stage selection')
+  }
+  return `${selection.difficulty}:${selection.levelId}`
+}
+
+export const PVE_STAGE_SELECTIONS: readonly PveStageSelection[] = Object.freeze(
+  PVE_DIFFICULTIES.flatMap(difficulty => PVE_STAGE_DEFINITIONS.map(({ levelId }) => ({
+    levelId,
+    difficulty,
+  }))),
+)

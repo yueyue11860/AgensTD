@@ -1,12 +1,16 @@
 import {
   getSoldierCatalogEntry,
   getSoldierLevelValue,
-  getWaveMinionCatalogEntry,
   SOLDIER_TYPES,
   validatePveV2Catalogs,
   type SoldierCatalogEntry,
   type WaveMinionCatalogEntry,
 } from './catalogs'
+import {
+  resolvePveWaveCatalog,
+  validatePveBalanceCatalog,
+  type PveBalanceProfile,
+} from './balance-catalog'
 import {
   createPveLaneRoutes,
   hasEnemyBodyFullyExitedPveSpawnSquareMilli,
@@ -301,6 +305,11 @@ export class PveGameRuntime {
 
   private readonly waveGlyphPools: readonly (readonly string[])[] | null
 
+  /** 本局冻结后的数值表，不会随账户解锁或配置热更改变。 */
+  private readonly balanceProfile: PveBalanceProfile
+
+  private readonly waveCatalog: readonly WaveMinionCatalogEntry[]
+
   private readonly eventHistoryLimit: number
 
   private readonly players = new Map<string, PlayerRuntime>()
@@ -385,6 +394,7 @@ export class PveGameRuntime {
 
   constructor(options: PveGameRuntimeOptions) {
     validatePveV2Catalogs()
+    validatePveBalanceCatalog()
     validateRuntimeOptions(options)
     this.tickRateMs = options.tickRateMs ?? 100
     this.seed = String(options.seed)
@@ -397,6 +407,9 @@ export class PveGameRuntime {
     this.isDeployableCell = options.isDeployableCell ?? isDefaultDeployableCell
     this.initialCharacterTokens = sanitizeCharacterTokens(options.characterTokens)
     this.waveGlyphPools = sanitizeWaveGlyphPools(options.waveGlyphPools, this.maxWaves)
+    const resolvedBalance = resolvePveWaveCatalog(options.levelId ?? 1, options.difficulty ?? 'easy')
+    this.balanceProfile = resolvedBalance.profile
+    this.waveCatalog = resolvedBalance.waves
     this.eventHistoryLimit = Math.max(20, options.eventHistoryLimit ?? 300)
     this.generalCatalog = options.generalCatalog ?? GENERAL_CATALOG
     this.itemLoadoutSnapshots = structuredClone(options.itemLoadoutSnapshots ?? {})
@@ -489,6 +502,9 @@ export class PveGameRuntime {
       playerCount: this.playerCountAtStart,
       enemyCapacity: this.enemyCapacity,
       seed: this.seed,
+      levelId: this.balanceProfile.levelId,
+      difficulty: this.balanceProfile.difficulty,
+      balanceProfileId: this.balanceProfile.profileId,
     })
     if (this.prepRemainingTicks === 0) {
       this.beginPreparedWave()
@@ -601,6 +617,13 @@ export class PveGameRuntime {
       rngState: this.prng.snapshot(),
       status: this.status,
       result: this.result ? { ...this.result } : null,
+      balance: {
+        profileId: this.balanceProfile.profileId,
+        levelId: this.balanceProfile.levelId,
+        difficulty: this.balanceProfile.difficulty,
+        enemyHpMultiplierBps: this.balanceProfile.enemyHpMultiplierBps,
+        enemyDefenseAdd: this.balanceProfile.enemyDefenseAdd,
+      },
       playerCountAtStart: this.playerCountAtStart,
       enemyCapacity: this.enemyCapacity,
       overloadTicks: this.overloadTicks,
@@ -3616,7 +3639,7 @@ export class PveGameRuntime {
   }
 
   private getWaveDefinition(waveNumber: number): WaveMinionCatalogEntry | null {
-    const definition = getWaveMinionCatalogEntry(waveNumber)
+    const definition = this.waveCatalog[waveNumber - 1] ?? null
     const stageGlyphPool = this.waveGlyphPools?.[waveNumber - 1]
     return definition && stageGlyphPool
       ? { ...definition, glyphPool: stageGlyphPool }

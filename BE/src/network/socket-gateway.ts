@@ -11,8 +11,17 @@ import { ActionRateLimiter } from './action-rate-limiter'
 import { authenticateGatewayToken, extractSocketToken, type GatewayPrincipal } from './gateway-auth'
 import type { ProgressStore } from '../data/progress-store'
 import type { PlayerType } from '../domain/progress'
-import { checkUnlock } from '../core/unlock-logic'
+import { checkPveStageUnlock } from '../core/unlock-logic'
 import { LEVEL_CONFIGS } from '../config/level-config'
+import {
+  getPveStageDefinition,
+  isPveDifficulty,
+  isPveStageSelection,
+  type PveStageSelection,
+} from '../../../shared/contracts/pve-stage-config'
+import type { PlayerAccountService } from '../account-v1/service'
+import { PveRewardService } from '../pve-reward-v1'
+import type { GameState } from '../domain/game-state'
 
 function readHandshakeValue(socket: Socket, key: string) {
   const queryValue = socket.handshake.query[key]
@@ -30,10 +39,6 @@ interface JoinRoomPayload {
   playerKind?: 'human' | 'agent'
 }
 
-interface SelectLevelPayload {
-  levelId: number
-}
-
 interface BuildTowerPayload {
   x: number
   y: number
@@ -45,9 +50,13 @@ interface RoomRuntime {
   loop: GameLoop
   projectedTickStream: ProjectedTickStream
   unsubscribeProjection: () => void
+  unsubscribeSettlement: () => void
   playerConnections: Map<string, number>
   disconnectTimers: Map<string, NodeJS.Timeout>
   ownsProjectedTickStream: boolean
+  rewardQueue: Promise<void>
+  settledMatchIds: Set<string>
+  scheduledRewardKeys: Set<string>
 }
 
 interface JoinedRoomContext {
@@ -78,10 +87,12 @@ function isJoinRoomPayload(payload: unknown): payload is JoinRoomPayload {
     && (payload as JoinRoomPayload).roomId.trim().length > 0
 }
 
-function isSelectLevelPayload(payload: unknown): payload is SelectLevelPayload {
-  return typeof payload === 'object'
-    && payload !== null
-    && typeof (payload as SelectLevelPayload).levelId === 'number'
+function parseStageSelection(payload: unknown): PveStageSelection | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const candidate = payload as { levelId?: unknown; difficulty?: unknown }
+  const difficulty = candidate.difficulty === undefined ? 'easy' : candidate.difficulty
+  const selection = { levelId: candidate.levelId, difficulty }
+  return isPveStageSelection(selection) ? selection : null
 }
 
 function isBuildTowerPayload(payload: unknown): payload is BuildTowerPayload {
@@ -101,6 +112,8 @@ export class SocketGateway {
 
   private readonly roomRuntimes = new Map<string, RoomRuntime>()
 
+  private readonly pveRewardService = new PveRewardService()
+
   constructor(
     httpServer: HttpServer,
     roomManager: RoomManager,
@@ -109,6 +122,7 @@ export class SocketGateway {
     private readonly actionLimiter: ActionRateLimiter,
     private readonly progressStore: ProgressStore,
     private readonly defaultProjectedTickStream?: ProjectedTickStream,
+    private readonly accountService?: PlayerAccountService,
   ) {
     this.config = config
     this.roomManager = roomManager
@@ -159,7 +173,7 @@ export class SocketGateway {
     })
 
     socket.on('SELECT_LEVEL', (payload: unknown) => {
-      this.handleSelectLevel(socket, payload)
+      void this.handleSelectLevel(socket, payload)
     })
 
     socket.on('REQUEST_FULL_STATE', () => {
@@ -175,6 +189,7 @@ export class SocketGateway {
   shutdown(onClosed: () => void) {
     for (const runtime of this.roomRuntimes.values()) {
       runtime.unsubscribeProjection()
+      runtime.unsubscribeSettlement()
       if (runtime.ownsProjectedTickStream) {
         runtime.projectedTickStream.dispose()
       }
@@ -341,7 +356,7 @@ export class SocketGateway {
     void this.beginRoomCountdown(joinedContext, socket)
   }
 
-  private handleSelectLevel(socket: Socket, payload: unknown) {
+  private async handleSelectLevel(socket: Socket, payload: unknown) {
     const joinedContext = this.getJoinedContext(socket)
     if (!joinedContext) {
       this.emitEngineError(socket, 'NOT_IN_ROOM', '请先发送 JOIN_ROOM 加入房间')
@@ -353,23 +368,29 @@ export class SocketGateway {
       return
     }
 
-    if (!isSelectLevelPayload(payload)) {
-      this.emitEngineError(socket, 'BAD_PAYLOAD', '缺少必要参数 levelId')
+    const selection = parseStageSelection(payload)
+    if (!selection) {
+      this.emitEngineError(socket, 'BAD_PAYLOAD', '缺少或无效的 levelId、difficulty')
       return
     }
 
-    const levelConfig = LEVEL_CONFIGS[payload.levelId]
+    const levelConfig = LEVEL_CONFIGS[selection.levelId]
     if (!levelConfig) {
-      this.emitEngineError(socket, 'INVALID_LEVEL', `Level ${payload.levelId} 不存在`)
+      this.emitEngineError(socket, 'INVALID_LEVEL', `Level ${selection.levelId} 不存在`)
       return
     }
 
-    const playerType: PlayerType = joinedContext.identity.playerKind === 'human' ? 'HUMAN' : 'AGENT'
-    const progress = this.progressStore.getOrCreate(joinedContext.identity.playerId, playerType)
-    const unlockResult = checkUnlock(progress, payload.levelId)
+    if (!this.accountService) {
+      this.emitEngineError(socket, 'ACCOUNT_SERVICE_UNAVAILABLE', '关卡进度服务暂不可用')
+      return
+    }
 
-    if (!unlockResult.allowed) {
-      this.emitEngineError(socket, 'LEVEL_LOCKED', unlockResult.reason)
+    const participantIds = joinedContext.room.getConnectedPlayerIds()
+    const participantAccounts = await Promise.all(participantIds.map(playerId => this.accountService!.getOrCreate(playerId)))
+    const lockedParticipant = participantAccounts.find(account => !checkPveStageUnlock(account.pveProgress, selection).allowed)
+    if (lockedParticipant) {
+      const unlockResult = checkPveStageUnlock(lockedParticipant.pveProgress, selection)
+      this.emitEngineError(socket, 'LEVEL_LOCKED', `玩家 ${lockedParticipant.playerId} 未解锁：${unlockResult.allowed ? '前置不满足' : unlockResult.reason}`)
       return
     }
 
@@ -385,7 +406,7 @@ export class SocketGateway {
     }
 
     if (currentPhase === 'lobby' || currentPhase === 'countdown') {
-      joinedContext.room.setPendingLevelSelection(payload.levelId)
+      joinedContext.room.setPendingStageSelection(selection)
 
       if (currentPhase === 'lobby') {
         void this.beginRoomCountdown(joinedContext, socket)
@@ -399,7 +420,7 @@ export class SocketGateway {
       return
     }
 
-    this.activateRoomLevel(joinedContext.room, levelConfig)
+    this.activateRoomLevel(joinedContext.room, levelConfig, selection)
   }
 
   private async beginRoomCountdown(joinedContext: JoinedRoomContext, socket: Socket) {
@@ -436,27 +457,32 @@ export class SocketGateway {
   }
 
   private handleCountdownCompleted(room: Room) {
-    const pendingLevelId = room.consumePendingLevelSelection()
-    if (pendingLevelId === null) {
+    const pendingSelection = room.consumePendingStageSelection()
+    if (pendingSelection === null) {
       this.io.to(room.id).emit('ROOM_PHASE_CHANGED', { phase: 'waiting_for_level' as const })
       this.emitRoomSnapshot(room)
       return
     }
 
-    const levelConfig = LEVEL_CONFIGS[pendingLevelId]
+    const levelConfig = LEVEL_CONFIGS[pendingSelection.levelId]
     if (!levelConfig) {
       this.io.to(room.id).emit('ROOM_PHASE_CHANGED', { phase: 'waiting_for_level' as const })
       return
     }
 
-    this.activateRoomLevel(room, levelConfig)
+    this.activateRoomLevel(room, levelConfig, pendingSelection)
   }
 
-  private activateRoomLevel(room: Room, levelConfig: (typeof LEVEL_CONFIGS)[number]) {
-    room.igniteWithLevel(levelConfig.waves, levelConfig.startingGold, levelConfig.levelId)
+  private activateRoomLevel(
+    room: Room,
+    levelConfig: (typeof LEVEL_CONFIGS)[number],
+    selection: PveStageSelection,
+  ) {
+    room.igniteWithLevel(levelConfig.waves, selection, levelConfig.startingGold)
 
     const levelSelectedPayload = {
       levelId: levelConfig.levelId,
+      difficulty: selection.difficulty,
       label: levelConfig.label,
       description: levelConfig.description,
       targetClearRate: levelConfig.targetClearRate,
@@ -509,7 +535,15 @@ export class SocketGateway {
       disconnectTimers: new Map(),
       ownsProjectedTickStream: !usesSharedProjectedTickStream,
       unsubscribeProjection: () => {},
+      unsubscribeSettlement: () => {},
+      rewardQueue: Promise.resolve(),
+      settledMatchIds: new Set(),
+      scheduledRewardKeys: new Set(),
     }
+
+    runtime.unsubscribeSettlement = room.engine.onTick((state) => {
+      this.schedulePveRewardWork(runtime, state)
+    }, { label: 'pve-reward-settlement' })
 
     runtime.unsubscribeProjection = projectedTickStream.subscribeBroadcast((event) => {
       const recipientCount = this.io.sockets.adapter.rooms.get(room.id)?.size ?? 0
@@ -568,6 +602,162 @@ export class SocketGateway {
     return runtime
   }
 
+  private schedulePveRewardWork(runtime: RoomRuntime, state: GameState) {
+    const selection = runtime.room.getStageSelectionForMatch(state.matchId)
+    if (!selection || !state.pve || !this.accountService) return
+    const milestones = [5, 10, 15, 20] as const
+    const dueMilestones = state.pve.players.flatMap(player => milestones
+      .filter(milestone => milestone <= player.highestCompletedWave)
+      .map(milestone => ({ playerId: player.playerId, milestone })))
+      .filter(({ playerId, milestone }) => !runtime.scheduledRewardKeys.has(
+        `${state.matchId}:${playerId}:wave-${milestone}`,
+      ))
+    const needsSettlement = state.status === 'finished' && !runtime.settledMatchIds.has(state.matchId)
+      && !runtime.scheduledRewardKeys.has(`${state.matchId}:settlement`)
+    if (dueMilestones.length === 0 && !needsSettlement) return
+
+    for (const due of dueMilestones) {
+      runtime.scheduledRewardKeys.add(`${state.matchId}:${due.playerId}:wave-${due.milestone}`)
+    }
+    if (needsSettlement) runtime.scheduledRewardKeys.add(`${state.matchId}:settlement`)
+    const stateSnapshot = structuredClone(state)
+    runtime.rewardQueue = runtime.rewardQueue
+      .then(async () => {
+        const milestoneResults = await Promise.allSettled(dueMilestones.map(due => (
+          this.recordPveMilestone(runtime, stateSnapshot, due.playerId, due.milestone)
+        )))
+        const milestoneFailures: string[] = []
+        milestoneResults.forEach((result, index) => {
+          if (result.status === 'rejected') {
+            const due = dueMilestones[index]
+            runtime.scheduledRewardKeys.delete(`${state.matchId}:${due.playerId}:wave-${due.milestone}`)
+            milestoneFailures.push(result.reason instanceof Error ? result.reason.message : String(result.reason))
+          }
+        })
+        if (milestoneFailures.length > 0) throw new Error(milestoneFailures.join(', '))
+        if (needsSettlement) await this.settleFinishedPveMatch(runtime, stateSnapshot)
+      })
+      .catch((error) => {
+        if (needsSettlement) runtime.scheduledRewardKeys.delete(`${state.matchId}:settlement`)
+        const details = error instanceof Error ? error.message : String(error)
+        console.error(`PVE reward processing failed for ${state.matchId}: ${details}`)
+      })
+  }
+
+  private async recordPveMilestone(
+    runtime: RoomRuntime,
+    state: GameState,
+    playerId: string,
+    milestone: 5 | 10 | 15 | 20,
+  ) {
+    if (!this.accountService) throw new Error('PLAYER_ACCOUNT_SERVICE_NOT_CONFIGURED')
+    const selection = runtime.room.getStageSelectionForMatch(state.matchId)
+    const stage = selection ? getPveStageDefinition(selection.levelId) : null
+    const player = state.pve?.players.find(candidate => candidate.playerId === playerId)
+    if (!selection || !stage || !player || !isPveDifficulty(selection.difficulty)) {
+      throw new Error('PVE_REWARD_CONTEXT_INCOMPLETE')
+    }
+    const account = await this.accountService.getOrCreate(playerId)
+    this.pveRewardService.recordWaveMilestone({
+      matchId: state.matchId,
+      matchSeed: state.matchId,
+      stage: { levelId: selection.levelId, stageId: stage.stageId, difficulty: selection.difficulty },
+      playerId,
+      milestone,
+      activatedGeneralIds: player.generalProgress.map(progress => progress.generalId),
+      discoveredGeneralIds: Object.keys(account.weapon.loadoutsByGeneralId),
+      weaponState: {
+        fragmentBalances: account.weapon.fragmentBalances,
+        unlockedWeaponIds: account.weapon.unlockedWeaponIds,
+      },
+    })
+  }
+
+  private async settleFinishedPveMatch(runtime: RoomRuntime, state: GameState) {
+    if (!this.accountService || !state.pve || !state.result) return
+    const selection = runtime.room.getStageSelectionForMatch(state.matchId)
+    const stage = selection ? getPveStageDefinition(selection.levelId) : null
+    if (!selection || !stage) throw new Error('PVE_SETTLEMENT_CONTEXT_INCOMPLETE')
+    const officialVictory = state.result.outcome === 'victory'
+    const failures: string[] = []
+
+    for (const player of state.pve.players) {
+      try {
+        const account = await this.accountService.getOrCreate(player.playerId)
+        if (account.settlementsById[`${state.matchId}:${player.playerId}`]) continue
+        const rewardContext = {
+          matchId: state.matchId,
+          matchSeed: state.matchId,
+          stage: { levelId: selection.levelId, stageId: stage.stageId, difficulty: selection.difficulty },
+          playerId: player.playerId,
+          activatedGeneralIds: player.generalProgress.map(progress => progress.generalId),
+          discoveredGeneralIds: Object.keys(account.weapon.loadoutsByGeneralId),
+          weaponState: {
+            fragmentBalances: account.weapon.fragmentBalances,
+            unlockedWeaponIds: account.weapon.unlockedWeaponIds,
+          },
+        } as const
+        this.pveRewardService.recordMatchOutcome({ ...rewardContext, officialVictory })
+        const frozenRewards = this.pveRewardService.ledger.freezePlayerRewards(state.matchId, player.playerId)
+        await runtime.room.commitPlayerSettlement({
+          requestId: `settle:${state.matchId}:${player.playerId}`,
+          matchId: state.matchId,
+          playerId: player.playerId,
+          reason: officialVictory ? 'victory' : 'defeat',
+          highestCompletedWave: player.highestCompletedWave,
+          officialVictory,
+          retainedWeaponFragments: frozenRewards.fragmentBalances,
+          stageSelection: selection,
+        })
+      }
+      catch (error) {
+        failures.push(`${player.playerId}:${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    if (failures.length > 0) throw new Error(failures.join(', '))
+    runtime.settledMatchIds.add(state.matchId)
+  }
+
+  private async settleDepartingPvePlayer(runtime: RoomRuntime, playerId: string) {
+    if (!this.accountService) return
+    const state = runtime.room.engine.getStateSnapshot()
+    const selection = runtime.room.getStageSelectionForMatch(state.matchId)
+    const stage = selection ? getPveStageDefinition(selection.levelId) : null
+    const player = state.pve?.players.find(candidate => candidate.playerId === playerId)
+    if (state.status !== 'running' || !selection || !stage || !player) return
+    const account = await this.accountService.getOrCreate(playerId)
+    if (account.settlementsById[`${state.matchId}:${playerId}`]) return
+    for (const milestone of [5, 10, 15, 20] as const) {
+      if (milestone <= player.highestCompletedWave) {
+        await this.recordPveMilestone(runtime, state, playerId, milestone)
+      }
+    }
+    this.pveRewardService.recordMatchOutcome({
+      matchId: state.matchId,
+      matchSeed: state.matchId,
+      stage: { levelId: selection.levelId, stageId: stage.stageId, difficulty: selection.difficulty },
+      playerId,
+      activatedGeneralIds: player.generalProgress.map(progress => progress.generalId),
+      discoveredGeneralIds: Object.keys(account.weapon.loadoutsByGeneralId),
+      weaponState: {
+        fragmentBalances: account.weapon.fragmentBalances,
+        unlockedWeaponIds: account.weapon.unlockedWeaponIds,
+      },
+      officialVictory: false,
+    })
+    const frozenRewards = this.pveRewardService.ledger.freezePlayerRewards(state.matchId, playerId)
+    await runtime.room.commitPlayerSettlement({
+      requestId: `settle:${state.matchId}:${playerId}`,
+      matchId: state.matchId,
+      playerId,
+      reason: 'disconnect_exit',
+      highestCompletedWave: player.highestCompletedWave,
+      officialVictory: false,
+      retainedWeaponFragments: frozenRewards.fragmentBalances,
+      stageSelection: selection,
+    })
+  }
+
   private leaveJoinedRoom(socket: Socket) {
     const roomId = this.getJoinedRoomId(socket)
     const identity = this.getJoinedIdentity(socket)
@@ -595,9 +785,15 @@ export class SocketGateway {
           return
         }
 
-        runtime.room.leavePlayer(identity.playerId)
-        this.emitRoomSnapshot(runtime.room)
-        this.cleanupRoomIfEmpty(roomId)
+        void this.settleDepartingPvePlayer(runtime, identity.playerId)
+          .catch((error) => {
+            console.error(`PVE disconnect settlement failed for ${identity.playerId}: ${error instanceof Error ? error.message : String(error)}`)
+          })
+          .finally(() => {
+            runtime.room.leavePlayer(identity.playerId)
+            this.emitRoomSnapshot(runtime.room)
+            this.cleanupRoomIfEmpty(roomId)
+          })
       }, PLAYER_RECONNECT_GRACE_MS)
 
       runtime.disconnectTimers.set(identity.playerId, disconnectTimer)
@@ -624,6 +820,7 @@ export class SocketGateway {
     runtime.disconnectTimers.clear()
 
     runtime.unsubscribeProjection()
+    runtime.unsubscribeSettlement()
     if (runtime.ownsProjectedTickStream) {
       runtime.projectedTickStream.dispose()
     }

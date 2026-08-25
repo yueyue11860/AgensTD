@@ -3062,8 +3062,8 @@ body.crisis-overload-active {
 
 .mission-briefing-panel {
   pointer-events: auto;
-  width: min(92vw, 380px);
-  max-height: min(80vh, 600px);
+  width: min(96vw, 1120px);
+  max-height: min(90vh, 820px);
   overflow-y: auto;
   border-radius: 20px;
   border: 1px solid rgba(34, 211, 238, 0.18);
@@ -3135,7 +3135,8 @@ body.crisis-overload-active {
 
 .mission-level-row {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(150px, 0.75fr) minmax(480px, 1.6fr);
   align-items: center;
   gap: 0.6rem;
   border-radius: 12px;
@@ -3230,7 +3231,55 @@ body.crisis-overload-active {
   font-size: 0.7rem;
   letter-spacing: 0.18em;
   color: #bae6fd;
+  white-space: nowrap;
 }
+
+.mission-difficulty-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.mission-difficulty-button {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.12rem 0.35rem;
+  min-height: 44px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 9px;
+  padding: 0.35rem 0.45rem;
+  text-align: left;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.72);
+  transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.mission-difficulty-button small {
+  grid-column: 1 / -1;
+  color: #64748b;
+  font-size: 0.56rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mission-difficulty-button:not(:disabled):hover {
+  transform: translateY(-1px);
+  border-color: rgba(103, 232, 249, 0.62);
+  background: rgba(14, 116, 144, 0.2);
+}
+
+.mission-difficulty-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.mission-difficulty-easy:not(:disabled) { border-color: rgba(96, 165, 250, 0.48); }
+.mission-difficulty-normal:not(:disabled) { border-color: rgba(251, 146, 60, 0.5); }
+.mission-difficulty-hard:not(:disabled) { border-color: rgba(251, 113, 133, 0.55); }
+.mission-difficulty-cleared { box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.3); }
 
 .mission-level-badge-danger {
   border-color: rgba(252, 165, 165, 0.28);
@@ -3468,6 +3517,15 @@ body.crisis-overload-active {
   .mission-briefing-panel {
     padding: 1rem;
     border-radius: 22px;
+  }
+
+  .mission-level-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .mission-difficulty-actions {
+    grid-column: 1 / -1;
+    grid-template-columns: 1fr;
   }
 
   .mission-level-grid {

@@ -263,6 +263,14 @@ export interface PveRuntimeSnapshot {
     reason: string
     decidedAtTick: number
   } | null
+  /** 开局时冻结的关卡数值快照；对局中不读取外部热配置。 */
+  balance: {
+    profileId: string
+    levelId: number
+    difficulty: import('./balance-catalog').PveDifficulty
+    enemyHpMultiplierBps: number
+    enemyDefenseAdd: number
+  }
   playerCountAtStart: number
   enemyCapacity: number
   overloadTicks: number
@@ -401,6 +409,9 @@ export interface PveRuntimeResult {
 
 export interface PveGameRuntimeOptions {
   seed: string | number
+  /** 默认为第 1 关简单，保证旧测试和旧回放有确定的迁移落点。 */
+  levelId?: number
+  difficulty?: import('./balance-catalog').PveDifficulty
   tickRateMs?: number
   prepDurationMs?: number
   maxWaves?: number

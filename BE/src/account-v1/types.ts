@@ -1,4 +1,6 @@
-export const PLAYER_ACCOUNT_SCHEMA_VERSION = 1 as const
+import type { PveStageKey, PveStageSelection } from '../../../shared/contracts/pve-stage-config'
+
+export const PLAYER_ACCOUNT_SCHEMA_VERSION = 2 as const
 
 export type JsonPrimitive = string | number | boolean | null
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[]
@@ -68,6 +70,23 @@ export interface WeaponAccountPayload {
   extensions: JsonObject
 }
 
+export interface PveStageClearRecord {
+  stageKey: PveStageKey
+  selection: PveStageSelection
+  clearCount: number
+  firstClearedAt: string
+  lastClearedAt: string
+}
+
+/**
+ * 只持久化权威胜利事实，解锁矩阵由纯函数派生。
+ * 这样调整解锁规则时不需要批量回写玩家账户。
+ */
+export interface PveProgressPayload {
+  version: number
+  clearsByStageKey: Partial<Record<PveStageKey, PveStageClearRecord>>
+}
+
 export type ShopReward =
   | { type: 'unlock_active_item'; itemId: string }
   | { type: 'unlock_passive_item'; itemId: string }
@@ -111,6 +130,8 @@ export interface MatchPlayerSettlement {
   retainedWeaponFragments: Record<string, number>
   goldGranted: number
   entitlementIds: string[]
+  stageSelection?: PveStageSelection
+  progressionUpdated: boolean
   status: 'committed'
   committedAt: string
   accountVersionAfter: number
@@ -166,6 +187,7 @@ export interface PlayerAccountRecord {
   idempotencyByRequestId: Record<string, StoredIdempotencyResult>
   item: ItemAccountPayload
   weapon: WeaponAccountPayload
+  pveProgress: PveProgressPayload
   createdAt: string
   updatedAt: string
 }

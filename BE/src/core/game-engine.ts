@@ -20,6 +20,7 @@ import type { MatchWeaponLoadoutSnapshot } from '../weapon-v1'
 import {
   PVE_WAVE_PREP_DURATION_MS,
   PveGameRuntime,
+  type PveDifficulty,
   type PveLaneRoute,
   type PveLaneSlot,
   type PveRuntimeAction,
@@ -1054,7 +1055,7 @@ export class GameEngine {
     this.syncPveRuntimeState()
   }
 
-  private createPveRuntime(levelId?: number) {
+  private createPveRuntime(levelId?: number, difficulty: PveDifficulty = 'easy') {
     const seedSuffix = this.matchSequence > 0 ? `:rematch-${this.matchSequence}` : ''
     const stageDefinition = levelId === undefined ? null : getPveStageDefinition(levelId)
     const characterTokens = Object.values(GENERAL_CATALOG).flatMap((definition) => definition.recipe.glyphs)
@@ -1084,6 +1085,8 @@ export class GameEngine {
     }
     return new PveGameRuntime({
       seed: `${this.config.matchId}:pve-v2${seedSuffix}`,
+      levelId: levelId ?? 1,
+      difficulty,
       tickRateMs: this.config.tickRateMs,
       prepDurationMs: PVE_WAVE_PREP_DURATION_MS,
       laneRoutes: createPveLaneRouteSnapshots(this.laneRoutes),
@@ -1582,7 +1585,12 @@ export class GameEngine {
    * 新版 PVE 关卡统一为二十波；旧 waves/startingGold 仅用于启动审计，
    * 不再驱动旧怪物、旧塔或覆盖新版初始斋饭。
    */
-  ignite(waves: WaveConfig[], startingGold?: number, levelId?: number): void {
+  ignite(
+    waves: WaveConfig[],
+    startingGold?: number,
+    levelId?: number,
+    difficulty: PveDifficulty = 'easy',
+  ): void {
     if (this.state.status !== 'waiting') {
       // 防止重复点火
       return
@@ -1597,7 +1605,7 @@ export class GameEngine {
     this.overloadTicks = 0
     this.syncMapCells()
 
-    this.pveRuntime = this.createPveRuntime(levelId)
+    this.pveRuntime = this.createPveRuntime(levelId, difficulty)
     for (const [playerId, slotId] of this.playerSlots.entries()) {
       this.pveRuntime.registerPlayer(playerId, slotId)
     }
@@ -1608,6 +1616,7 @@ export class GameEngine {
       selectedLegacyWaveCount: waves.length,
       ignoredLegacyStartingGold: startingGold ?? null,
       selectedLevelId: levelId ?? null,
+      selectedDifficulty: difficulty,
       runtimeMaxWaves: 20,
       playerCount: this.playerCount,
     })

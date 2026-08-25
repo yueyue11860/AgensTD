@@ -2,6 +2,7 @@ import { getGeneralRosterEntry } from '../core/hero-v1/roster'
 import { WEAPON_CATALOG, isWeaponCompatible } from './catalog'
 import { InMemoryWeaponAccountService } from './account'
 import { type WeaponQuality, WeaponDomainError } from './types'
+import type { PveDifficulty } from '../../../shared/contracts/pve-stage-config'
 
 export type WeaponPurchaseEntitlementType = 'low_tier_weapon_fragment' | 'high_tier_weapon_fragment'
 
@@ -12,24 +13,77 @@ export interface WeaponFragmentDrop {
   amount: 1
 }
 
+export type PveRewardDifficulty = PveDifficulty
+export type PveWaveMilestone = 5 | 10 | 15 | 20
+
+export interface WeaponRewardAccountState {
+  fragmentBalances: Readonly<Record<string, number>>
+  unlockedWeaponIds: readonly string[]
+}
+
+export interface WaveMilestoneWeaponDropInput {
+  matchSeed: string
+  stageId: string
+  levelId: number
+  difficulty: PveRewardDifficulty
+  playerId: string
+  milestone: PveWaveMilestone
+  activatedGeneralIds: readonly string[]
+  discoveredGeneralIds: readonly string[]
+  weaponState: WeaponRewardAccountState
+  rewardTableRevision?: string
+}
+
+export interface HardVictoryExclusiveDropInput {
+  matchSeed: string
+  stageId: string
+  levelId: number
+  playerId: string
+  activatedGeneralIds: readonly string[]
+  discoveredGeneralIds: readonly string[]
+  weaponState: WeaponRewardAccountState
+  rewardTableRevision?: string
+}
+
+export const PVE_WEAPON_REWARD_TABLE_REVISION = 'pve-weapon-reward-v1' as const
+
+export const WAVE_MILESTONE_DROP_TABLE: Readonly<Record<PveRewardDifficulty, Readonly<Record<PveWaveMilestone, {
+  count: 1 | 2
+  weights: readonly [WeaponQuality, number][]
+}>>>> = {
+  easy: {
+    5: { count: 1, weights: [['green', 8000], ['blue', 2000]] },
+    10: { count: 1, weights: [['green', 5000], ['blue', 4000], ['purple', 1000]] },
+    15: { count: 1, weights: [['green', 2500], ['blue', 5000], ['purple', 2500]] },
+    20: { count: 2, weights: [['blue', 4500], ['purple', 5500]] },
+  },
+  normal: {
+    5: { count: 1, weights: [['green', 4500], ['blue', 4500], ['purple', 1000]] },
+    10: { count: 1, weights: [['blue', 3500], ['purple', 5000], ['orange', 1500]] },
+    15: { count: 1, weights: [['blue', 1500], ['purple', 5000], ['orange', 3500]] },
+    20: { count: 2, weights: [['purple', 4500], ['orange', 5500]] },
+  },
+  hard: {
+    5: { count: 1, weights: [['blue', 2000], ['purple', 5000], ['orange', 2500], ['red', 500]] },
+    10: { count: 1, weights: [['purple', 4000], ['orange', 4500], ['red', 1500]] },
+    15: { count: 1, weights: [['purple', 2000], ['orange', 5000], ['red', 3000]] },
+    20: { count: 2, weights: [['orange', 4500], ['red', 5500]] },
+  },
+}
+
+/** @deprecated 新版 PVE 请使用 rollWaveMilestoneWeaponDrops。 */
 export interface BossWeaponDropInput {
   matchSeed: string
   playerId: string
-  bossWave: 5 | 10 | 15 | 20
+  bossWave: PveWaveMilestone
   bossKillSequence: number
   activatedGeneralIds: readonly string[]
   discoveredGeneralIds: readonly string[]
   unlockedWeaponIds: readonly string[]
-}
-
-const BOSS_DROP_TABLE: Readonly<Record<5 | 10 | 15 | 20, {
-  count: 1 | 2
-  weights: readonly [WeaponQuality, number][]
-}>> = {
-  5: { count: 1, weights: [['green', 7500], ['blue', 2500]] },
-  10: { count: 1, weights: [['green', 3000], ['blue', 4500], ['purple', 2500]] },
-  15: { count: 1, weights: [['blue', 1500], ['purple', 4500], ['orange', 3000], ['red', 1000]] },
-  20: { count: 2, weights: [['purple', 3000], ['orange', 4000], ['red', 3000]] },
+  fragmentBalances?: Readonly<Record<string, number>>
+  difficulty?: PveRewardDifficulty
+  stageId?: string
+  levelId?: number
 }
 
 const hashSeed = (seed: string): number => {
@@ -63,7 +117,55 @@ const weightedQuality = (random: DeterministicRandom, weights: readonly [WeaponQ
   return weights[weights.length - 1][0]
 }
 
-const weaponCandidates = (
+const commonWeaponCandidates = (
+  quality: WeaponQuality,
+  activatedGeneralIds: readonly string[],
+  weaponState: WeaponRewardAccountState,
+): readonly typeof WEAPON_CATALOG[number][] => {
+  const unlocked = new Set(weaponState.unlockedWeaponIds)
+  // 阶段掉落的红色也只进入四件通用红武池；专武只由困难胜利保底产生。
+  const eligible = WEAPON_CATALOG.filter((weapon) => weapon.quality === quality
+    && !weapon.compatibility.exclusiveGeneralId)
+  const incomplete = (weapon: typeof WEAPON_CATALOG[number]) => !unlocked.has(weapon.weaponId)
+    && (weaponState.fragmentBalances[weapon.weaponId] ?? 0) < weapon.fragmentRequirement
+  const compatible = (weapon: typeof WEAPON_CATALOG[number]) => activatedGeneralIds
+    .some((generalId) => isWeaponCompatible(weapon, generalId))
+  const preferredIncomplete = eligible.filter((weapon) => incomplete(weapon) && compatible(weapon))
+  if (preferredIncomplete.length) return preferredIncomplete
+  const otherIncomplete = eligible.filter(incomplete)
+  if (otherIncomplete.length) return otherIncomplete
+  const preferred = eligible.filter(compatible)
+  return preferred.length ? preferred : eligible
+}
+
+const exclusiveWeaponCandidates = (
+  activatedGeneralIds: readonly string[],
+  discoveredGeneralIds: readonly string[],
+  weaponState: WeaponRewardAccountState,
+): readonly typeof WEAPON_CATALOG[number][] => {
+  const active = new Set(activatedGeneralIds)
+  const discovered = new Set([...activatedGeneralIds, ...discoveredGeneralIds])
+  const unlocked = new Set(weaponState.unlockedWeaponIds)
+  const exclusives = WEAPON_CATALOG.filter((weapon) => Boolean(weapon.compatibility.exclusiveGeneralId))
+  const incomplete = (weapon: typeof WEAPON_CATALOG[number]) => !unlocked.has(weapon.weaponId)
+    && (weaponState.fragmentBalances[weapon.weaponId] ?? 0) < weapon.fragmentRequirement
+  const belongsTo = (weapon: typeof WEAPON_CATALOG[number], generalIds: ReadonlySet<string>) => {
+    const generalId = weapon.compatibility.exclusiveGeneralId
+    return Boolean(generalId && generalIds.has(generalId))
+  }
+  const activeIncomplete = exclusives.filter((weapon) => belongsTo(weapon, active) && incomplete(weapon))
+  if (activeIncomplete.length) return activeIncomplete
+  const activeLocked = exclusives.filter((weapon) => belongsTo(weapon, active) && !unlocked.has(weapon.weaponId))
+  if (activeLocked.length) return activeLocked
+  const activeAny = exclusives.filter((weapon) => belongsTo(weapon, active))
+  if (activeAny.length) return activeAny
+  const discoveredIncomplete = exclusives.filter((weapon) => belongsTo(weapon, discovered) && incomplete(weapon))
+  if (discoveredIncomplete.length) return discoveredIncomplete
+  const anyIncomplete = exclusives.filter(incomplete)
+  return anyIncomplete.length ? anyIncomplete : exclusives
+}
+
+const shopWeaponCandidates = (
   quality: WeaponQuality,
   activatedGeneralIds: readonly string[],
   discoveredGeneralIds: readonly string[],
@@ -80,20 +182,68 @@ const weaponCandidates = (
   return otherLocked.length ? otherLocked : eligible
 }
 
-export function rollBossWeaponDrops(input: BossWeaponDropInput): readonly WeaponFragmentDrop[] {
-  validateGeneralIds(input.activatedGeneralIds)
-  validateGeneralIds(input.discoveredGeneralIds)
-  const table = BOSS_DROP_TABLE[input.bossWave]
-  const random = new DeterministicRandom(`${input.matchSeed}:${input.playerId}:${input.bossKillSequence}`)
+export function rollWaveMilestoneWeaponDrops(input: WaveMilestoneWeaponDropInput): readonly WeaponFragmentDrop[] {
+  validateRewardInput(input)
+  const table = WAVE_MILESTONE_DROP_TABLE[input.difficulty][input.milestone]
+  const revision = input.rewardTableRevision ?? PVE_WEAPON_REWARD_TABLE_REVISION
+  const random = new DeterministicRandom([
+    revision,
+    input.matchSeed,
+    input.stageId,
+    input.levelId,
+    input.difficulty,
+    input.playerId,
+    `wave-${input.milestone}`,
+  ].join(':'))
   const drops: WeaponFragmentDrop[] = []
   for (let dropIndex = 0; dropIndex < table.count; dropIndex += 1) {
     const quality = weightedQuality(random, table.weights)
-    const candidates = weaponCandidates(quality, input.activatedGeneralIds, input.discoveredGeneralIds, input.unlockedWeaponIds)
-    if (!candidates.length) throw new Error(`No eligible ${quality} weapon drop candidates`)
+    const candidates = commonWeaponCandidates(quality, input.activatedGeneralIds, input.weaponState)
+    if (!candidates.length) throw new Error(`No eligible common ${quality} weapon drop candidates`)
     const weapon = candidates[random.nextInt(candidates.length)]
     drops.push({ dropIndex, weaponId: weapon.weaponId, quality, amount: 1 })
   }
   return drops
+}
+
+export function rollHardVictoryExclusiveWeaponDrop(input: HardVictoryExclusiveDropInput): WeaponFragmentDrop {
+  validateRewardInput({ ...input, difficulty: 'hard', milestone: 20 })
+  const revision = input.rewardTableRevision ?? PVE_WEAPON_REWARD_TABLE_REVISION
+  const random = new DeterministicRandom([
+    revision,
+    input.matchSeed,
+    input.stageId,
+    input.levelId,
+    'hard',
+    input.playerId,
+    'official-victory-exclusive',
+  ].join(':'))
+  const candidates = exclusiveWeaponCandidates(
+    input.activatedGeneralIds,
+    input.discoveredGeneralIds,
+    input.weaponState,
+  )
+  if (!candidates.length) throw new Error('No eligible exclusive red weapon drop candidates')
+  const weapon = candidates[random.nextInt(candidates.length)]
+  return { dropIndex: 0, weaponId: weapon.weaponId, quality: 'red', amount: 1 }
+}
+
+/** @deprecated 仅保留旧调用兼容；新事件语义是波次节点而不是 Boss 击杀。 */
+export function rollBossWeaponDrops(input: BossWeaponDropInput): readonly WeaponFragmentDrop[] {
+  return rollWaveMilestoneWeaponDrops({
+    matchSeed: `${input.matchSeed}:legacy-sequence-${input.bossKillSequence}`,
+    stageId: input.stageId ?? 'legacy-stage',
+    levelId: input.levelId ?? 1,
+    difficulty: input.difficulty ?? 'easy',
+    playerId: input.playerId,
+    milestone: input.bossWave,
+    activatedGeneralIds: input.activatedGeneralIds,
+    discoveredGeneralIds: input.discoveredGeneralIds,
+    weaponState: {
+      fragmentBalances: input.fragmentBalances ?? {},
+      unlockedWeaponIds: input.unlockedWeaponIds,
+    },
+  })
 }
 
 export interface WeaponShopOffer {
@@ -129,7 +279,7 @@ export function generateWeaponShopOffers(input: GenerateWeaponShopOffersInput): 
   const offers: WeaponShopOffer[] = []
   for (let offerIndex = 0; offerIndex < 3; offerIndex += 1) {
     const quality = weightedQuality(random, SHOP_QUALITY_WEIGHTS[input.entitlementType])
-    let candidates = weaponCandidates(quality, offerIndex === 0 ? input.activatedGeneralIds : [], input.discoveredGeneralIds, input.unlockedWeaponIds)
+    let candidates = shopWeaponCandidates(quality, offerIndex === 0 ? input.activatedGeneralIds : [], input.discoveredGeneralIds, input.unlockedWeaponIds)
       .filter((weapon) => !selected.has(weapon.weaponId))
     if (!candidates.length) {
       const allowedQualities = new Set(SHOP_QUALITY_WEIGHTS[input.entitlementType].map(([entry]) => entry))
@@ -209,6 +359,21 @@ export interface PurchaseWeaponFragmentResult {
   fragmentAmount: 1
   spentGold: number
   remainingGold: number
+}
+
+function validateRewardInput(input: WaveMilestoneWeaponDropInput): void {
+  if (!input.matchSeed || !input.stageId || !input.playerId) throw new Error('matchSeed, stageId and playerId are required')
+  if (!Number.isSafeInteger(input.levelId) || input.levelId <= 0) throw new Error('levelId must be a positive safe integer')
+  if (!WAVE_MILESTONE_DROP_TABLE[input.difficulty]?.[input.milestone]) throw new Error('Invalid PVE difficulty or wave milestone')
+  validateGeneralIds(input.activatedGeneralIds)
+  validateGeneralIds(input.discoveredGeneralIds)
+  for (const [weaponId, amount] of Object.entries(input.weaponState.fragmentBalances)) {
+    if (!WEAPON_CATALOG.some((weapon) => weapon.weaponId === weaponId)) throw new Error(`Unknown fragment weaponId ${weaponId}`)
+    if (!Number.isSafeInteger(amount) || amount < 0) throw new Error(`Invalid fragment balance for ${weaponId}`)
+  }
+  for (const weaponId of input.weaponState.unlockedWeaponIds) {
+    if (!WEAPON_CATALOG.some((weapon) => weapon.weaponId === weaponId)) throw new Error(`Unknown unlocked weaponId ${weaponId}`)
+  }
 }
 
 export function validateGeneralIds(generalIds: readonly string[]): void {

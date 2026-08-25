@@ -14,6 +14,7 @@ import type { GridMapCell } from './grid-map'
 import { GridMap } from './grid-map'
 import { GameEngine, type EngineLaneRoute, type EngineSlotId } from './game-engine'
 import type { WaveConfig } from '../../../shared/contracts/game'
+import type { PveStageSelection } from '../../../shared/contracts/pve-stage-config'
 import type {
   MatchBuildDefinitionResolver,
   MatchBuildSnapshot,
@@ -133,7 +134,15 @@ export class Room {
 
   private countdownPreparing = false
 
-  private pendingLevelId: number | null = null
+  private pendingStageSelection: PveStageSelection | null = null
+
+  private activeStageSelection: PveStageSelection | null = null
+
+  /**
+   * 结算与奖励是异步执行的；按 matchId 保留关卡快照，避免玩家立即重开时
+   * 把上一局的奖励写到新一局所选关卡。
+   */
+  private readonly stageSelectionsByMatchId = new Map<string, PveStageSelection>()
 
   private readonly matchBuildSnapshots = new Map<string, MatchBuildSnapshot>()
 
@@ -338,10 +347,15 @@ export class Room {
    * 校验通过后点火引擎：加载关卡波次配置并启动刷怪。
    * 应由 SocketGateway 在所有校验通过后调用。
    */
-  igniteWithLevel(waves: WaveConfig[], startingGold?: number, levelId?: number): void {
-    this.pendingLevelId = null
+  igniteWithLevel(waves: WaveConfig[], selection: PveStageSelection, startingGold?: number): void {
+    this.pendingStageSelection = null
+    this.activeStageSelection = structuredClone(selection)
     this.phase = 'playing'
-    this.engine.ignite(waves, startingGold, levelId)
+    this.engine.ignite(waves, startingGold, selection.levelId, selection.difficulty)
+    this.stageSelectionsByMatchId.set(
+      this.engine.getStateSnapshot().matchId,
+      structuredClone(selection),
+    )
   }
 
   getMatchBuildSnapshot(playerId: string): MatchBuildSnapshot | null {
@@ -355,31 +369,43 @@ export class Room {
    */
   async commitPlayerSettlement(input: {
     requestId: string
+    matchId: string
     playerId: string
     reason: SettlementReason
     highestCompletedWave: number
     officialVictory: boolean
     retainedWeaponFragments: Readonly<Record<string, number>>
+    stageSelection?: PveStageSelection
   }): Promise<MatchPlayerSettlement> {
     if (!this.accountRuntime) throw new Error('PLAYER_ACCOUNT_SERVICE_NOT_CONFIGURED')
     return this.accountRuntime.accountService.settleMatch({
       ...input,
-      matchId: this.engine.getStateSnapshot().matchId,
     })
   }
 
-  setPendingLevelSelection(levelId: number) {
-    this.pendingLevelId = levelId
+  setPendingStageSelection(selection: PveStageSelection) {
+    this.pendingStageSelection = structuredClone(selection)
   }
 
-  consumePendingLevelSelection() {
-    const nextLevelId = this.pendingLevelId
-    this.pendingLevelId = null
-    return nextLevelId
+  consumePendingStageSelection() {
+    const selection = this.pendingStageSelection
+    this.pendingStageSelection = null
+    return selection ? structuredClone(selection) : null
+  }
+
+  getActiveStageSelection(): PveStageSelection | null {
+    return this.activeStageSelection ? structuredClone(this.activeStageSelection) : null
+  }
+
+  getStageSelectionForMatch(matchId: string): PveStageSelection | null {
+    const selection = this.stageSelectionsByMatchId.get(matchId)
+    return selection ? structuredClone(selection) : null
   }
 
   destroy() {
-    this.pendingLevelId = null
+    this.pendingStageSelection = null
+    this.activeStageSelection = null
+    this.stageSelectionsByMatchId.clear()
     this.countdownPreparing = false
 
     if (this.countdownTimer) {

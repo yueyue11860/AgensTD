@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { MemoryPlayerAccountStore } from './memory-store'
-import { PlayerAccountService, settlementRewardTier } from './service'
+import { PlayerAccountService, createDefaultPlayerAccount, settlementRewardTier } from './service'
 import type {
   AccountShopCatalogProvider,
   JsonObject,
@@ -65,12 +65,23 @@ async function main(): Promise<void> {
   assert.deepEqual(createdA.item.unlockedActiveItemIds, ['change_character_brush', 'cultivation_pill'])
   assert.deepEqual(createdA.item.unlockedPassiveItemIds, ['traveling_kitchen', 'talent_registry', 'reserve_expansion_talisman'])
   assert.deepEqual(createdA, createdB, '并发初始化必须只发一次默认包')
+  assert.equal(createdA.schemaVersion, 2)
+  assert.deepEqual((await service.getPveProgression(createdA.playerId)).clearedStageKeys, [])
 
   assert.equal(settlementRewardTier(4, 'defeat', false), 'wave_0_4')
   assert.equal(settlementRewardTier(5, 'defeat', false), 'wave_5_9')
   assert.equal(settlementRewardTier(10, 'voluntary_exit', false), 'wave_10_14')
   assert.equal(settlementRewardTier(15, 'disconnect_exit', false), 'wave_15_19')
   assert.equal(settlementRewardTier(20, 'victory', true), 'victory')
+  await expectCode(service.settleMatch({
+    requestId: 'invalid-victory-without-stage',
+    matchId: 'invalid-victory-without-stage',
+    playerId: 'static-agent:alpha',
+    reason: 'victory',
+    highestCompletedWave: 20,
+    officialVictory: true,
+    retainedWeaponFragments: {},
+  }), 'INVALID_SETTLEMENT')
 
   const settlementInput = {
     requestId: 'settle:match-1:alpha',
@@ -159,7 +170,54 @@ async function main(): Promise<void> {
   })
   assert.deepEqual(snapshot, sameSnapshot, '同一对局构筑快照必须不可变')
 
+  const progressionStore = new MemoryPlayerAccountStore()
+  const progressionService = new PlayerAccountService(progressionStore, catalog)
+  const victory = await progressionService.settleMatch({
+    requestId: 'settle:easy-1:first-clear',
+    matchId: 'easy-1:first-clear',
+    playerId: 'progression-player',
+    reason: 'victory',
+    highestCompletedWave: 20,
+    officialVictory: true,
+    stageSelection: { levelId: 1, difficulty: 'easy' },
+    retainedWeaponFragments: {},
+  })
+  assert.equal(victory.progressionUpdated, true)
+  assert.deepEqual(victory.stageSelection, { levelId: 1, difficulty: 'easy' })
+  assert.deepEqual(await progressionService.settleMatch({
+    requestId: 'settle:easy-1:first-clear',
+    matchId: 'easy-1:first-clear',
+    playerId: 'progression-player',
+    reason: 'victory',
+    highestCompletedWave: 20,
+    officialVictory: true,
+    stageSelection: { levelId: 1, difficulty: 'easy' },
+    retainedWeaponFragments: {},
+  }), victory)
+  assert.deepEqual(
+    (await progressionService.getPveProgression('progression-player')).clearedStageKeys,
+    ['easy:1'],
+  )
+  const progressionAccount = await progressionService.getOrCreate('progression-player')
+  assert.equal(progressionAccount.pveProgress.clearsByStageKey['easy:1']?.clearCount, 1)
+
+  const migrationStore = new MemoryPlayerAccountStore()
+  const legacy = createLegacyAccount('legacy-player')
+  await migrationStore.createIfAbsent(legacy)
+  const migrated = await new PlayerAccountService(migrationStore, catalog).getOrCreate('legacy-player')
+  assert.equal(migrated.schemaVersion, 2)
+  assert.equal(migrated.wallet.gold, 77)
+  assert.deepEqual(migrated.pveProgress.clearsByStageKey, {}, '不迁移旧版可伪造的关卡进度')
+
   console.log('account-v1 smoke passed')
+}
+
+function createLegacyAccount(playerId: string): PlayerAccountRecord {
+  const account = structuredClone(createDefaultPlayerAccount(playerId)) as unknown as Record<string, unknown>
+  account.schemaVersion = 1
+  ;(account.wallet as { gold: number }).gold = 77
+  delete account.pveProgress
+  return account as unknown as PlayerAccountRecord
 }
 
 void main()

@@ -10,8 +10,12 @@ import {
 } from './catalog'
 import {
   InMemoryWeaponCommerceService,
+  WAVE_MILESTONE_DROP_TABLE,
   generateWeaponShopOffers,
+  rollHardVictoryExclusiveWeaponDrop,
   rollBossWeaponDrops,
+  rollWaveMilestoneWeaponDrops,
+  type PveRewardDifficulty,
 } from './rewards'
 import {
   WEAPON_FRAGMENT_REQUIREMENT,
@@ -107,29 +111,51 @@ const checkLoadoutsAndSnapshot = (): void => {
 }
 
 const checkDrops = (): void => {
-  for (const wave of [5, 10, 15, 20] as const) {
-    const input = { matchSeed: 'match-seed', playerId: 'p1', bossWave: wave, bossKillSequence: wave / 5, activatedGeneralIds: ['houyi'], discoveredGeneralIds: ['houyi'], unlockedWeaponIds: [] }
-    const first = rollBossWeaponDrops(input)
-    assert.deepEqual(rollBossWeaponDrops(input), first)
-    assert.equal(first.length, wave === 20 ? 2 : 1)
-    for (const drop of first) assert.ok(BOSS_QUALITIES[wave].includes(drop.quality))
+  const allowedQualities: Readonly<Record<PveRewardDifficulty, Readonly<Record<5 | 10 | 15 | 20, readonly WeaponQuality[]>>>> = {
+    easy: { 5: ['green', 'blue'], 10: ['green', 'blue', 'purple'], 15: ['green', 'blue', 'purple'], 20: ['blue', 'purple'] },
+    normal: { 5: ['green', 'blue', 'purple'], 10: ['blue', 'purple', 'orange'], 15: ['blue', 'purple', 'orange'], 20: ['purple', 'orange'] },
+    hard: { 5: ['blue', 'purple', 'orange', 'red'], 10: ['purple', 'orange', 'red'], 15: ['purple', 'orange', 'red'], 20: ['orange', 'red'] },
   }
-  const differentPlayers = [
-    rollBossWeaponDrops({ matchSeed: 'same', playerId: 'p1', bossWave: 20, bossKillSequence: 4, activatedGeneralIds: ['houyi'], discoveredGeneralIds: ['houyi'], unlockedWeaponIds: [] }),
-    rollBossWeaponDrops({ matchSeed: 'same', playerId: 'p2', bossWave: 20, bossKillSequence: 4, activatedGeneralIds: ['houyi'], discoveredGeneralIds: ['houyi'], unlockedWeaponIds: [] }),
-  ]
-  assert.notDeepEqual(differentPlayers[0], differentPlayers[1])
-  for (let sequence = 0; sequence < 50; sequence += 1) {
-    const drops = rollBossWeaponDrops({ matchSeed: 'eligibility', playerId: 'p', bossWave: 20, bossKillSequence: sequence, activatedGeneralIds: ['houyi'], discoveredGeneralIds: [], unlockedWeaponIds: [] })
-    for (const drop of drops) {
-      const exclusiveGeneralId = getWeaponDefinition(drop.weaponId)?.compatibility.exclusiveGeneralId
-      assert.ok(!exclusiveGeneralId || exclusiveGeneralId === 'houyi')
+  assert.deepEqual(WAVE_MILESTONE_DROP_TABLE.easy[5].weights, [['green', 8000], ['blue', 2000]])
+  assert.deepEqual(WAVE_MILESTONE_DROP_TABLE.normal[20].weights, [['purple', 4500], ['orange', 5500]])
+  assert.deepEqual(WAVE_MILESTONE_DROP_TABLE.hard[15].weights, [['purple', 2000], ['orange', 5000], ['red', 3000]])
+  for (const difficulty of ['easy', 'normal', 'hard'] as const) {
+    for (const wave of [5, 10, 15, 20] as const) {
+      const configuredQualities = new Set(WAVE_MILESTONE_DROP_TABLE[difficulty][wave].weights.map(([quality]) => quality))
+      assert.equal(WAVE_MILESTONE_DROP_TABLE[difficulty][wave].weights.reduce((sum, [, weight]) => sum + weight, 0), 10000)
+      const observedQualities = new Set<WeaponQuality>()
+      for (let seedIndex = 0; seedIndex < 500; seedIndex += 1) {
+        const input = {
+          matchSeed: `match-seed-${seedIndex}`, stageId: 'flower_fruit_mountain_v1', levelId: 1,
+          difficulty, playerId: 'p1', milestone: wave,
+          activatedGeneralIds: ['houyi'], discoveredGeneralIds: ['houyi'],
+          weaponState: { fragmentBalances: {}, unlockedWeaponIds: [] },
+        }
+        const first = rollWaveMilestoneWeaponDrops(input)
+        assert.deepEqual(rollWaveMilestoneWeaponDrops(input), first)
+        assert.equal(first.length, wave === 20 ? 2 : 1)
+        for (const drop of first) {
+          observedQualities.add(drop.quality)
+          assert.ok(allowedQualities[difficulty][wave].includes(drop.quality))
+          assert.equal(getWeaponDefinition(drop.weaponId)?.compatibility.exclusiveGeneralId, undefined)
+        }
+      }
+      assert.deepEqual(observedQualities, configuredQualities)
     }
   }
-}
 
-const BOSS_QUALITIES: Readonly<Record<5 | 10 | 15 | 20, readonly WeaponQuality[]>> = {
-  5: ['green', 'blue'], 10: ['green', 'blue', 'purple'], 15: ['blue', 'purple', 'orange', 'red'], 20: ['purple', 'orange', 'red'],
+  // 旧函数保留兼容，但语义与新版简单难度波次节点一致。
+  const legacy = { matchSeed: 'legacy', playerId: 'p1', bossWave: 20 as const, bossKillSequence: 4, activatedGeneralIds: ['houyi'], discoveredGeneralIds: ['houyi'], unlockedWeaponIds: [] }
+  assert.deepEqual(rollBossWeaponDrops(legacy), rollBossWeaponDrops(legacy))
+
+  const guaranteed = rollHardVictoryExclusiveWeaponDrop({
+    matchSeed: 'hard-win', stageId: 'flower_fruit_mountain_v1', levelId: 1, playerId: 'p1',
+    activatedGeneralIds: ['houyi'], discoveredGeneralIds: ['houyi'],
+    weaponState: { fragmentBalances: {}, unlockedWeaponIds: [] },
+  })
+  assert.equal(guaranteed.quality, 'red')
+  assert.equal(guaranteed.amount, 1)
+  assert.equal(getWeaponDefinition(guaranteed.weaponId)?.compatibility.exclusiveGeneralId, 'houyi')
 }
 
 const checkShop = (): void => {
@@ -171,7 +197,7 @@ export function runWeaponV1SmokeChecks(): { weaponCount: number, exclusiveCount:
   checkLoadoutsAndSnapshot()
   checkDrops()
   checkShop()
-  return { weaponCount: WEAPON_CATALOG.length, exclusiveCount: EXCLUSIVE_WEAPONS.length, checks: ['catalog', 'craft-idempotency', 'loadouts-snapshot', 'boss-drops', 'shop-commerce'] }
+  return { weaponCount: WEAPON_CATALOG.length, exclusiveCount: EXCLUSIVE_WEAPONS.length, checks: ['catalog', 'craft-idempotency', 'loadouts-snapshot', 'wave-milestone-drops', 'shop-commerce'] }
 }
 
 if (require.main === module) process.stdout.write(`${JSON.stringify(runWeaponV1SmokeChecks())}\n`)

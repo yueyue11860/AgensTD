@@ -4,6 +4,16 @@ import { resolveApiBaseUrl, resolveGatewayToken } from '../lib/runtime-config'
 export type ItemKind = 'active' | 'passive'
 export type WeaponQuality = 'green' | 'blue' | 'purple' | 'orange' | 'red'
 export type GeneralArchetype = 'physical' | 'magic' | 'summon' | 'control'
+export type PveDifficulty = 'easy' | 'normal' | 'hard'
+
+export interface PveStageAccess {
+  levelId: number
+  difficulty: PveDifficulty
+  stageKey: string
+  cleared: boolean
+  unlocked: boolean
+  lockedReason: string | null
+}
 
 export interface ItemCatalogEntry {
   itemId: string
@@ -79,6 +89,10 @@ export interface PlayerMetaAccount {
 
 export interface PlayerAccountData {
   account: PlayerMetaAccount
+  pveProgression: {
+    clearedStageKeys: string[]
+    stages: PveStageAccess[]
+  }
   catalogs: {
     items: ItemCatalogEntry[]
     weapons: WeaponCatalogEntry[]
@@ -206,6 +220,22 @@ function normalizeResponse(payload: unknown): PlayerAccountData | null {
   const itemLoadout = isRecord(item.loadout) ? item.loadout : {}
   const weapon = isRecord(account.weapon) ? account.weapon : isRecord(account.weapons) ? account.weapons : {}
   const catalogs = isRecord(payload.catalogs) ? payload.catalogs : {}
+  const pveProgression = isRecord(payload.pveProgression) ? payload.pveProgression : {}
+  const progressionStages = Array.isArray(pveProgression.stages) ? pveProgression.stages.flatMap((value): PveStageAccess[] => {
+    if (!isRecord(value) || typeof value.levelId !== 'number') return []
+    const difficulty = value.difficulty === 'easy' || value.difficulty === 'normal' || value.difficulty === 'hard'
+      ? value.difficulty
+      : null
+    if (!difficulty) return []
+    return [{
+      levelId: value.levelId,
+      difficulty,
+      stageKey: typeof value.stageKey === 'string' ? value.stageKey : `${difficulty}:${value.levelId}`,
+      cleared: value.cleared === true,
+      unlocked: value.unlocked === true,
+      lockedReason: typeof value.lockedReason === 'string' ? value.lockedReason : null,
+    }]
+  }) : []
   const rawEntitlements = Array.isArray(account.entitlements)
     ? account.entitlements
     : isRecord(account.entitlements)
@@ -214,6 +244,10 @@ function normalizeResponse(payload: unknown): PlayerAccountData | null {
   const entitlements = rawEntitlements.map(normalizeEntitlement).filter((entry): entry is PurchaseEntitlement => entry !== null)
 
   return {
+    pveProgression: {
+      clearedStageKeys: stringArray(pveProgression.clearedStageKeys),
+      stages: progressionStages,
+    },
     account: {
       playerId: typeof account.playerId === 'string' ? account.playerId : '',
       version: typeof account.version === 'number' ? account.version : 0,

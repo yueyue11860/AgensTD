@@ -110,6 +110,7 @@ const gateway = new SocketGateway(
   actionLimiter,
   progressStore,
   projectedTickStream,
+  accountService,
 )
 
 app.use('/api', createOAuthRouter(config, userStore))

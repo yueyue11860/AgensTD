@@ -3,7 +3,8 @@ import { Coins, Crosshair, OctagonX, RefreshCw, ShieldAlert, Skull, Sparkles, Ti
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { io, type Socket } from 'socket.io-client'
 import { GameOverOverlay } from '../components/game-over-overlay'
-import { MissionBriefingModal } from '../components/mission-briefing-modal'
+import { MissionBriefingModal, type PveStageChoice } from '../components/mission-briefing-modal'
+import { usePlayerAccount, type PveDifficulty } from '../hooks/use-player-account'
 import { cx } from '../lib/cx'
 import { LEVEL_DEFS } from '../lib/level-defs'
 import { resolveGatewayToken, resolvePlayerId, resolvePlayerKind, resolvePlayerName, resolveSocketUrl } from '../lib/runtime-config'
@@ -161,6 +162,7 @@ interface ServerDiscardedCharacterState {
 
 interface SelectedLevelInfo {
   levelId: number
+  difficulty: PveDifficulty
   label: string
   description: string
   waveCount: number
@@ -831,6 +833,7 @@ export function GamingPage() {
   const playerName = useMemo(() => resolvePlayerName() ?? playerId, [playerId])
   const playerKind = resolvePlayerKind()
   const socketRef = useRef<Socket | null>(null)
+  const playerAccount = usePlayerAccount()
   const lastItemRejectionRef = useRef<string | null>(null)
   const [gameState, setGameState] = useState<ServerDrivenGameState | null>(null)
   const [roomPhase, setRoomPhase] = useState<RoomPhase>('lobby')
@@ -843,17 +846,17 @@ export function GamingPage() {
   const [isLeaveConfirmOpen, setIsLeaveConfirmOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedLevelInfo, setSelectedLevelInfo] = useState<SelectedLevelInfo | null>(null)
-  const [pendingLevelId, setPendingLevelId] = useState<number | null>(null)
+  const [pendingStageSelection, setPendingStageSelection] = useState<PveStageChoice | null>(null)
   const [missionBriefingDismissed, setMissionBriefingDismissed] = useState(false)
   const [mySlot, setMySlot] = useState<string | null>(null)
   const [hostPlayerId, setHostPlayerId] = useState<string | null>(null)
 
   const isHost = hostPlayerId ? hostPlayerId === playerId : mySlot === 'P1'
   const isAwaitingLevelSelection = roomPhase === 'waiting_for_level' || ((roomPhase === 'lobby' || roomPhase === 'countdown') && gameState?.status === 'waiting')
-  const shouldShowMissionBriefing = !missionBriefingDismissed && pendingLevelId === null && !selectedLevelInfo && !gameState?.result?.outcome && isAwaitingLevelSelection
-  const selectedLevelPreview = selectedLevelInfo ?? (pendingLevelId !== null ? (() => {
-    const level = LEVEL_DEFS.find((candidate) => candidate.levelId === pendingLevelId)
-    return level ? { levelId: level.levelId, label: level.label, description: level.subtitle, waveCount: 0, targetClearRate: level.clearRate, minPlayers: level.minPlayers } : null
+  const shouldShowMissionBriefing = !missionBriefingDismissed && pendingStageSelection === null && !selectedLevelInfo && !gameState?.result?.outcome && isAwaitingLevelSelection
+  const selectedLevelPreview = selectedLevelInfo ?? (pendingStageSelection !== null ? (() => {
+    const level = LEVEL_DEFS.find((candidate) => candidate.levelId === pendingStageSelection.levelId)
+    return level ? { levelId: level.levelId, difficulty: pendingStageSelection.difficulty, label: level.label, description: level.subtitle, waveCount: 0, targetClearRate: level.clearRate, minPlayers: level.minPlayers } : null
   })() : null)
   const selectedPiece = gameState?.boardPieces.find((piece) => piece.entityId === selectedPieceId) ?? null
   const selectedFormation = selectedPiece?.formationId
@@ -942,9 +945,10 @@ export function GamingPage() {
     }
     const handleLevelSelected = (payload: unknown) => {
       if (!isObject(payload) || typeof payload.levelId !== 'number' || typeof payload.label !== 'string' || typeof payload.description !== 'string' || typeof payload.waveCount !== 'number' || typeof payload.targetClearRate !== 'number' || typeof payload.minPlayers !== 'number') return
+      const difficulty: PveDifficulty = payload.difficulty === 'normal' || payload.difficulty === 'hard' ? payload.difficulty : 'easy'
       setError(null)
-      setPendingLevelId(null)
-      setSelectedLevelInfo({ levelId: payload.levelId, label: payload.label, description: payload.description, waveCount: payload.waveCount, targetClearRate: payload.targetClearRate, minPlayers: payload.minPlayers })
+      setPendingStageSelection(null)
+      setSelectedLevelInfo({ levelId: payload.levelId, difficulty, label: payload.label, description: payload.description, waveCount: payload.waveCount, targetClearRate: payload.targetClearRate, minPlayers: payload.minPlayers })
     }
     const handleRoomSnapshot = (payload: unknown) => {
       if (!isRoomSnapshotPayload(payload)) return
@@ -952,7 +956,7 @@ export function GamingPage() {
       setHostPlayerId(payload.slots.find((slot) => slot.isHost && typeof slot.playerId === 'string')?.playerId ?? null)
     }
     const handleEngineError = (engineError: unknown) => {
-      setPendingLevelId(null)
+      setPendingStageSelection(null)
       setMissionBriefingDismissed(false)
       if (typeof engineError === 'string') setError(engineError)
       else if (isObject(engineError) && typeof engineError.message === 'string') setError(engineError.message)
@@ -982,7 +986,7 @@ export function GamingPage() {
   }, [gatewayToken, playerId, playerKind, playerName, roomId, socketUrl])
 
   useEffect(() => {
-    if (roomPhase === 'playing' || gameState?.status === 'running') setPendingLevelId(null)
+    if (roomPhase === 'playing' || gameState?.status === 'running') setPendingStageSelection(null)
   }, [gameState?.status, roomPhase])
 
   useEffect(() => {
@@ -1396,18 +1400,18 @@ export function GamingPage() {
     navigate(`/room/${encodeURIComponent(roomId)}`, { state: { suppressAutoResume: true } })
   }
 
-  function handleSelectLevel(levelId: number) {
+  function handleSelectLevel(selection: PveStageChoice) {
     setError(null)
-    setPendingLevelId(levelId)
+    setPendingStageSelection(selection)
     setMissionBriefingDismissed(true)
     const socket = socketRef.current
     if (!socket?.connected) {
-      setPendingLevelId(null)
+      setPendingStageSelection(null)
       setMissionBriefingDismissed(false)
       setError('WebSocket 尚未连接。')
       return
     }
-    socket.emit('SELECT_LEVEL', { levelId })
+    socket.emit('SELECT_LEVEL', selection)
   }
 
   return (
@@ -1734,7 +1738,7 @@ export function GamingPage() {
                 <p>2/3/4 字神将按配方横向连续排列自动组成；固定后可整体迁移</p>
               </div>
             </section>
-            {selectedLevelPreview ? <section className="gaming-panel-card"><p className="gaming-section-label">已选关卡</p><h2 className="mt-2 text-lg font-semibold text-white">{selectedLevelPreview.label}</h2><p className="mt-2 text-sm leading-6 text-slate-300">{selectedLevelPreview.description}</p></section> : null}
+            {selectedLevelPreview ? <section className="gaming-panel-card"><p className="gaming-section-label">已选关卡</p><h2 className="mt-2 text-lg font-semibold text-white">{selectedLevelPreview.label} · {{ easy: '简单', normal: '普通', hard: '困难' }[selectedLevelPreview.difficulty]}</h2><p className="mt-2 text-sm leading-6 text-slate-300">{selectedLevelPreview.description}</p></section> : null}
           </aside>
         </div>
       </section>
@@ -1753,8 +1757,8 @@ export function GamingPage() {
         </div>
       ) : null}
 
-      {shouldShowMissionBriefing ? <MissionBriefingModal isHost={isHost} playerKind={playerKind} onSelectLevel={handleSelectLevel} engineError={error} /> : null}
-      {gameState?.result?.outcome ? <GameOverOverlay outcome={gameState.result.outcome} currentLevelId={selectedLevelInfo?.levelId ?? null} actionLog={[]} onLeave={leaveGame} /> : null}
+      {shouldShowMissionBriefing ? <MissionBriefingModal isHost={isHost} playerKind={playerKind} stageAccess={playerAccount.data?.pveProgression.stages ?? []} progressionLoading={playerAccount.isLoading} onSelectLevel={handleSelectLevel} engineError={error ?? playerAccount.error} /> : null}
+      {gameState?.result?.outcome ? <GameOverOverlay outcome={gameState.result.outcome} currentLevelId={selectedLevelInfo?.levelId ?? null} onLeave={leaveGame} /> : null}
     </main>
   )
 }
