@@ -6,9 +6,9 @@ import { Room, RoomManager } from '../core/Room'
 import type { PerformanceTelemetry } from '../core/performance-telemetry'
 import type { PlayerIdentity } from '../domain/actions'
 import type { ServerConfig } from '../config/server-config'
-import { submitAction } from './action-submission'
+import { submitAction, submitDurablePveAction } from './action-submission'
 import { ActionRateLimiter } from './action-rate-limiter'
-import { authenticateGatewayToken, extractSocketToken, type GatewayPrincipal } from './gateway-auth'
+import { authenticateGatewayTokenAsync, extractSocketToken, type GatewayPrincipal } from './gateway-auth'
 import type { ProgressStore } from '../data/progress-store'
 import type { PlayerType } from '../domain/progress'
 import { checkPveStageUnlock } from '../core/unlock-logic'
@@ -17,12 +17,31 @@ import {
   getPveStageDefinition,
   isPveDifficulty,
   isPveStageSelection,
+  pveStageKey,
   type PveStageSelection,
 } from '../../../shared/contracts/pve-stage-config'
 import type { PlayerAccountService } from '../account-v1/service'
-import { PveRewardService } from '../pve-reward-v1'
+import { PveRewardService, PveSettlementCoordinator } from '../pve-reward-v1'
+import {
+  buildPveSettlementDetail,
+  createSettlementTelemetry,
+  ingestSettlementEvents,
+  resolveSettlementStats,
+  type PveSettlementTelemetry,
+} from '../pve-reward-v1/settlement-detail'
 import type { GameState } from '../domain/game-state'
 import { getPassiveItemDefinition } from '../item-v1'
+import { PVE_WEAPON_REWARD_TABLE_REVISION } from '../weapon-v1'
+import { PlayerReconnectRegistry, type PendingPlayerDisconnect } from './reconnect-registry'
+import type { PveCheckpointCoordinator } from '../pve-checkpoint-v1'
+import {
+  COMBAT_PRESENTATION_VERSION,
+  type CombatEventAck,
+  type CombatEventReplayRequest,
+  type GameState as FrontendGameState,
+  type GameStatePatch,
+} from '../../../shared/contracts/game'
+import { E2E_RENDERER_STRESS_MATCH, E2E_RENDERER_STRESS_ROOM, stressCombatBatch, stressFullState, stressPatch } from './e2e-renderer-stress'
 
 function readHandshakeValue(socket: Socket, key: string) {
   const queryValue = socket.handshake.query[key]
@@ -38,6 +57,9 @@ interface JoinRoomPayload {
   playerId?: string
   playerName?: string
   playerKind?: 'human' | 'agent'
+  capabilities?: {
+    combatEventBatch?: number
+  }
 }
 
 interface BuildTowerPayload {
@@ -52,12 +74,13 @@ interface RoomRuntime {
   projectedTickStream: ProjectedTickStream
   unsubscribeProjection: () => void
   unsubscribeSettlement: () => void
-  playerConnections: Map<string, number>
-  disconnectTimers: Map<string, NodeJS.Timeout>
+  reconnectRegistry: PlayerReconnectRegistry
   ownsProjectedTickStream: boolean
   rewardQueue: Promise<void>
   settledMatchIds: Set<string>
   scheduledRewardKeys: Set<string>
+  scheduledDepartures: Set<string>
+  settlementTelemetry: PveSettlementTelemetry | null
 }
 
 interface JoinedRoomContext {
@@ -74,12 +97,28 @@ interface SerializedRoomSummary {
   maxPlayers: number
   status: 'OPEN' | 'IN_MATCH' | 'DRAFTING'
   pingMs: number | null
-  slots: ReturnType<Room['getSummary']>['slots']
+  slots: Array<ReturnType<Room['getSummary']>['slots'][number] & {
+    reconnectDeadlineAt?: number
+    reconnectRemainingMs?: number
+  }>
 }
 
 const DEFAULT_ROOM_ID = 'public-1'
 const COUNTDOWN_DURATION_MS = 3000
-const PLAYER_RECONNECT_GRACE_MS = 5000
+const COMBAT_PROTOCOL_ROOM_PREFIX = '__combat-event-v1__:'
+
+function combatProtocolRoom(roomId: string) {
+  return `${COMBAT_PROTOCOL_ROOM_PREFIX}${roomId}`
+}
+
+function supportsCombatEventBatch(payload: JoinRoomPayload) {
+  return payload.capabilities?.combatEventBatch === COMBAT_PRESENTATION_VERSION
+}
+
+function detachCombatEvents<T extends FrontendGameState | GameStatePatch>(state: T): T {
+  if (!state.pve) return state
+  return { ...state, pve: { ...state.pve, recentEvents: [] } }
+}
 
 function isJoinRoomPayload(payload: unknown): payload is JoinRoomPayload {
   return typeof payload === 'object'
@@ -113,7 +152,56 @@ export class SocketGateway {
 
   private readonly roomRuntimes = new Map<string, RoomRuntime>()
 
-  private readonly pveRewardService = new PveRewardService()
+  private readonly pveRewardService: PveRewardService
+
+  private readonly settlementCoordinator: PveSettlementCoordinator | null
+
+  private roomLoopsStarted: boolean
+
+  private readonly e2eRendererStressTimers = new Map<string, NodeJS.Timeout>()
+
+  setE2eHostLoopInterval(roomId: string, playerId: string, requestedIntervalMs: number) {
+    if (!this.config.pveE2eEnabled || process.env.NODE_ENV === 'production') {
+      return { ok: false as const, code: 'PVE_E2E_DISABLED' }
+    }
+    const room = this.roomManager.getRoom(roomId)
+    if (!room) return { ok: false as const, code: 'ROOM_NOT_FOUND' }
+    if (!room.getPlayerSlot(playerId)) return { ok: false as const, code: 'ROOM_ACCESS_DENIED' }
+    if (!Number.isFinite(requestedIntervalMs)) return { ok: false as const, code: 'INVALID_INTERVAL' }
+    const intervalMs = Math.max(1, Math.min(this.config.tickRateMs, Math.round(requestedIntervalMs)))
+    const runtime = this.ensureRoomRuntime(roomId)
+    runtime.loop.setIntervalMs(intervalMs)
+    return { ok: true as const, intervalMs, logicalTickRateMs: this.config.tickRateMs }
+  }
+
+  getE2eAuthoritativeState(roomId: string, playerId: string) {
+    if (!this.config.pveE2eEnabled || process.env.NODE_ENV === 'production') return null
+    const room = this.roomManager.getRoom(roomId)
+    if (!room || !room.getPlayerSlot(playerId)) return null
+    return room.engine.getStateSnapshot()
+  }
+
+  async submitE2eAction(roomId: string, principal: GatewayPrincipal, payload: unknown) {
+    if (!this.config.pveE2eEnabled || process.env.NODE_ENV === 'production') {
+      return { ok: false as const, status: 404, code: 'PVE_E2E_DISABLED' }
+    }
+    const room = this.roomManager.getRoom(roomId)
+    if (!room) return { ok: false as const, status: 404, code: 'ROOM_NOT_FOUND' }
+    if (!room.getPlayerSlot(principal.playerId)) return { ok: false as const, status: 403, code: 'ROOM_ACCESS_DENIED' }
+    try {
+      const state = room.engine.getStateSnapshot()
+      const submission = this.checkpointCoordinator && state.status === 'running' && state.pve
+        ? await submitDurablePveAction({
+            engine: room.engine, room, checkpointCoordinator: this.checkpointCoordinator,
+            limiter: this.actionLimiter, player: principal, payload,
+          })
+        : submitAction({ engine: room.engine, limiter: this.actionLimiter, player: principal, payload })
+      return submission.ok ? { ...submission, status: 202 } : submission
+    }
+    catch {
+      return { ok: false as const, status: 503, code: 'PVE_PERSISTENCE_UNAVAILABLE' }
+    }
+  }
 
   constructor(
     httpServer: HttpServer,
@@ -124,9 +212,17 @@ export class SocketGateway {
     private readonly progressStore: ProgressStore,
     private readonly defaultProjectedTickStream?: ProjectedTickStream,
     private readonly accountService?: PlayerAccountService,
+    pveRewardService = new PveRewardService(),
+    settlementCoordinator?: PveSettlementCoordinator,
+    private readonly checkpointCoordinator?: PveCheckpointCoordinator,
+    deferRoomLoops = false,
   ) {
     this.config = config
     this.roomManager = roomManager
+    this.pveRewardService = pveRewardService
+    this.settlementCoordinator = settlementCoordinator
+      ?? (accountService ? new PveSettlementCoordinator(pveRewardService.store, accountService) : null)
+    this.roomLoopsStarted = !deferRoomLoops
     this.io = new Server(httpServer, {
       cors: {
         origin: config.corsOrigin === '*' ? true : config.corsOrigin,
@@ -135,14 +231,16 @@ export class SocketGateway {
     })
 
     this.io.use((socket, next) => {
-      const principal = authenticateGatewayToken(this.config, extractSocketToken(socket))
-      if (!principal) {
-        next(new Error('Missing or invalid gateway token'))
-        return
-      }
-
-      socket.data.principal = principal
-      next()
+      void authenticateGatewayTokenAsync(this.config, extractSocketToken(socket))
+        .then((principal) => {
+          if (!principal) {
+            next(new Error('Missing or invalid gateway token'))
+            return
+          }
+          socket.data.principal = principal
+          next()
+        })
+        .catch(() => next(new Error('Authentication service unavailable')))
     })
 
     this.io.on('connection', (socket) => {
@@ -158,11 +256,17 @@ export class SocketGateway {
     this.telemetry.setGauge('socket.connections', this.io.sockets.sockets.size)
 
     socket.on('JOIN_ROOM', (payload: unknown) => {
+      const requestedRoomId = typeof payload === 'object' && payload !== null && 'roomId' in payload
+        ? (payload as { roomId?: unknown }).roomId : null
+      if (requestedRoomId === E2E_RENDERER_STRESS_ROOM) {
+        this.startE2eRendererStress(socket)
+        return
+      }
       this.handleJoinRoom(socket, payload)
     })
 
     socket.on('SEND_ACTION', (payload: unknown) => {
-      this.handleActionSubmission(socket, payload)
+      void this.handleActionSubmission(socket, payload)
     })
 
     socket.on('BUILD_TOWER', (payload: unknown) => {
@@ -181,14 +285,28 @@ export class SocketGateway {
       this.handleFullStateRequest(socket)
     })
 
+    socket.on('COMBAT_EVENT_ACK', (payload: unknown) => {
+      this.handleCombatEventAck(socket, payload)
+    })
+
+    socket.on('REQUEST_COMBAT_EVENTS', (payload: unknown) => {
+      this.handleCombatEventReplayRequest(socket, payload)
+    })
+
     socket.on('disconnect', () => {
+      const stressTimer = this.e2eRendererStressTimers.get(socket.id)
+      if (stressTimer) clearInterval(stressTimer)
+      this.e2eRendererStressTimers.delete(socket.id)
       this.leaveJoinedRoom(socket)
       this.telemetry.setGauge('socket.connections', this.io.sockets.sockets.size)
     })
   }
 
   shutdown(onClosed: () => void) {
+    for (const timer of this.e2eRendererStressTimers.values()) clearInterval(timer)
+    this.e2eRendererStressTimers.clear()
     for (const runtime of this.roomRuntimes.values()) {
+      runtime.reconnectRegistry.shutdown()
       runtime.unsubscribeProjection()
       runtime.unsubscribeSettlement()
       if (runtime.ownsProjectedTickStream) {
@@ -199,6 +317,42 @@ export class SocketGateway {
 
     this.roomRuntimes.clear()
     this.io.close(onClosed)
+  }
+
+  private startE2eRendererStress(socket: Socket) {
+    if (!this.config.pveE2eEnabled || process.env.NODE_ENV === 'production') {
+      this.emitEngineError(socket, 'NOT_FOUND', 'Renderer stress fixture is unavailable')
+      return
+    }
+    const existing = this.e2eRendererStressTimers.get(socket.id)
+    if (existing) return
+    socket.data.e2eRendererStress = true
+    socket.emit('ROOM_JOINED', { roomId: E2E_RENDERER_STRESS_ROOM, slot: 'P1', phase: 'playing', hostPlayerId: 'human-dev', reconnected: false })
+    socket.emit('ROOM_SNAPSHOT', { id: E2E_RENDERER_STRESS_ROOM, slots: [{ slotId: 'P1', playerId: 'human-dev', playerName: 'Renderer QA', connected: true, connectionState: 'connected', isHost: true }] })
+    socket.emit('ROOM_PHASE_CHANGED', { phase: 'playing' })
+    socket.emit('LEVEL_SELECTED', { levelId: 1, difficulty: 'easy', label: '渲染协议压力', description: '仅渲染与增量协议验收，不生成伤害、奖励或结算。', waveCount: 20, targetClearRate: 0, minPlayers: 1 })
+    let revision = 1; let tick = 0; let sequence = 0
+    socket.emit('TICK_UPDATE', { mode: 'full', gameState: stressFullState(tick), sentAt: Date.now(), revision, presentationVersion: 1, eventSeq: 0, eventsDetached: true })
+    const timer = setInterval(() => {
+      const baseRevision = revision; revision += 1; tick += 10; sequence += 1
+      socket.emit('TICK_UPDATE', { mode: 'patch', patch: stressPatch(tick), sentAt: Date.now(), revision, baseRevision, eventsDetached: true })
+      socket.emit('COMBAT_EVENT_BATCH', stressCombatBatch(sequence, tick))
+    }, 200)
+    this.e2eRendererStressTimers.set(socket.id, timer)
+  }
+
+  startRoomLoops(): void {
+    this.roomLoopsStarted = true
+    for (const runtime of this.roomRuntimes.values()) runtime.loop.start()
+  }
+
+  prepareRoomRuntimes(): void {
+    for (const room of this.roomManager.listRooms()) this.ensureRoomRuntime(room.id)
+  }
+
+  stopRoomLoops(): void {
+    this.roomLoopsStarted = false
+    for (const runtime of this.roomRuntimes.values()) runtime.loop.stop()
   }
 
   private handleJoinRoom(socket: Socket, payload: unknown) {
@@ -220,6 +374,7 @@ export class SocketGateway {
         return
       }
 
+      this.configureCombatProtocol(socket, nextRoomId, supportsCombatEventBatch(payload))
       this.emitJoinSnapshot(socket, runtime, slot)
       return
     }
@@ -229,56 +384,62 @@ export class SocketGateway {
     }
 
     const runtime = this.ensureRoomRuntime(nextRoomId)
-    const pendingDisconnectTimer = runtime.disconnectTimers.get(identity.playerId)
-    if (pendingDisconnectTimer) {
-      clearTimeout(pendingDisconnectTimer)
-      runtime.disconnectTimers.delete(identity.playerId)
-    }
-
     const existingSlot = runtime.room.getPlayerSlot(identity.playerId)
-    const existingConnections = runtime.playerConnections.get(identity.playerId) ?? 0
-    if (!existingSlot && existingConnections === 0 && !runtime.room.isAcceptingNewPlayers()) {
+    if (!existingSlot && !runtime.room.isAcceptingNewPlayers()) {
       this.emitEngineError(socket, 'MATCH_IN_PROGRESS', '对局构筑已锁定，只允许原玩家重连')
       return
     }
-    const assignedSlot = existingConnections > 0 || existingSlot
-      ? existingSlot
-      : runtime.room.joinPlayer(identity.playerId)
+    const assignedSlot = existingSlot ?? runtime.room.joinPlayer(identity.playerId)
 
     if (!assignedSlot) {
       this.emitEngineError(socket, 'ROOM_FULL', 'Room is full')
       return
     }
 
-    runtime.playerConnections.set(identity.playerId, existingConnections + 1)
-    runtime.room.engine.registerPlayer(identity)
+    const attachment = runtime.reconnectRegistry.attach(identity.playerId, socket.id)
+    if (!attachment.ok || !attachment.lease) {
+      this.emitEngineError(socket, 'RECONNECT_WINDOW_EXPIRED', '重连期限已过，离场结算正在处理中')
+      return
+    }
+    if (attachment.supersededSocketId) {
+      this.invalidateSupersededSocket(runtime.room.id, identity.playerId, attachment.supersededSocketId)
+    }
+    if (existingSlot) runtime.room.engine.restorePlayerConnection(identity)
+    else runtime.room.engine.registerPlayer(identity)
     socket.join(nextRoomId)
+    this.configureCombatProtocol(socket, nextRoomId, supportsCombatEventBatch(payload))
     socket.data.identity = identity
     socket.data.roomId = nextRoomId
+    socket.data.connectionGeneration = attachment.lease.generation
 
-    this.emitJoinSnapshot(socket, runtime, assignedSlot)
-    this.emitRoomSnapshot(runtime.room)
+    this.emitJoinSnapshot(socket, runtime, assignedSlot, attachment.reconnected)
+    this.emitPlayerConnectionState(runtime, identity.playerId, 'connected', null)
+    this.emitRoomSnapshot(runtime)
   }
 
-  private emitJoinSnapshot(socket: Socket, runtime: RoomRuntime, assignedSlot: string) {
+  private configureCombatProtocol(socket: Socket, roomId: string, enabled: boolean) {
+    socket.data.combatEventBatchEnabled = enabled
+    socket.data.combatEventAckSeq = 0
+    if (enabled) socket.join(combatProtocolRoom(roomId))
+    else socket.leave(combatProtocolRoom(roomId))
+  }
+
+  private emitJoinSnapshot(socket: Socket, runtime: RoomRuntime, assignedSlot: string, reconnected = false) {
 
     const joinPayload = {
       roomId: runtime.room.id,
       slot: assignedSlot,
       phase: runtime.room.getPhase(),
       hostPlayerId: runtime.room.getHostPlayerId(),
+      reconnected,
     }
 
     socket.emit('ROOM_JOINED', joinPayload)
 
-    const fullEnvelope = {
-      mode: 'full' as const,
-      gameState: runtime.projectedTickStream.getCurrentFullState({ initializeBroadcastBaseline: true }),
-      sentAt: Date.now(),
-    }
+    const fullEnvelope = this.createFullEnvelope(socket, runtime, true)
 
     socket.emit('TICK_UPDATE', fullEnvelope)
-    socket.emit('ROOM_SNAPSHOT', this.serializeRoomSummary(runtime.room))
+    socket.emit('ROOM_SNAPSHOT', this.serializeRoomSummary(runtime))
     socket.emit('ROOM_PHASE_CHANGED', { phase: runtime.room.getPhase() })
     this.recordOutbound('socket.TICK_UPDATE.full', fullEnvelope, 1)
   }
@@ -290,29 +451,91 @@ export class SocketGateway {
       return
     }
 
-    const fullEnvelope = {
-      mode: 'full' as const,
-      gameState: joinedContext.runtime.projectedTickStream.getCurrentFullState(),
-      sentAt: Date.now(),
-    }
+    const fullEnvelope = this.createFullEnvelope(socket, joinedContext.runtime)
 
     socket.emit('TICK_UPDATE', fullEnvelope)
     this.recordOutbound('socket.TICK_UPDATE.resync', fullEnvelope, 1)
   }
 
-  private handleActionSubmission(socket: Socket, payload: unknown) {
+  private createFullEnvelope(socket: Socket, runtime: RoomRuntime, initializeBroadcastBaseline = false) {
+    const fullState = runtime.projectedTickStream.getCurrentFullState({ initializeBroadcastBaseline })
+    if (!socket.data.combatEventBatchEnabled) {
+      return { mode: 'full' as const, gameState: fullState, sentAt: Date.now() }
+    }
+    const cursor = runtime.projectedTickStream.getPresentationCursor()
+    return {
+      mode: 'full' as const,
+      gameState: detachCombatEvents(fullState),
+      sentAt: Date.now(),
+      revision: fullState.tick,
+      presentationVersion: COMBAT_PRESENTATION_VERSION,
+      eventSeq: cursor.matchId === fullState.matchId ? cursor.eventSeq : 0,
+      eventsDetached: true,
+    }
+  }
+
+  private handleCombatEventAck(socket: Socket, payload: unknown) {
+    if (!socket.data.combatEventBatchEnabled || !payload || typeof payload !== 'object') return
+    const ack = payload as Partial<CombatEventAck>
+    const joinedContext = this.getJoinedContext(socket)
+    if (!joinedContext || ack.presentationVersion !== COMBAT_PRESENTATION_VERSION) return
+    const cursor = joinedContext.runtime.projectedTickStream.getPresentationCursor()
+    if (ack.matchId !== cursor.matchId || !Number.isSafeInteger(ack.ackSeq) || (ack.ackSeq as number) < 0) return
+    socket.data.combatEventAckSeq = Math.max(socket.data.combatEventAckSeq ?? 0, ack.ackSeq as number)
+  }
+
+  private handleCombatEventReplayRequest(socket: Socket, payload: unknown) {
+    if (!socket.data.combatEventBatchEnabled || !payload || typeof payload !== 'object') return
+    const request = payload as Partial<CombatEventReplayRequest>
+    const joinedContext = this.getJoinedContext(socket)
+    if (
+      !joinedContext
+      || request.presentationVersion !== COMBAT_PRESENTATION_VERSION
+      || !Number.isSafeInteger(request.fromSeq)
+      || (request.fromSeq as number) < 1
+    ) return
+    const cursor = joinedContext.runtime.projectedTickStream.getPresentationCursor()
+    if (request.matchId !== cursor.matchId) {
+      this.handleFullStateRequest(socket)
+      return
+    }
+    const batch = joinedContext.runtime.projectedTickStream.getCombatEventBatchAfter(request.fromSeq as number)
+    if (batch) {
+      socket.emit('COMBAT_EVENT_BATCH', batch)
+      this.recordOutbound('socket.COMBAT_EVENT_BATCH.replay', batch, 1)
+      return
+    }
+    socket.emit('COMBAT_EVENT_RESET', {
+      matchId: cursor.matchId,
+      presentationVersion: COMBAT_PRESENTATION_VERSION,
+      eventSeq: cursor.eventSeq,
+      reason: 'retention_gap',
+    })
+    this.handleFullStateRequest(socket)
+  }
+
+  private async handleActionSubmission(socket: Socket, payload: unknown) {
     const joinedContext = this.getJoinedContext(socket)
     if (!joinedContext) {
       this.emitEngineError(socket, 'NOT_IN_ROOM', '请先发送 JOIN_ROOM 加入房间')
       return
     }
 
-    const submission = submitAction({
-      engine: joinedContext.room.engine,
-      limiter: this.actionLimiter,
-      player: joinedContext.identity,
-      payload,
-    })
+    let submission
+    try {
+      const state = joinedContext.room.engine.getStateSnapshot()
+      submission = this.checkpointCoordinator && state.status === 'running' && state.pve
+        ? await submitDurablePveAction({
+            engine: joinedContext.room.engine, room: joinedContext.room,
+            checkpointCoordinator: this.checkpointCoordinator,
+            limiter: this.actionLimiter, player: joinedContext.identity, payload,
+          })
+        : submitAction({ engine: joinedContext.room.engine, limiter: this.actionLimiter, player: joinedContext.identity, payload })
+    }
+    catch {
+      this.emitEngineError(socket, 'PVE_PERSISTENCE_UNAVAILABLE', '权威对局持久化暂不可用，请勿重试新 requestId')
+      return
+    }
 
     if (!submission.ok) {
       this.emitEngineError(socket, submission.code, submission.message, submission.retryAfterMs)
@@ -339,7 +562,7 @@ export class SocketGateway {
       return
     }
 
-    this.handleActionSubmission(socket, {
+    void this.handleActionSubmission(socket, {
       action: 'BUILD_TOWER',
       x: payload.x,
       y: payload.y,
@@ -421,7 +644,7 @@ export class SocketGateway {
       return
     }
 
-    this.activateRoomLevel(joinedContext.room, levelConfig, selection)
+    await this.activateRoomLevel(joinedContext.room, levelConfig, selection)
   }
 
   private async beginRoomCountdown(joinedContext: JoinedRoomContext, socket: Socket) {
@@ -471,15 +694,16 @@ export class SocketGateway {
       return
     }
 
-    this.activateRoomLevel(room, levelConfig, pendingSelection)
+    void this.activateRoomLevel(room, levelConfig, pendingSelection).catch(() => undefined)
   }
 
-  private activateRoomLevel(
+  private async activateRoomLevel(
     room: Room,
     levelConfig: (typeof LEVEL_CONFIGS)[number],
     selection: PveStageSelection,
   ) {
-    room.igniteWithLevel(levelConfig.waves, selection, levelConfig.startingGold)
+    room.ignitePveV2(selection)
+    if (this.checkpointCoordinator) await this.checkpointCoordinator.attachFreshRoom(room)
 
     const levelSelectedPayload = {
       levelId: levelConfig.levelId,
@@ -525,24 +749,37 @@ export class SocketGateway {
     const projectedTickStream = usesSharedProjectedTickStream
       ? this.defaultProjectedTickStream as ProjectedTickStream
       : new ProjectedTickStream(room.engine, this.config, this.telemetry)
-    const loop = new GameLoop(room.engine, this.config.tickRateMs)
+    const loop = new GameLoop(room.engine, this.config.hostLoopIntervalMs)
     room.engine.attachPerformanceTelemetry(this.telemetry)
 
-    const runtime: RoomRuntime = {
+    let runtime!: RoomRuntime
+    const reconnectRegistry = new PlayerReconnectRegistry({
+      graceMs: this.config.disconnectGraceMs,
+      onGraceStarted: (pending) => this.handleReconnectGraceStarted(runtime, pending),
+      onExpired: (pending) => this.finalizeExpiredPlayer(runtime, pending),
+    })
+    runtime = {
       room,
       loop,
       projectedTickStream,
-      playerConnections: new Map(),
-      disconnectTimers: new Map(),
+      reconnectRegistry,
       ownsProjectedTickStream: !usesSharedProjectedTickStream,
       unsubscribeProjection: () => {},
       unsubscribeSettlement: () => {},
       rewardQueue: Promise.resolve(),
       settledMatchIds: new Set(),
       scheduledRewardKeys: new Set(),
+      scheduledDepartures: new Set(),
+      settlementTelemetry: null,
     }
 
     runtime.unsubscribeSettlement = room.engine.onTick((state) => {
+      if (state.pve) {
+        if (runtime.settlementTelemetry?.matchId !== state.matchId) {
+          runtime.settlementTelemetry = createSettlementTelemetry(state.matchId)
+        }
+        ingestSettlementEvents(runtime.settlementTelemetry, state.pve.recentEvents)
+      }
       this.schedulePveRewardWork(runtime, state)
     }, { label: 'pve-reward-settlement' })
 
@@ -556,36 +793,37 @@ export class SocketGateway {
         return
       }
 
-      if (event.shouldFullSnapshot) {
-        const checkpointEnvelope = {
-          mode: 'checkpoint' as const,
-          patch: event.broadcast.checkpoint,
-          sentAt: Date.now(),
-        }
+      const protocolRoom = combatProtocolRoom(room.id)
+      const protocolRecipientCount = this.io.sockets.adapter.rooms.get(protocolRoom)?.size ?? 0
+      const legacyRecipientCount = Math.max(0, recipientCount - protocolRecipientCount)
+      const mode = event.shouldFullSnapshot ? 'checkpoint' as const : 'patch' as const
+      const legacyPatch = event.shouldFullSnapshot ? event.broadcast.checkpoint : event.broadcast.legacyPatch
+      const protocolPatch = event.shouldFullSnapshot
+        ? detachCombatEvents(event.broadcast.checkpoint)
+        : event.broadcast.patch
+      const sentAt = Date.now()
 
-        this.io.to(room.id).emit('TICK_UPDATE', checkpointEnvelope)
-        this.recordOutbound('socket.TICK_UPDATE.checkpoint', checkpointEnvelope, recipientCount)
-
-        if (Object.keys(event.broadcast.uiUpdate).length > 0) {
-          this.io.to(room.id).emit('UI_STATE_UPDATE', event.broadcast.uiUpdate)
-          this.recordOutbound('socket.UI_STATE_UPDATE', event.broadcast.uiUpdate, recipientCount)
-        }
-
-        if (event.broadcast.noticeUpdate) {
-          this.io.to(room.id).emit('NOTICE_UPDATE', event.broadcast.noticeUpdate)
-          this.recordOutbound('socket.NOTICE_UPDATE', event.broadcast.noticeUpdate, recipientCount)
-        }
-        return
+      if (legacyRecipientCount > 0) {
+        const legacyEnvelope = { mode, patch: legacyPatch, sentAt }
+        this.io.to(room.id).except(protocolRoom).emit('TICK_UPDATE', legacyEnvelope)
+        this.recordOutbound(`socket.TICK_UPDATE.${mode}.legacy`, legacyEnvelope, legacyRecipientCount)
       }
-
-      const tickEnvelope = {
-        mode: 'patch' as const,
-        patch: event.broadcast.patch,
-        sentAt: Date.now(),
+      if (protocolRecipientCount > 0) {
+        const protocolEnvelope = {
+          mode,
+          patch: protocolPatch,
+          sentAt,
+          revision: event.broadcast.patch.tick,
+          baseRevision: event.broadcast.baseRevision,
+          eventsDetached: true,
+        }
+        this.io.to(protocolRoom).emit('TICK_UPDATE', protocolEnvelope)
+        this.recordOutbound(`socket.TICK_UPDATE.${mode}.v2`, protocolEnvelope, protocolRecipientCount)
+        if (event.broadcast.combatEventBatch) {
+          this.io.to(protocolRoom).emit('COMBAT_EVENT_BATCH', event.broadcast.combatEventBatch)
+          this.recordOutbound('socket.COMBAT_EVENT_BATCH', event.broadcast.combatEventBatch, protocolRecipientCount)
+        }
       }
-
-      this.io.to(room.id).emit('TICK_UPDATE', tickEnvelope)
-      this.recordOutbound('socket.TICK_UPDATE.patch', tickEnvelope, recipientCount)
 
       if (Object.keys(event.broadcast.uiUpdate).length > 0) {
         this.io.to(room.id).emit('UI_STATE_UPDATE', event.broadcast.uiUpdate)
@@ -598,7 +836,7 @@ export class SocketGateway {
       }
     })
 
-    loop.start()
+    if (this.roomLoopsStarted) loop.start()
     this.roomRuntimes.set(roomId, runtime)
     return runtime
   }
@@ -653,16 +891,19 @@ export class SocketGateway {
     milestone: 5 | 10 | 15 | 20,
   ) {
     if (!this.accountService) throw new Error('PLAYER_ACCOUNT_SERVICE_NOT_CONFIGURED')
+    const pve = state.pve
     const selection = runtime.room.getStageSelectionForMatch(state.matchId)
     const stage = selection ? getPveStageDefinition(selection.levelId) : null
-    const player = state.pve?.players.find(candidate => candidate.playerId === playerId)
-    if (!selection || !stage || !player || !isPveDifficulty(selection.difficulty)) {
+    const player = pve?.players.find(candidate => candidate.playerId === playerId)
+    if (!selection || !stage || !player || !pve || !isPveDifficulty(selection.difficulty)) {
       throw new Error('PVE_REWARD_CONTEXT_INCOMPLETE')
     }
     const account = await this.accountService.getOrCreate(playerId)
-    this.pveRewardService.recordWaveMilestone({
+    await this.pveRewardService.recordWaveMilestone({
       matchId: state.matchId,
       matchSeed: state.matchId,
+      combatRulesetVersion: pve.combatRulesetVersion,
+      configSnapshot: pve.configSnapshot,
       stage: { levelId: selection.levelId, stageId: stage.stageId, difficulty: selection.difficulty },
       playerId,
       milestone,
@@ -710,6 +951,8 @@ export class SocketGateway {
         const rewardContext = {
           matchId: state.matchId,
           matchSeed: state.matchId,
+          combatRulesetVersion: state.pve.combatRulesetVersion,
+          configSnapshot: state.pve.configSnapshot,
           stage: { levelId: selection.levelId, stageId: stage.stageId, difficulty: selection.difficulty },
           playerId: player.playerId,
           activatedGeneralIds: player.generalProgress.map(progress => progress.generalId),
@@ -719,17 +962,44 @@ export class SocketGateway {
             unlockedWeaponIds: account.weapon.unlockedWeaponIds,
           },
         } as const
-        this.pveRewardService.recordMatchOutcome({ ...rewardContext, officialVictory })
-        const frozenRewards = this.pveRewardService.ledger.freezePlayerRewards(state.matchId, player.playerId)
-        await runtime.room.commitPlayerSettlement({
-          requestId: `settle:${state.matchId}:${player.playerId}`,
-          matchId: state.matchId,
-          playerId: player.playerId,
+        await this.pveRewardService.recordMatchOutcome({ ...rewardContext, officialVictory })
+        const frozenRewards = await this.pveRewardService.freezePlayerRewards(state.matchId, player.playerId)
+        const rewardEvents = (await this.pveRewardService.store.listPlayerBatches(state.matchId, player.playerId))
+          .flatMap(batch => batch.events)
+        const telemetry = runtime.settlementTelemetry?.matchId === state.matchId
+          ? runtime.settlementTelemetry : createSettlementTelemetry(state.matchId)
+        const allStats = resolveSettlementStats(telemetry, state.pve.players)
+        const detail = buildPveSettlementDetail({
+          configSnapshot: state.pve.configSnapshot,
+          rewardTableRevision: PVE_WEAPON_REWARD_TABLE_REVISION,
           reason: officialVictory ? 'victory' : 'defeat',
-          highestCompletedWave: player.highestCompletedWave,
           officialVictory,
-          retainedWeaponFragments: frozenRewards.fragmentBalances,
-          stageSelection: selection,
+          highestCompletedWave: player.highestCompletedWave,
+          player,
+          allStats,
+          coverageComplete: telemetry.sawMatchStarted,
+          rewardEvents,
+          firstClear: officialVictory && !account.pveProgress.clearsByStageKey[pveStageKey(selection)],
+        })
+        if (!this.settlementCoordinator || !state.pve.configSnapshot) {
+          throw new Error('PVE_SETTLEMENT_COORDINATOR_NOT_CONFIGURED')
+        }
+        await this.settlementCoordinator.settle({
+          settlementId: `${state.matchId}:${player.playerId}`,
+          combatRulesetVersion: state.pve.combatRulesetVersion,
+          configSnapshot: state.pve.configSnapshot,
+          rewardTableRevision: PVE_WEAPON_REWARD_TABLE_REVISION,
+          detail,
+          input: {
+            requestId: `settle:${state.matchId}:${player.playerId}`,
+            matchId: state.matchId,
+            playerId: player.playerId,
+            reason: officialVictory ? 'victory' : 'defeat',
+            highestCompletedWave: player.highestCompletedWave,
+            officialVictory,
+            retainedWeaponFragments: frozenRewards.fragmentBalances,
+            stageSelection: selection,
+          },
         })
       }
       catch (error) {
@@ -740,13 +1010,14 @@ export class SocketGateway {
     runtime.settledMatchIds.add(state.matchId)
   }
 
-  private async settleDepartingPvePlayer(runtime: RoomRuntime, playerId: string) {
+  private async settleDepartingPvePlayer(runtime: RoomRuntime, playerId: string, frozenState?: GameState) {
     if (!this.accountService) return
-    const state = runtime.room.engine.getStateSnapshot()
+    const state = frozenState ?? runtime.room.engine.getStateSnapshot()
+    const pve = state.pve
     const selection = runtime.room.getStageSelectionForMatch(state.matchId)
     const stage = selection ? getPveStageDefinition(selection.levelId) : null
-    const player = state.pve?.players.find(candidate => candidate.playerId === playerId)
-    if (state.status !== 'running' || !selection || !stage || !player) return
+    const player = pve?.players.find(candidate => candidate.playerId === playerId)
+    if (state.status !== 'running' || !selection || !stage || !player || !pve) return
     const account = await this.accountService.getOrCreate(playerId)
     if (account.settlementsById[`${state.matchId}:${playerId}`]) return
     for (const milestone of [5, 10, 15, 20] as const) {
@@ -754,9 +1025,11 @@ export class SocketGateway {
         await this.recordPveMilestone(runtime, state, playerId, milestone)
       }
     }
-    this.pveRewardService.recordMatchOutcome({
+    await this.pveRewardService.recordMatchOutcome({
       matchId: state.matchId,
       matchSeed: state.matchId,
+      combatRulesetVersion: pve.combatRulesetVersion,
+      configSnapshot: pve.configSnapshot,
       stage: { levelId: selection.levelId, stageId: stage.stageId, difficulty: selection.difficulty },
       playerId,
       activatedGeneralIds: player.generalProgress.map(progress => progress.generalId),
@@ -767,16 +1040,43 @@ export class SocketGateway {
       },
       officialVictory: false,
     })
-    const frozenRewards = this.pveRewardService.ledger.freezePlayerRewards(state.matchId, playerId)
-    await runtime.room.commitPlayerSettlement({
-      requestId: `settle:${state.matchId}:${playerId}`,
-      matchId: state.matchId,
-      playerId,
+    const frozenRewards = await this.pveRewardService.freezePlayerRewards(state.matchId, playerId)
+    const rewardEvents = (await this.pveRewardService.store.listPlayerBatches(state.matchId, playerId))
+      .flatMap(batch => batch.events)
+    const telemetry = runtime.settlementTelemetry?.matchId === state.matchId
+      ? runtime.settlementTelemetry : createSettlementTelemetry(state.matchId)
+    const allStats = resolveSettlementStats(telemetry, pve.players)
+    const detail = buildPveSettlementDetail({
+      configSnapshot: pve.configSnapshot,
+      rewardTableRevision: PVE_WEAPON_REWARD_TABLE_REVISION,
       reason: 'disconnect_exit',
-      highestCompletedWave: player.highestCompletedWave,
       officialVictory: false,
-      retainedWeaponFragments: frozenRewards.fragmentBalances,
-      stageSelection: selection,
+      highestCompletedWave: player.highestCompletedWave,
+      player,
+      allStats,
+      coverageComplete: telemetry.sawMatchStarted,
+      rewardEvents,
+      firstClear: false,
+    })
+    if (!this.settlementCoordinator) {
+      throw new Error('PVE_SETTLEMENT_COORDINATOR_NOT_CONFIGURED')
+    }
+    await this.settlementCoordinator.settle({
+      settlementId: `${state.matchId}:${playerId}`,
+      combatRulesetVersion: pve.combatRulesetVersion,
+      configSnapshot: pve.configSnapshot,
+      rewardTableRevision: PVE_WEAPON_REWARD_TABLE_REVISION,
+      detail,
+      input: {
+        requestId: `settle:${state.matchId}:${playerId}`,
+        matchId: state.matchId,
+        playerId,
+        reason: 'disconnect_exit',
+        highestCompletedWave: player.highestCompletedWave,
+        officialVictory: false,
+        retainedWeaponFragments: frozenRewards.fragmentBalances,
+        stageSelection: selection,
+      },
     })
   }
 
@@ -794,39 +1094,74 @@ export class SocketGateway {
       return
     }
 
-    const activeConnectionCount = runtime.playerConnections.get(identity.playerId) ?? 0
-    if (activeConnectionCount <= 1) {
-      runtime.playerConnections.delete(identity.playerId)
-      runtime.room.engine.markPlayerDisconnected(identity.playerId)
-      this.emitRoomSnapshot(runtime.room)
-
-      const disconnectTimer = setTimeout(() => {
-        runtime.disconnectTimers.delete(identity.playerId)
-
-        if ((runtime.playerConnections.get(identity.playerId) ?? 0) > 0) {
-          return
-        }
-
-        void this.settleDepartingPvePlayer(runtime, identity.playerId)
-          .catch((error) => {
-            console.error(`PVE disconnect settlement failed for ${identity.playerId}: ${error instanceof Error ? error.message : String(error)}`)
-          })
-          .finally(() => {
-            runtime.room.leavePlayer(identity.playerId)
-            this.emitRoomSnapshot(runtime.room)
-            this.cleanupRoomIfEmpty(roomId)
-          })
-      }, PLAYER_RECONNECT_GRACE_MS)
-
-      runtime.disconnectTimers.set(identity.playerId, disconnectTimer)
-    } else {
-      runtime.playerConnections.set(identity.playerId, activeConnectionCount - 1)
-      this.emitRoomSnapshot(runtime.room)
-    }
+    const generation = typeof socket.data.connectionGeneration === 'number'
+      ? socket.data.connectionGeneration
+      : -1
+    runtime.reconnectRegistry.detach(identity.playerId, socket.id, generation)
 
     socket.leave(roomId)
+    socket.leave(combatProtocolRoom(roomId))
     delete socket.data.roomId
     delete socket.data.identity
+    delete socket.data.connectionGeneration
+    delete socket.data.combatEventBatchEnabled
+    delete socket.data.combatEventAckSeq
+  }
+
+  private handleReconnectGraceStarted(runtime: RoomRuntime, pending: PendingPlayerDisconnect) {
+    runtime.room.engine.markPlayerReconnecting(pending.playerId)
+    this.emitPlayerConnectionState(runtime, pending.playerId, 'reconnecting', pending.deadlineAt)
+    this.emitRoomSnapshot(runtime)
+  }
+
+  private finalizeExpiredPlayer(runtime: RoomRuntime, pending: PendingPlayerDisconnect) {
+    // 在宽限到期这一刻冻结结算事实，避免排队期间对局结束改变离场原因。
+    const state = runtime.room.engine.getStateSnapshot()
+    const departureKey = `${state.matchId}:${pending.playerId}`
+    if (runtime.scheduledDepartures.has(departureKey)) return
+    runtime.scheduledDepartures.add(departureKey)
+    runtime.room.engine.markPlayerDisconnected(pending.playerId)
+    this.emitPlayerConnectionState(runtime, pending.playerId, 'disconnected', null)
+    this.emitRoomSnapshot(runtime)
+
+    runtime.rewardQueue = runtime.rewardQueue
+      .then(() => this.settleDepartingPvePlayer(runtime, pending.playerId, state))
+      .catch((error) => {
+        console.error(`PVE disconnect settlement failed for ${pending.playerId}: ${error instanceof Error ? error.message : String(error)}`)
+      })
+      .finally(() => {
+        runtime.room.leavePlayer(pending.playerId)
+        runtime.reconnectRegistry.completeDeparture(pending.playerId)
+        this.emitRoomSnapshot(runtime)
+        this.cleanupRoomIfEmpty(runtime.room.id)
+      })
+  }
+
+  private invalidateSupersededSocket(roomId: string, playerId: string, socketId: string) {
+    const superseded = this.io.sockets.sockets.get(socketId)
+    if (!superseded) return
+    superseded.emit('PLAYER_CONNECTION_REPLACED', { playerId, replacementReason: 'newer_authenticated_socket' })
+    superseded.leave(roomId)
+    superseded.leave(combatProtocolRoom(roomId))
+    delete superseded.data.roomId
+    delete superseded.data.identity
+    delete superseded.data.connectionGeneration
+  }
+
+  private emitPlayerConnectionState(
+    runtime: RoomRuntime,
+    playerId: string,
+    status: 'connected' | 'reconnecting' | 'disconnected',
+    reconnectDeadlineAt: number | null,
+  ) {
+    const remainingMs = reconnectDeadlineAt === null ? 0 : Math.max(0, reconnectDeadlineAt - Date.now())
+    this.io.to(runtime.room.id).emit('PLAYER_CONNECTION_STATE', {
+      playerId,
+      status,
+      reconnectDeadlineAt,
+      reconnectRemainingMs: remainingMs,
+      graceMs: this.config.disconnectGraceMs,
+    })
   }
 
   private cleanupRoomIfEmpty(roomId: string) {
@@ -835,11 +1170,7 @@ export class SocketGateway {
       return
     }
 
-    for (const disconnectTimer of runtime.disconnectTimers.values()) {
-      clearTimeout(disconnectTimer)
-    }
-
-    runtime.disconnectTimers.clear()
+    runtime.reconnectRegistry.shutdown()
 
     runtime.unsubscribeProjection()
     runtime.unsubscribeSettlement()
@@ -860,6 +1191,12 @@ export class SocketGateway {
 
     const runtime = this.roomRuntimes.get(roomId)
     if (!runtime) {
+      return null
+    }
+    const generation = typeof socket.data.connectionGeneration === 'number'
+      ? socket.data.connectionGeneration
+      : -1
+    if (!runtime.reconnectRegistry.isCurrent(identity.playerId, socket.id, generation)) {
       return null
     }
 
@@ -896,11 +1233,11 @@ export class SocketGateway {
     const principal = socket.data.principal as GatewayPrincipal | undefined
     const requestedPlayerId = overrides?.playerId ?? readHandshakeValue(socket, 'playerId')
     const requestedPlayerName = overrides?.playerName ?? readHandshakeValue(socket, 'playerName')
-    const isOAuthSession = principal?.token.startsWith('sess_') ?? false
-    const playerId = isOAuthSession
+    const isSupabaseSession = principal?.authSource === 'supabase'
+    const playerId = isSupabaseSession
       ? principal?.playerId ?? requestedPlayerId ?? socket.id
       : requestedPlayerId ?? principal?.playerId ?? socket.id
-    const playerName = isOAuthSession
+    const playerName = isSupabaseSession
       ? principal?.playerName ?? requestedPlayerName ?? `player-${playerId.slice(0, 6)}`
       : requestedPlayerName ?? principal?.playerName ?? `player-${playerId.slice(0, 6)}`
     const playerKind = principal?.playerKind ?? overrides?.playerKind ?? (readHandshakeValue(socket, 'playerKind') === 'agent' ? 'agent' : 'human')
@@ -912,8 +1249,8 @@ export class SocketGateway {
     }
   }
 
-  private serializeRoomSummary(room: Room): SerializedRoomSummary {
-    const summary = room.getSummary()
+  private serializeRoomSummary(runtime: RoomRuntime): SerializedRoomSummary {
+    const summary = runtime.room.getSummary()
     return {
       id: summary.id,
       name: summary.name,
@@ -926,12 +1263,23 @@ export class SocketGateway {
           ? 'DRAFTING'
           : 'OPEN',
       pingMs: null,
-      slots: summary.slots,
+      slots: summary.slots.map((slot) => {
+        const pending = slot.playerId ? runtime.reconnectRegistry.getPending(slot.playerId) : null
+        return pending
+          ? {
+              ...slot,
+              reconnectDeadlineAt: pending.deadlineAt,
+              reconnectRemainingMs: Math.max(0, pending.deadlineAt - Date.now()),
+            }
+          : slot
+      }),
     }
   }
 
-  private emitRoomSnapshot(room: Room) {
-    this.io.to(room.id).emit('ROOM_SNAPSHOT', this.serializeRoomSummary(room))
+  private emitRoomSnapshot(value: Room | RoomRuntime) {
+    const runtime = 'room' in value ? value : this.roomRuntimes.get(value.id)
+    if (!runtime) return
+    this.io.to(runtime.room.id).emit('ROOM_SNAPSHOT', this.serializeRoomSummary(runtime))
   }
 
   private emitEngineError(socket: Socket, code: string, message: string, retryAfterMs?: number) {

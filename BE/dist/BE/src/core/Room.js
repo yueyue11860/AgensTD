@@ -177,6 +177,7 @@ class Room {
                     playerId,
                     playerName: player?.name ?? null,
                     connected: player?.connectionStatus === 'connected',
+                    connectionState: player?.connectionStatus ?? 'disconnected',
                     isHost: playerId !== null && playerId === this.hostPlayerId,
                 };
             }),
@@ -223,15 +224,12 @@ class Room {
         }, 3000);
         return 'ok';
     }
-    /**
-     * 校验通过后点火引擎：加载关卡波次配置并启动刷怪。
-     * 应由 SocketGateway 在所有校验通过后调用。
-     */
-    igniteWithLevel(waves, selection, startingGold) {
+    /** 校验通过后以权威 PVE V2 关卡选择点火；不接受 legacy waves/startingGold。 */
+    ignitePveV2(selection) {
         this.pendingStageSelection = null;
         this.activeStageSelection = structuredClone(selection);
         this.phase = 'playing';
-        this.engine.ignite(waves, startingGold, selection.levelId, selection.difficulty);
+        this.engine.ignitePveV2(selection.levelId, selection.difficulty);
         this.stageSelectionsByMatchId.set(this.engine.getStateSnapshot().matchId, structuredClone(selection));
     }
     getMatchBuildSnapshot(playerId) {
@@ -263,6 +261,49 @@ class Room {
     getStageSelectionForMatch(matchId) {
         const selection = this.stageSelectionsByMatchId.get(matchId);
         return selection ? structuredClone(selection) : null;
+    }
+    exportPveCheckpointPayload() {
+        const state = this.engine.getStateSnapshot();
+        if (!state.pve?.configSnapshot || state.status === 'waiting')
+            throw new Error('PVE_CHECKPOINT_MATCH_NOT_RUNNING');
+        return {
+            schemaVersion: 1,
+            roomId: this.id,
+            phase: this.phase,
+            hostPlayerId: this.hostPlayerId,
+            slotAssignments: [...this.slotAssignments.entries()],
+            pendingStageSelection: this.pendingStageSelection ? structuredClone(this.pendingStageSelection) : null,
+            activeStageSelection: this.activeStageSelection ? structuredClone(this.activeStageSelection) : null,
+            stageSelectionsByMatchId: [...this.stageSelectionsByMatchId.entries()].map(([matchId, selection]) => [matchId, structuredClone(selection)]),
+            matchBuildSnapshots: [...this.matchBuildSnapshots.entries()].map(([playerId, snapshot]) => [playerId, structuredClone(snapshot)]),
+            engine: this.engine.exportPveCheckpointPayload(),
+        };
+    }
+    restorePveCheckpointPayload(raw) {
+        const checkpoint = structuredClone(raw);
+        if (checkpoint.schemaVersion !== 1 || checkpoint.roomId !== this.id || checkpoint.phase !== 'playing') {
+            throw new Error('PVE_ROOM_CHECKPOINT_INVALID');
+        }
+        if (this.countdownTimer)
+            clearTimeout(this.countdownTimer);
+        this.countdownTimer = null;
+        this.countdownPreparing = false;
+        this.phase = 'playing';
+        this.hostPlayerId = checkpoint.hostPlayerId;
+        this.slotAssignments.clear();
+        for (const [slot, playerId] of checkpoint.slotAssignments)
+            this.slotAssignments.set(slot, playerId);
+        this.pendingStageSelection = checkpoint.pendingStageSelection ? structuredClone(checkpoint.pendingStageSelection) : null;
+        this.activeStageSelection = checkpoint.activeStageSelection ? structuredClone(checkpoint.activeStageSelection) : null;
+        this.stageSelectionsByMatchId.clear();
+        for (const [matchId, selection] of checkpoint.stageSelectionsByMatchId) {
+            this.stageSelectionsByMatchId.set(matchId, structuredClone(selection));
+        }
+        this.matchBuildSnapshots.clear();
+        for (const [playerId, snapshot] of checkpoint.matchBuildSnapshots) {
+            this.matchBuildSnapshots.set(playerId, structuredClone(snapshot));
+        }
+        this.engine.restorePveCheckpointPayload(checkpoint.engine);
     }
     destroy() {
         this.pendingStageSelection = null;

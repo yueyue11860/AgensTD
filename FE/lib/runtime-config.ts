@@ -1,3 +1,5 @@
+import { getRuntimeAccessToken, getRuntimeAuthIdentity } from './auth-session-bridge'
+
 interface RuntimeWindow extends Window {
   __ENV__?: Record<string, string | undefined>
 }
@@ -112,19 +114,6 @@ function rewriteLoopbackUrlForLan(configuredUrl: string, runtimeWindow: RuntimeW
   }
 }
 
-function readPlayerProfile() {
-  try {
-    const userJson = localStorage.getItem('agenstd_auth_user')
-    if (!userJson) {
-      return null
-    }
-
-    return JSON.parse(userJson) as { userId?: string; name?: string }
-  } catch {
-    return null
-  }
-}
-
 export function resolveSocketUrl() {
   const runtimeWindow = getRuntimeWindow()
   if (!runtimeWindow) {
@@ -152,11 +141,9 @@ export function resolveGatewayToken() {
     return null
   }
 
-  // 优先使用 OAuth session token
-  try {
-    const sessionToken = localStorage.getItem('agenstd_session_token')
-    if (sessionToken) return sessionToken
-  } catch { /* ignore */ }
+  // 真人玩家直接使用 Supabase Auth access token。
+  const sessionToken = getRuntimeAccessToken()
+  if (sessionToken) return sessionToken
 
   const configuredToken = readUrlQueryValue('token', 'gatewayToken')
     ?? readStickyRuntimeValue('token', 'gatewayToken')
@@ -207,8 +194,7 @@ export function resolveSupabaseAnonKey() {
  * 开发模式下回退到 'human-dev'（与 BE 默认 authTokens 对齐）。
  */
 export function resolvePlayerId(): string | null {
-  // 优先使用 OAuth 用户 ID
-  const playerProfile = readPlayerProfile()
+  const playerProfile = getRuntimeAuthIdentity()
   if (playerProfile?.userId) {
     return playerProfile.userId
   }
@@ -228,7 +214,7 @@ export function resolvePlayerId(): string | null {
 }
 
 export function resolvePlayerName(): string | null {
-  const playerProfile = readPlayerProfile()
+  const playerProfile = getRuntimeAuthIdentity()
   if (playerProfile?.name) {
     return playerProfile.name
   }

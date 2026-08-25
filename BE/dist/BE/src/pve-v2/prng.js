@@ -40,5 +40,11 @@ class DeterministicPrng {
     snapshot() {
         return this.state >>> 0;
     }
+    restore(snapshot) {
+        if (!Number.isSafeInteger(snapshot) || snapshot < 0 || snapshot > 0xffffffff) {
+            throw new Error('Invalid deterministic PRNG checkpoint');
+        }
+        this.state = snapshot >>> 0;
+    }
 }
 exports.DeterministicPrng = DeterministicPrng;

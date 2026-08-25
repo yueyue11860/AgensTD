@@ -21,13 +21,17 @@ function enemy(id: string, laneOwnerPlayerId: string, laneSlot: 'P1' | 'P2', kin
     laneSlot,
     currentHp: hp,
     maxHp: 100,
+    xMilli: 14500,
+    yMilli: 14500,
     lifecycle: 'alive',
   }
 }
 
 function eventSink() {
-  const events: Array<{ type: PveRuntimeEvent['type']; data: PveRuntimeEvent['data'] }> = []
-  return { events, emit: (type: PveRuntimeEvent['type'], data: PveRuntimeEvent['data']) => events.push({ type, data }) }
+  const events: Array<{ type: PveRuntimeEvent['type']; data: PveRuntimeEvent['data']
+    choreography?: Pick<PveRuntimeEvent, 'actionId' | 'targetIds' | 'geometry'> }> = []
+  return { events, emit: (type: PveRuntimeEvent['type'], data: PveRuntimeEvent['data'],
+    choreography?: Pick<PveRuntimeEvent, 'actionId' | 'targetIds' | 'geometry'>) => events.push({ type, data, choreography }) }
 }
 
 function runNodeWaveSpawn(seed: string) {
@@ -86,11 +90,11 @@ function runNodeWaveSpawn(seed: string) {
   assert.equal(snapshot.wave.lanes[0].cleared, true, 'Boss death is required before its lane can clear')
   assert.equal(snapshot.status, 'finished')
   assert.equal(snapshot.result?.outcome, 'victory')
-  // 10初始 + 10只普通怪×1 + W5 Boss×5 + W5路线保底25。
-  assert.equal(snapshot.players[0].rice, 50)
+  // 10初始 + 10只普通怪×1 + W5 Boss×3 + W5路线奖励4。
+  assert.equal(snapshot.players[0].rice, 27)
   assert.equal(snapshot.recentEvents.filter((entry) => entry.type === 'BOSS_DIED' && entry.data.enemyId === boss.id).length, 1)
   assert.equal(snapshot.recentEvents.filter((entry) => entry.type === 'RICE_GRANTED'
-    && entry.data.enemyId === boss.id && entry.data.amount === 5).length, 1)
+    && entry.data.enemyId === boss.id && entry.data.amount === 3).length, 1)
   return snapshot
 }
 
@@ -234,6 +238,11 @@ export function runBossRuntimeSmokeChecks() {
   guardRuntime.registerBoss(guardBoss, guardEncounter, 0, guardEvents.emit)
   guardRuntime.advance({ tick: 0, enemies: [guardBoss], emit: guardEvents.emit })
   assert.equal(guardRuntime.snapshot().instances[0].skillStates[0].lifecycle, 'warning')
+  const guardWarning = guardEvents.events.find((entry) => entry.type === 'BOSS_CAST_WARNING')
+  assert.equal(guardWarning?.choreography?.actionId,
+    `guard-boss:${String(guardWarning?.data.skillId)}:cast-1`)
+  assert.deepEqual(guardWarning?.choreography?.targetIds, ['guard-boss'])
+  assert.equal(guardWarning?.choreography?.geometry?.kind, 'circle')
   guardRuntime.advance({ tick: 8, enemies: [guardBoss], emit: guardEvents.emit })
   assert.equal(guardRuntime.snapshot().instances[0].phase, 2)
   assert.ok(guardRuntime.damageTakenRatioBps(guardBoss, [guardBoss], 8, guardEvents.emit) < 10000)

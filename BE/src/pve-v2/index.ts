@@ -1,4 +1,25 @@
 export { PVE_WAVE_PREP_DURATION_MS, PveGameRuntime } from './runtime'
+export {
+  PVE_BALANCE_CATALOG_REVISION,
+  PVE_COMBAT_RULESET_VERSION,
+  PVE_MATCH_CONFIG_SNAPSHOT_SCHEMA_VERSION,
+  PVE_STAGE_CATALOG_REVISION,
+  createPveMatchConfigSnapshot,
+} from './ruleset'
+export type { PveMatchConfigSnapshot } from './ruleset'
+export {
+  PVE_BOSS_RICE_REWARD_BY_WAVE,
+  PVE_CONTROL_XP_SHARE_CAP_BPS,
+  PVE_FULL_MATCH_BASE_GROSS_RICE,
+  PVE_ORDINARY_ENEMY_RICE_REWARD,
+  PVE_PAID_RECRUIT_SOFT_CAP_BATCHES,
+  PVE_STARTING_RICE,
+  allocatePveBaseXpByContribution,
+  resolvePveBossRiceReward,
+  resolvePveLaneClearRiceReward,
+  resolvePvePaidRecruitBaseCost,
+} from './economy'
+export type { PveXpContributionCategory, PveXpContributionIdentity } from './economy'
 export { DeterministicPrng } from './prng'
 export {
   PVE_BALANCE_LEVEL_MAX,

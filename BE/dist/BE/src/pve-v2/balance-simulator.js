@@ -6,6 +6,7 @@ exports.runPureSoldierMonteCarlo = runPureSoldierMonteCarlo;
 const catalogs_1 = require("./catalogs");
 const prng_1 = require("./prng");
 const balance_catalog_1 = require("./balance-catalog");
+const economy_1 = require("./economy");
 const CHARACTER_BRANCH_BPS = 1000;
 const OVERLOAD_GRACE_MS = 10000;
 const POPULATION_CAP = 10;
@@ -97,10 +98,11 @@ function selectBestTen(army, armor) {
 }
 function recruitWhileAffordable(prng, army, state) {
     while (true) {
-        const cost = 5 + state.recruitBatches * 2;
+        const cost = (0, economy_1.resolvePvePaidRecruitBaseCost)(state.recruitBatches);
         if (state.rice < cost)
             return;
         state.rice -= cost;
+        state.riceSpent += cost;
         const soldierTypes = [];
         for (let slot = 0; slot < 5; slot += 1) {
             if (!prng.rollBps(CHARACTER_BRANCH_BPS)) {
@@ -122,7 +124,9 @@ function recruitWhileAffordable(prng, army, state) {
 function simulatePureSoldierEconomyRun(seed, levelId = 1, difficulty = 'easy') {
     const prng = new prng_1.DeterministicPrng(seed);
     const army = createEmptyArmy();
-    const economy = { rice: 10, recruitBatches: 0 };
+    const economy = { rice: economy_1.PVE_STARTING_RICE, recruitBatches: 0, riceSpent: 0 };
+    let grossRiceEarned = economy_1.PVE_STARTING_RICE;
+    let recruitBatchesAfterWave5 = 0;
     const waves = (0, balance_catalog_1.resolvePveWaveCatalog)(levelId, difficulty).waves;
     recruitWhileAffordable(prng, army, economy);
     let highestClearedWave = 0;
@@ -131,8 +135,14 @@ function simulatePureSoldierEconomyRun(seed, levelId = 1, difficulty = 'easy') {
         if (!simulateFixedSoldierWave(wave, deployed).passesCapacityWindow)
             break;
         highestClearedWave = wave.waveNumber;
-        economy.rice += wave.countPerPlayer + 5 * wave.waveNumber;
+        const waveIncome = wave.countPerPlayer
+            + (0, economy_1.resolvePveLaneClearRiceReward)(wave.waveNumber)
+            + (0, economy_1.resolvePveBossRiceReward)(wave.waveNumber);
+        economy.rice += waveIncome;
+        grossRiceEarned += waveIncome;
         recruitWhileAffordable(prng, army, economy);
+        if (wave.waveNumber === 5)
+            recruitBatchesAfterWave5 = economy.recruitBatches;
     }
     return {
         seed,
@@ -140,6 +150,9 @@ function simulatePureSoldierEconomyRun(seed, levelId = 1, difficulty = 'easy') {
         difficulty,
         highestClearedWave,
         recruitBatches: economy.recruitBatches,
+        recruitBatchesAfterWave5,
+        grossRiceEarned,
+        riceSpent: economy.riceSpent,
         remainingRice: economy.rice,
         finalArmy: armyStacks(army),
     };
@@ -152,7 +165,8 @@ function percentile(sorted, ratio) {
 function runPureSoldierMonteCarlo(runs, levelId = 1, difficulty = 'easy', seedPrefix = 'pve-balance') {
     if (!Number.isInteger(runs) || runs < 1)
         throw new Error('runs must be a positive integer');
-    const cleared = Array.from({ length: runs }, (_, index) => (simulatePureSoldierEconomyRun(`${seedPrefix}:${index}`, levelId, difficulty).highestClearedWave)).sort((left, right) => left - right);
+    const results = Array.from({ length: runs }, (_, index) => (simulatePureSoldierEconomyRun(`${seedPrefix}:${index}`, levelId, difficulty)));
+    const cleared = results.map(result => result.highestClearedWave).sort((left, right) => left - right);
     const histogram = {};
     for (const wave of cleared)
         histogram[wave] = (histogram[wave] ?? 0) + 1;
@@ -163,6 +177,9 @@ function runPureSoldierMonteCarlo(runs, levelId = 1, difficulty = 'easy', seedPr
         medianHighestClearedWave: percentile(cleared, 0.5),
         p10HighestClearedWave: percentile(cleared, 0.1),
         p90HighestClearedWave: percentile(cleared, 0.9),
+        averageRecruitBatchesMilli: Math.floor(results.reduce((sum, result) => sum + result.recruitBatches, 0) * 1000 / runs),
+        averageRecruitBatchesAfterWave5Milli: Math.floor(results.reduce((sum, result) => sum + result.recruitBatchesAfterWave5, 0) * 1000 / runs),
+        averageRemainingRiceMilli: Math.floor(results.reduce((sum, result) => sum + result.remainingRice, 0) * 1000 / runs),
         histogram,
     };
 }

@@ -6,6 +6,7 @@ exports.getBossDefinition = getBossDefinition;
 exports.resolveBossEncounter = resolveBossEncounter;
 exports.validateBossCatalog = validateBossCatalog;
 const balance_catalog_1 = require("./balance-catalog");
+const economy_1 = require("./economy");
 exports.BOSS_CATALOG_VERSION = 'boss-catalog-v1';
 exports.BOSS_SCHEMA_VERSION = 1;
 exports.BOSS_WAVE_NUMBERS = [5, 10, 15, 20];
@@ -17,7 +18,7 @@ const BOSS_NODE_BUDGETS = Object.freeze({
         moveSpeedMilliCellsPerSecond: 800,
         controlResistanceBps: 1000,
         maxSingleControlDurationMs: 3000,
-        rice: 5,
+        rice: (0, economy_1.resolvePveBossRiceReward)(5),
         experienceMilli: 5000,
     },
     10: {
@@ -27,7 +28,7 @@ const BOSS_NODE_BUDGETS = Object.freeze({
         moveSpeedMilliCellsPerSecond: 775,
         controlResistanceBps: 2000,
         maxSingleControlDurationMs: 2500,
-        rice: 10,
+        rice: (0, economy_1.resolvePveBossRiceReward)(10),
         experienceMilli: 10000,
     },
     15: {
@@ -37,7 +38,7 @@ const BOSS_NODE_BUDGETS = Object.freeze({
         moveSpeedMilliCellsPerSecond: 750,
         controlResistanceBps: 3000,
         maxSingleControlDurationMs: 2000,
-        rice: 15,
+        rice: (0, economy_1.resolvePveBossRiceReward)(15),
         experienceMilli: 15000,
     },
     20: {
@@ -47,7 +48,7 @@ const BOSS_NODE_BUDGETS = Object.freeze({
         moveSpeedMilliCellsPerSecond: 725,
         controlResistanceBps: 4000,
         maxSingleControlDurationMs: 1500,
-        rice: 20,
+        rice: (0, economy_1.resolvePveBossRiceReward)(20),
         experienceMilli: 20000,
     },
 });

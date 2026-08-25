@@ -1,0 +1,202 @@
+{
+  "artifact": {
+    "sha256": "1bad7f670bd4f41c6156a3b117dfe4380ff153ee81280efec5369135f7fc10f7",
+    "fileCount": 42
+  },
+  "browser": "Chromium",
+  "unavailable": [
+    "WebKit browser binary",
+    "physical touch device"
+  ],
+  "viewports": [
+    {
+      "width": 390,
+      "height": 844,
+      "homeOverflow": false,
+      "consoleErrors": 0,
+      "gameOverflow": false
+    },
+    {
+      "width": 430,
+      "height": 932,
+      "homeOverflow": false,
+      "consoleErrors": 0,
+      "gameOverflow": false
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "homeOverflow": false,
+      "consoleErrors": 0,
+      "gameOverflow": false
+    },
+    {
+      "width": 1366,
+      "height": 768,
+      "homeOverflow": false,
+      "consoleErrors": 0,
+      "gameOverflow": false
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "homeOverflow": false,
+      "consoleErrors": 0,
+      "gameOverflow": false
+    }
+  ],
+  "mainChain": {
+    "deployed": true,
+    "offlineRecoveryMs": 5166,
+    "reducedMotion": true,
+    "stressWallMs": 4311,
+    "logicalTickDelta": 260,
+    "logicalDurationMs": 26000,
+    "accelerationRatio": 6.031083275342148,
+    "accelerationControl": {
+      "ok": true,
+      "intervalMs": 20,
+      "logicalTickRateMs": 100
+    },
+    "initialUiBuildActions": 1,
+    "initialRestBuildActions": 5,
+    "initialAuthority": {
+      "tick": 166,
+      "wave": 1,
+      "enemies": 3,
+      "overloadTicks": 0,
+      "overloadCountdownSec": 0,
+      "enemyCapacity": 10,
+      "rice": 5,
+      "nextRecruitCost": 5,
+      "boardPieces": 5,
+      "trayPieces": 3,
+      "outcome": null
+    },
+    "finalAuthority": {
+      "tick": 426,
+      "wave": 2,
+      "enemies": 13,
+      "overloadTicks": 100,
+      "overloadCountdownSec": 0,
+      "enemyCapacity": 10,
+      "rice": 0,
+      "nextRecruitCost": 6,
+      "boardPieces": 8,
+      "trayPieces": 5,
+      "outcome": "defeat"
+    },
+    "authorityTimeline": [
+      {
+        "wallMs": 1045,
+        "tick": 274,
+        "wave": 1,
+        "enemies": 8,
+        "overloadTicks": 0,
+        "overloadCountdownSec": 0,
+        "enemyCapacity": 10,
+        "rice": 5,
+        "nextRecruitCost": 5,
+        "boardPieces": 6,
+        "trayPieces": 2,
+        "outcome": null
+      },
+      {
+        "wallMs": 3341,
+        "tick": 380,
+        "wave": 2,
+        "enemies": 11,
+        "overloadTicks": 62,
+        "overloadCountdownSec": 4,
+        "enemyCapacity": 10,
+        "rice": 5,
+        "nextRecruitCost": 5,
+        "boardPieces": 8,
+        "trayPieces": 0,
+        "outcome": null
+      }
+    ],
+    "acceptedBuildActions": 10,
+    "peak": {
+      "seenEnemies": 13,
+      "activeEnemies": 13,
+      "activeVfx": 1,
+      "pooledVfx": 1,
+      "display": 15,
+      "dom": 298,
+      "heap": 95065552
+    },
+    "realtime": {
+      "websocketFrames": 419,
+      "websocketBytes": 1279080,
+      "combatBatchFrames": 31
+    },
+    "settlementVisible": true
+  },
+  "performance": [
+    {
+      "label": "post-deploy",
+      "fps": 25.1,
+      "frameP95Ms": 42.399999999999636,
+      "longTaskCount": 0,
+      "longTaskDurationMs": 0,
+      "domNodes": 248,
+      "overflow": false,
+      "vfx": {
+        "active": 0,
+        "pooled": 1,
+        "display": 15,
+        "enemies": 3,
+        "seenEnemies": 3
+      },
+      "jsHeapUsedBytes": 51272876,
+      "networkEvents": 50
+    },
+    {
+      "label": "stress-end",
+      "fps": 22.2,
+      "frameP95Ms": 51.20000000000073,
+      "longTaskCount": 0,
+      "longTaskDurationMs": 0,
+      "domNodes": 348,
+      "overflow": false,
+      "vfx": {
+        "active": 0,
+        "pooled": 1,
+        "display": 15,
+        "enemies": 13,
+        "seenEnemies": 13
+      },
+      "jsHeapUsedBytes": 95085336,
+      "networkEvents": 61
+    }
+  ],
+  "thresholds": {
+    "minHeadlessSoftwareFps": 20,
+    "maxHeadlessFrameP95Ms": 55,
+    "maxLongTasks": 25,
+    "maxDomNodes": 2500,
+    "maxActiveVfx": 32,
+    "maxPooledVfx": 66,
+    "maxHeapGrowthBytes": 67108864,
+    "minSeenEnemies": 80,
+    "minCombatBatchFrames": 80,
+    "minLogicalDurationMs": 300000
+  },
+  "consoleErrors": [],
+  "expectedOfflineConsoleErrors": [
+    "WebSocket connection to 'ws://127.0.0.1:3320/socket.io/?roomId=RM-7252&playerId=human-dev&playerKind=human&EIO=4&transport=websocket' failed: Error in connection establishment: net::ERR_INTERNET_DISCONNECTED"
+  ],
+  "verdicts": {
+    "fps": true,
+    "frameP95": true,
+    "longTasks": true,
+    "dom": true,
+    "vfx": true,
+    "heap": true,
+    "stressDuration": false,
+    "enemyOrEventPressure": false,
+    "deployed": true,
+    "settlement": true
+  }
+}

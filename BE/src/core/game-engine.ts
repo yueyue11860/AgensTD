@@ -20,6 +20,7 @@ import type { MatchWeaponLoadoutSnapshot } from '../weapon-v1'
 import {
   PVE_WAVE_PREP_DURATION_MS,
   PveGameRuntime,
+  resolvePveLaneClearRiceReward,
   type PveDifficulty,
   type PveLaneRoute,
   type PveLaneSlot,
@@ -39,6 +40,7 @@ import {
 
 type TickListener = (state: GameState) => void
 type ActionListener = (action: QueuedAction) => void
+type PveActionAppliedListener = (action: QueuedAction, result: ReturnType<PveGameRuntime['handleAction']>) => void
 
 interface TickListenerOptions {
   label?: string
@@ -159,10 +161,7 @@ export function projectPveEnemySnapshot(enemy: PveEnemySnapshot, loopStartIndex:
     bossName: enemy.bossName,
     controlResistanceBps: enemy.controlResistanceBps,
     bossPhase: enemy.bossPhase,
-    activeCast: enemy.activeCast ? {
-      ...enemy.activeCast,
-      targetPlayerIds: [...enemy.activeCast.targetPlayerIds],
-    } : null,
+    activeCast: enemy.activeCast ? structuredClone(enemy.activeCast) : null,
     glyph: enemy.glyph,
     waveNumber: enemy.waveNumber,
     homeLanePlayerId: enemy.laneOwnerPlayerId,
@@ -193,6 +192,8 @@ export class GameEngine {
   private readonly tickListeners = new Map<TickListener, string>()
 
   private readonly actionListeners = new Set<ActionListener>()
+
+  private readonly pveActionAppliedListeners = new Set<PveActionAppliedListener>()
 
   private readonly enemyFactory = new EnemyFactory()
 
@@ -351,6 +352,23 @@ export class GameEngine {
     this.appendLog('warn', 'Player disconnected', { playerId })
   }
 
+  markPlayerReconnecting(playerId: string) {
+    const player = this.state.players.find((item) => item.id === playerId)
+    if (!player) return
+    player.connectionStatus = 'reconnecting'
+    this.appendLog('warn', 'Player reconnect grace started', { playerId })
+  }
+
+  restorePlayerConnection(identity: PlayerIdentity) {
+    const player = this.state.players.find((item) => item.id === identity.playerId)
+    if (!player) return false
+    player.name = identity.playerName
+    player.kind = identity.playerKind
+    player.connectionStatus = 'connected'
+    this.appendLog('info', 'Player connection restored', { playerId: identity.playerId, kind: identity.playerKind })
+    return true
+  }
+
   setPlayerCount(playerCount: number) {
     this.playerCount = normalizePlayerCount(playerCount)
 
@@ -408,10 +426,11 @@ export class GameEngine {
     action: ClientAction,
     clientRequestId: string | null = null,
     rateLimitRemaining = 0,
+    forcedActionId?: string,
   ) {
-    this.actionSequence += 1
+    if (!forcedActionId) this.actionSequence += 1
     const queuedAction: QueuedAction = {
-      id: `${player.playerId}:${this.actionSequence}`,
+      id: forcedActionId ?? `${player.playerId}:${this.actionSequence}`,
       clientRequestId,
       receivedAt: Date.now(),
       player,
@@ -483,6 +502,103 @@ export class GameEngine {
       this.actionListeners.delete(listener)
       this.performanceTelemetry?.setGauge('engine.action.listeners', this.actionListeners.size)
     }
+  }
+
+  onPveActionApplied(listener: PveActionAppliedListener) {
+    this.pveActionAppliedListeners.add(listener)
+    return () => this.pveActionAppliedListeners.delete(listener)
+  }
+
+  enqueueDurableAction(input: {
+    player: PlayerIdentity
+    action: ClientAction
+    requestId: string
+    actionId: string
+    rateLimitRemaining: number
+  }) {
+    return this.enqueueAction(input.player, input.action, input.requestId, input.rateLimitRemaining, input.actionId)
+  }
+
+  exportPveCheckpointPayload(): Record<string, unknown> {
+    if (!this.pveStarted || !this.state.pve?.configSnapshot) throw new Error('PVE_CHECKPOINT_MATCH_NOT_RUNNING')
+    const state = structuredClone(this.state)
+    state.logs = []
+    if (state.pve) state.pve.recentEvents = []
+    return {
+      schemaVersion: 1,
+      roomId: this.roomId,
+      state,
+      pveStarted: this.pveStarted,
+      matchSequence: this.matchSequence,
+      playerSlots: [...this.playerSlots.entries()].sort(([left], [right]) => left.localeCompare(right)),
+      matchBuildSnapshots: structuredClone(this.matchBuildSnapshots),
+      actionSequence: this.actionSequence,
+      actionRequestReceipts: [...this.actionRequestReceipts.entries()].sort(([left], [right]) => left.localeCompare(right)),
+      lastPveWaveNumber: this.lastPveWaveNumber,
+      pveWaveStartedAtTick: this.pveWaveStartedAtTick,
+      activeSlots: [...this.activeSlots],
+      playerCount: this.playerCount,
+      maxCapacity: this.maxCapacity,
+      overloadTicks: this.overloadTicks,
+      spawnRotation: this.spawnRotation,
+      runtime: this.pveRuntime.exportCheckpoint(),
+    }
+  }
+
+  restorePveCheckpointPayload(raw: Record<string, unknown>): void {
+    const checkpoint = structuredClone(raw) as {
+      schemaVersion: number
+      roomId: string
+      state: GameState
+      pveStarted: boolean
+      matchSequence: number
+      playerSlots: Array<[string, EngineSlotId]>
+      matchBuildSnapshots: Record<string, MatchBuildSnapshot>
+      actionSequence: number
+      actionRequestReceipts: Array<[string, { fingerprint: string, actionId: string, serverTick: number, rateLimitRemaining: number }]>
+      lastPveWaveNumber: number
+      pveWaveStartedAtTick: number
+      activeSlots: EngineSlotId[]
+      playerCount: number
+      maxCapacity: number
+      overloadTicks: number
+      spawnRotation: number
+      runtime: Record<string, unknown>
+    }
+    if (checkpoint.schemaVersion !== 1 || checkpoint.roomId !== this.roomId || !checkpoint.pveStarted
+      || !checkpoint.state?.pve?.configSnapshot) throw new Error('PVE_ENGINE_CHECKPOINT_INVALID')
+    this.actionQueue.drain()
+    this.matchSequence = checkpoint.matchSequence
+    this.matchBuildSnapshots = structuredClone(checkpoint.matchBuildSnapshots)
+    this.playerSlots.clear()
+    for (const [playerId, slot] of checkpoint.playerSlots) this.playerSlots.set(playerId, slot)
+    this.actionSequence = checkpoint.actionSequence
+    this.actionRequestReceipts.clear()
+    for (const [key, receipt] of checkpoint.actionRequestReceipts) this.actionRequestReceipts.set(key, structuredClone(receipt))
+    this.lastPveWaveNumber = checkpoint.lastPveWaveNumber
+    this.pveWaveStartedAtTick = checkpoint.pveWaveStartedAtTick
+    this.activeSlots = normalizeActiveSlots(checkpoint.activeSlots)
+    this.playerCount = checkpoint.playerCount
+    this.maxCapacity = checkpoint.maxCapacity
+    this.overloadTicks = checkpoint.overloadTicks
+    this.spawnRotation = checkpoint.spawnRotation
+    const configSnapshot = checkpoint.state.pve.configSnapshot
+    this.pveRuntime = this.createPveRuntime(configSnapshot.levelId, configSnapshot.difficulty)
+    this.pveRuntime.restoreCheckpoint(checkpoint.runtime)
+    this.pveStarted = true
+    Object.assign(this.state, structuredClone(checkpoint.state), { pendingActions: 0, logs: [] })
+    this.syncPveRuntimeState()
+  }
+
+  discardRecoveredPresentationEvents(): void {
+    this.pveRuntime.discardPresentationEvents()
+    this.syncPveRuntimeState()
+  }
+
+  applyRecoveredActions(): void {
+    this.processQueuedActions()
+    this.syncRuntimeState()
+    this.discardRecoveredPresentationEvents()
   }
 
   getStateSnapshot(): GameState {
@@ -733,6 +849,7 @@ export class GameEngine {
       actionId: queuedAction.id,
       resultCode: result.code,
     })
+    for (const listener of this.pveActionAppliedListeners) listener(structuredClone(queuedAction), structuredClone(result))
   }
 
   private toPveRuntimeAction(queuedAction: QueuedAction): PveRuntimeAction | null {
@@ -1253,6 +1370,8 @@ export class GameEngine {
 
     return {
       schemaVersion: 2,
+      combatRulesetVersion: snapshot.combatRulesetVersion,
+      configSnapshot: structuredClone(snapshot.configSnapshot),
       phase: snapshot.status,
       tick: snapshot.tick,
       players,
@@ -1285,7 +1404,7 @@ export class GameEngine {
         x: zone.xMilli / 1000,
         y: zone.yMilli / 1000,
       })),
-      recentEvents: snapshot.recentEvents.map((event) => ({ ...event, data: structuredClone(event.data) })),
+      recentEvents: snapshot.recentEvents.map((event) => structuredClone(event)),
       laneWaves: snapshot.wave.lanes.map((lane) => ({
         playerId: lane.playerId,
         slotId: lane.slot,
@@ -1300,7 +1419,7 @@ export class GameEngine {
           lane.spawnedCount >= lane.totalCount
           && (!lane.bossRequired || lane.bossSpawned)
         ),
-        clearRewardRice: snapshot.wave.number * 5,
+        clearRewardRice: resolvePveLaneClearRiceReward(snapshot.wave.number),
         clearRewardGranted: lane.clearRewardGranted,
       })),
       currentWave: snapshot.wave.number,
@@ -1600,17 +1719,8 @@ export class GameEngine {
   // 关卡点火（由 Room/SocketGateway 在玩家选择难度后调用）
   // ─────────────────────────────────────────────────────────────────────────
 
-  /**
-   * 保留旧关卡选择入口，但点火后只启动 PVE V2 运行时。
-   * 新版 PVE 关卡统一为二十波；旧 waves/startingGold 仅用于启动审计，
-   * 不再驱动旧怪物、旧塔或覆盖新版初始斋饭。
-   */
-  ignite(
-    waves: WaveConfig[],
-    startingGold?: number,
-    levelId?: number,
-    difficulty: PveDifficulty = 'easy',
-  ): void {
+  /** 新版唯一公开点火入口；只接受 PVE V2 关卡身份，不接受 legacy 波次配置。 */
+  ignitePveV2(levelId: number, difficulty: PveDifficulty): void {
     if (this.state.status !== 'waiting') {
       // 防止重复点火
       return
@@ -1633,9 +1743,9 @@ export class GameEngine {
     this.pveRuntime.start()
     this.syncPveRuntimeState()
     this.appendLog('info', 'Engine ignited with PVE V2 runtime', {
-      selectedLegacyWaveCount: waves.length,
-      ignoredLegacyStartingGold: startingGold ?? null,
-      selectedLevelId: levelId ?? null,
+      runtimeKind: 'pve-v2',
+      combatRulesetVersion: this.state.pve?.combatRulesetVersion ?? null,
+      selectedLevelId: levelId,
       selectedDifficulty: difficulty,
       runtimeMaxWaves: 20,
       playerCount: this.playerCount,

@@ -1,3 +1,5 @@
+import type { CombatTargetGeometry } from '../../../shared/contracts/game'
+
 export type PveLaneSlot = 'P1' | 'P2' | 'P3' | 'P4'
 
 export type SoldierType = 'blade' | 'spear' | 'bow' | 'cavalry'
@@ -137,6 +139,9 @@ export interface PveBossActiveCastSnapshot {
   startedAtTick: number
   executeAtTick: number
   targetPlayerIds: string[]
+  actionId?: string
+  targetIds?: string[]
+  geometry?: CombatTargetGeometry | null
 }
 
 export interface PveEnemyStatusSnapshot {
@@ -265,6 +270,7 @@ export interface PveRuntimeEvent {
     | 'BASIC_ATTACK_STARTED'
     | 'DAMAGE_APPLIED'
     | 'ENEMY_DIED'
+    | 'ASSIST_RECORDED'
     | 'RICE_GRANTED'
     | 'GENERAL_XP_SETTLEMENT_AVAILABLE'
     | 'LANE_WAVE_CLEARED'
@@ -274,10 +280,16 @@ export interface PveRuntimeEvent {
     | 'CHARACTER_DISCARDED'
     | 'WEAPON_EFFECT_UNSUPPORTED'
   data: Record<string, string | number | boolean | string[] | number[] | null>
+  actionId?: string
+  targetIds?: string[]
+  geometry?: CombatTargetGeometry | null
 }
 
 export interface PveRuntimeSnapshot {
   schemaVersion: 2
+  /** 权威规则身份与开局冻结配置；runtimeKind 永远为 pve-v2。 */
+  combatRulesetVersion: import('./ruleset').PveMatchConfigSnapshot['combatRulesetVersion']
+  configSnapshot: import('./ruleset').PveMatchConfigSnapshot
   tick: number
   tickRateMs: number
   seed: string
@@ -468,6 +480,11 @@ export interface PveGameRuntimeOptions {
   /** 可选的关卡每波字池；数量由波次数值表统一控制。 */
   waveGlyphPools?: readonly (readonly string[])[]
   eventHistoryLimit?: number
+  /**
+   * 可选的只读事件观测器，供确定性回放、数值归因与诊断使用。
+   * 回调不参与规则决策，不得修改 runtime 状态。
+   */
+  eventObserver?: (event: PveRuntimeEvent) => void
   /** 测试、回放和对局配置快照注入；未传时使用默认目录。 */
   generalCatalog?: Readonly<Record<string, GeneralDefinition>>
   /** 开局时冻结的局外道具配装；对局内不再读账户。 */

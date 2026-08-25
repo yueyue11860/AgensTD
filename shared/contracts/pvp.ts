@@ -21,12 +21,41 @@ export type PvpResultReason =
   | 'hard_timeout'
   | 'server_void'
   | 'ruleset_invalid'
+  | 'load_failed'
+  | 'load_timeout'
+  | 'load_disconnect'
 
 export type PvpParticipantResult = 'win' | 'loss' | 'draw' | 'void'
 
 export interface PvpGridPosition {
   x: number
   y: number
+}
+
+export type PvpSoldierType = 'blade' | 'spear' | 'bow' | 'cavalry'
+
+export interface PvpSoldierDefinition {
+  soldierType: PvpSoldierType
+  glyph: string
+  name: string
+  attackStyle: 'single' | 'pierce' | 'ranged' | 'splash'
+  damage: number
+  rangeMilli: number
+  attackIntervalMs: number
+  armorPierce: number
+}
+
+export interface PvpRulesSnapshot {
+  snapshotVersion: string
+  catalogVersion: string
+  recruitCost: number
+  initialRations: number
+  roundRations: number
+  populationCap: number
+  pressureCost: number
+  maxMergeLevel: number
+  deploymentSlots: Record<PvpSide, PvpGridPosition[]>
+  soldiers: Record<PvpSoldierType, PvpSoldierDefinition>
 }
 
 export type PvpMapCellKind = 'deployable' | 'path' | 'spawn_gate' | 'core' | 'neutral_boundary'
@@ -120,15 +149,22 @@ export interface PvpBoardPieceState extends PvpGridPosition {
   ownerPlayerId: string
   kind: 'soldier' | 'character'
   glyph: string
-  soldierType?: 'blade' | 'spear' | 'bow' | 'cavalry'
+  soldierType?: PvpSoldierType
   level?: 1 | 2 | 3 | 4 | 5
   formationId?: string
   generalId?: string
 }
 
+export interface PvpRecruitState {
+  unitId: string
+  soldierType: PvpSoldierType
+  glyph: string
+  level: 1
+}
+
 export interface PvpSidePrivateState {
-  tray: Array<string | null>
-  reserve: Array<string | null>
+  tray: Array<PvpRecruitState | null>
+  reserve: Array<PvpRecruitState | null>
   pendingPressure: PvpPressureQueueEntry[]
   trayRevision: number
   reserveRevision: number
@@ -143,6 +179,9 @@ export interface PvpSideState {
   disconnectedAtTick: number | null
   ready: boolean
   loaded: boolean
+  loadStatus: 'idle' | 'loading' | 'loaded' | 'failed'
+  loadFailureCode: string | null
+  loadAcknowledgedAtTick: number | null
   coreHp: number
   coreMaxHp: number
   rations: number
@@ -198,6 +237,12 @@ export interface PvpRuntimeEvent {
     | 'PRESSURE_RESOLVED'
     | 'CORE_DAMAGED'
     | 'PLAYER_CONNECTION_CHANGED'
+    | 'LOAD_ACK_UPDATED'
+    | 'PIECE_RECRUITED'
+    | 'PIECE_DEPLOYED'
+    | 'PIECE_MOVED'
+    | 'PIECE_MERGED'
+    | 'PIECE_ATTACKED'
     | 'PLAYER_SURRENDERED'
     | 'PVP_MATCH_FINISHED'
     | 'PVP_MATCH_VOIDED'
@@ -216,7 +261,17 @@ export interface PvpAuthorityState {
   mapId: string
   mapVersion: number
   routeHash: string
+  rulesSnapshot: PvpRulesSnapshot
   countdownRemainingTicks: number
+  loading: {
+    rulesetVersion: string
+    mapId: string
+    mapVersion: number
+    routeHash: string
+    assetsVersion: string
+    deadlineAtTick: number | null
+    remainingTicks: number
+  }
   round: PvpRoundState
   tribulation: PvpTribulationState
   sides: Record<PvpSide, PvpSideState | null>
@@ -247,6 +302,42 @@ export interface PvpCommandResult {
   requestId?: string
   duplicate?: boolean
   details?: Record<string, string | number | boolean | null>
+}
+
+export interface PvpLoadAckRequest {
+  requestId: string
+  rulesetVersion: string
+  mapId: string
+  mapVersion: number
+  routeHash: string
+  assetsVersion: string
+  status: 'loaded' | 'failed'
+  failureCode?: string
+}
+
+export interface PvpRecruitRequest {
+  requestId: string
+  expectedTrayRevision: number
+}
+
+export interface PvpDeployRequest extends PvpGridPosition {
+  requestId: string
+  unitId: string
+  expectedTrayRevision: number
+  expectedBoardRevision: number
+}
+
+export interface PvpMoveOrMergeRequest extends PvpGridPosition {
+  requestId: string
+  entityId: string
+  expectedBoardRevision: number
+}
+
+export interface PvpRealtimeEnvelope {
+  kind: 'full'
+  matchId: string
+  seq: number
+  state: PvpRealtimeState
 }
 
 export interface PvpQueueJoinRequest {

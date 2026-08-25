@@ -13,7 +13,12 @@ interface Envelope {
   ticket?: PvpQueueTicket
   proposal?: PvpMatchFound
   match?: { matchId: string } | null
-  state?: { phase: string }
+  state?: {
+    phase: string
+    loading: { rulesetVersion: string; mapId: string; mapVersion: number; routeHash: string; assetsVersion: string }
+    rulesSnapshot: { deploymentSlots: Record<'A' | 'B', Array<{ x: number; y: number }>> }
+    sides: Record<'A' | 'B', { playerId: string; rations: number | null; privateState: { tray: Array<{ unitId: string } | null>; reserve: Array<{ unitId: string } | null>; trayRevision: number; boardRevision: number } | null; stats: { baseKills: number } }>
+  }
   matches?: unknown[]
 }
 
@@ -80,9 +85,55 @@ async function main(): Promise<void> {
     const accepted = await accept('bob-token', 'http-accept-bob')
     const matchId = accepted.body.match?.matchId
     assert.ok(matchId)
+    const loading = (await call(`/matches/${matchId}/state`, 'alice-token')).body.state
+    assert.equal(loading?.phase, 'loading')
+    const ack = (token: string, requestId: string) => call(`/matches/${matchId}/load-ack`, token, {
+      method: 'POST', body: JSON.stringify({ requestId, status: 'loaded', ...loading?.loading }),
+    })
+    assert.equal((await ack('alice-token', 'http-load-alice')).status, 200)
+    assert.equal((await call(`/matches/${matchId}/state`, 'alice-token')).body.state?.phase, 'loading')
+    assert.equal((await ack('bob-token', 'http-load-bob')).status, 200)
     assert.equal((await call(`/matches/${matchId}/state`, 'alice-token')).body.state?.phase, 'countdown')
     for (let tick = 0; tick < 50; tick += 1) platform.tick()
     assert.equal((await call(`/matches/${matchId}/state`, 'alice-token')).body.state?.phase, 'playing')
+
+    const arm = async (token: string, playerId: string) => {
+      for (let index = 0; index < 5; index += 1) {
+        const before = (await call(`/matches/${matchId}/state`, token)).body.state!
+        const side = before.sides.A.playerId === playerId ? 'A' : 'B'
+        const own = before.sides[side]
+        const recruited = await call(`/matches/${matchId}/recruit`, token, {
+          method: 'POST', body: JSON.stringify({ requestId: `http-recruit-${playerId}-${index}`, expectedTrayRevision: own.privateState!.trayRevision }),
+        })
+        assert.equal(recruited.status, 200)
+        const next = (await call(`/matches/${matchId}/state`, token)).body.state!
+        const nextOwn = next.sides[side]
+        const unit = [...nextOwn.privateState!.tray, ...nextOwn.privateState!.reserve].find((candidate) => candidate && !nextOwn.privateState!.tray.slice(0, index).includes(candidate))
+          ?? [...nextOwn.privateState!.tray, ...nextOwn.privateState!.reserve].filter(Boolean).at(-1)
+        assert.ok(unit)
+        const deployed = await call(`/matches/${matchId}/deploy`, token, {
+          method: 'POST', body: JSON.stringify({ requestId: `http-deploy-${playerId}-${index}`, unitId: unit.unitId, ...next.rulesSnapshot.deploymentSlots[side][index], expectedTrayRevision: nextOwn.privateState!.trayRevision, expectedBoardRevision: nextOwn.privateState!.boardRevision }),
+        })
+        assert.equal(deployed.status, 200)
+      }
+    }
+    await arm('alice-token', 'alice-http')
+    await arm('bob-token', 'bob-http')
+    for (let tick = 0; tick < 1_500 && platform.matchState({ token: 'alice-token', playerId: 'alice-http', playerName: 'Alice HTTP', playerKind: 'human' }, matchId).sides.A!.stats.baseKills < 5; tick += 1) platform.tick()
+    assert.ok(platform.matchState({ token: 'alice-token', playerId: 'alice-http', playerName: 'Alice HTTP', playerKind: 'human' }, matchId).sides.A!.stats.baseKills >= 5)
+    assert.equal((await call(`/matches/${matchId}/pressure`, 'alice-token', { method: 'POST', body: JSON.stringify({ requestId: 'http-pressure' }) })).status, 200)
+
+    const streamController = new AbortController()
+    const stream = await fetch(`${root}/matches/${matchId}/events`, {
+      headers: { Authorization: 'Bearer alice-token', Accept: 'text/event-stream' },
+      signal: streamController.signal,
+    })
+    assert.equal(stream.status, 200)
+    assert.match(stream.headers.get('content-type') ?? '', /text\/event-stream/)
+    const firstFrame = await stream.body?.getReader().read()
+    assert.ok(firstFrame?.value)
+    assert.match(new TextDecoder().decode(firstFrame.value), /event: pvp-state/)
+    streamController.abort()
 
     const surrendered = await call(`/matches/${matchId}/surrender`, 'bob-token', {
       method: 'POST', body: JSON.stringify({ requestId: 'http-surrender', playerId: 'alice-http' }),
@@ -97,7 +148,7 @@ async function main(): Promise<void> {
     try {
       const productionStaticToken = await call('/profile', 'alice-token')
       assert.equal(productionStaticToken.status, 401)
-      assert.equal(productionStaticToken.body.code, 'OAUTH_SESSION_REQUIRED')
+      assert.equal(productionStaticToken.body.code, 'SUPABASE_SESSION_REQUIRED')
     }
     finally {
       if (previousNodeEnv === undefined) delete process.env.NODE_ENV

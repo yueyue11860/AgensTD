@@ -39,6 +39,11 @@ function intensityValue(context, value, max) {
 }
 function warning(context, telegraphMs) {
     const executeAtTick = context.tick + ticks(telegraphMs, context.tickRateMs);
+    const actionId = `${context.boss.id}:${context.state.binding.bindingId}:cast-${context.state.castCount + 1}`;
+    const targetIds = context.state.binding.pluginId === 'phase_guard_v1' ? [context.boss.id] : [];
+    const geometry = context.state.binding.pluginId === 'phase_guard_v1'
+        ? { kind: 'circle', xMilli: context.boss.xMilli, yMilli: context.boss.yMilli, radiusMilliCells: 1200 }
+        : { kind: 'point', xMilli: context.boss.xMilli, yMilli: context.boss.yMilli };
     context.state.lifecycle = 'warning';
     context.state.nextTransitionTick = executeAtTick;
     context.instance.activeCast = {
@@ -47,6 +52,9 @@ function warning(context, telegraphMs) {
         startedAtTick: context.tick,
         executeAtTick,
         targetPlayerIds: [context.instance.laneOwnerPlayerId],
+        actionId,
+        targetIds,
+        geometry,
     };
     context.emit('BOSS_CAST_WARNING', {
         bossEnemyId: context.boss.id,
@@ -57,12 +65,19 @@ function warning(context, telegraphMs) {
         pluginId: context.state.binding.pluginId,
         executeAtTick,
         targetPlayerIds: [context.instance.laneOwnerPlayerId],
-    });
+        actionId,
+        targetIds,
+    }, { actionId, targetIds, geometry });
 }
 function activate(context, durationMs) {
     context.state.lifecycle = 'active';
     context.state.castCount += 1;
     context.state.nextTransitionTick = context.tick + ticks(durationMs, context.tickRateMs);
+    const actionId = `${context.boss.id}:${context.state.binding.bindingId}:cast-${context.state.castCount}`;
+    const targetIds = context.state.binding.pluginId === 'phase_guard_v1' ? [context.boss.id] : [];
+    const geometry = context.state.binding.pluginId === 'phase_guard_v1'
+        ? { kind: 'circle', xMilli: context.boss.xMilli, yMilli: context.boss.yMilli, radiusMilliCells: 1200 }
+        : { kind: 'point', xMilli: context.boss.xMilli, yMilli: context.boss.yMilli };
     context.instance.activeCast = null;
     context.emit('BOSS_SKILL_CAST', {
         bossEnemyId: context.boss.id,
@@ -73,7 +88,9 @@ function activate(context, durationMs) {
         pluginId: context.state.binding.pluginId,
         activeUntilTick: context.state.nextTransitionTick,
         targetPlayerIds: [context.instance.laneOwnerPlayerId],
-    });
+        actionId,
+        targetIds,
+    }, { actionId, targetIds, geometry });
 }
 function endActive(context, lifecycle, nextTransitionTick) {
     context.emit('BOSS_SKILL_ENDED', {
@@ -286,6 +303,31 @@ class BossCombatRuntimeV1 {
                 })),
             })),
         };
+    }
+    exportCheckpoint() {
+        return {
+            schemaVersion: exports.BOSS_RUNTIME_SCHEMA_VERSION,
+            instances: [...this.instances.values()]
+                .sort((left, right) => left.bossEnemyId.localeCompare(right.bossEnemyId))
+                .map((instance) => structuredClone(instance)),
+        };
+    }
+    restoreCheckpoint(checkpoint) {
+        if (checkpoint.schemaVersion !== exports.BOSS_RUNTIME_SCHEMA_VERSION || !Array.isArray(checkpoint.instances)) {
+            throw new Error('Unsupported boss runtime checkpoint');
+        }
+        this.instances.clear();
+        for (const raw of checkpoint.instances) {
+            const instance = raw;
+            if (!instance?.bossEnemyId || !Array.isArray(instance.skills))
+                throw new Error('Invalid boss runtime checkpoint');
+            for (const state of instance.skills) {
+                if (!PLUGINS.has(state.binding.pluginId) || state.binding.pluginVersion !== 1) {
+                    throw new Error(`Unsupported checkpoint boss plugin: ${state.binding.pluginId}`);
+                }
+            }
+            this.instances.set(instance.bossEnemyId, structuredClone(instance));
+        }
     }
     invokePlugin(instance, state, boss, tick, emit, method, cleanupReason) {
         const plugin = PLUGINS.get(state.binding.pluginId);

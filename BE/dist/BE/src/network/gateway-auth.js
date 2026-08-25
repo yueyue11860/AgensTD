@@ -1,9 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.authenticateGatewayTokenAsync = authenticateGatewayTokenAsync;
 exports.authenticateGatewayToken = authenticateGatewayToken;
 exports.extractHttpToken = extractHttpToken;
 exports.extractSocketToken = extractSocketToken;
-const oauth_routes_1 = require("./oauth-routes");
+const supabase_auth_1 = require("../auth/supabase-auth");
 function readAuthorizationToken(authorizationHeader) {
     if (!authorizationHeader) {
         return undefined;
@@ -17,19 +18,24 @@ function readAuthorizationToken(authorizationHeader) {
 function isRecord(value) {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
-/** 尝试从 session token 解析已登录的 OAuth 用户 */
-function resolveSessionPrincipal(token) {
-    if (!token.startsWith('sess_'))
-        return null;
-    const session = (0, oauth_routes_1.getSessionByToken)(token);
-    if (!session)
-        return null;
-    return {
-        token,
-        playerId: session.user.userId,
-        playerName: session.user.name || session.user.userId,
-        playerKind: 'human',
-    };
+/** 验证静态服务 token，或由 Supabase Auth 验证真人 JWT。 */
+async function authenticateGatewayTokenAsync(config, token) {
+    const staticPrincipal = authenticateGatewayToken(config, token);
+    if (staticPrincipal || !token)
+        return staticPrincipal;
+    const identity = await (0, supabase_auth_1.getSupabaseAuthVerifier)()?.verify(token);
+    if (identity) {
+        return {
+            token,
+            playerId: identity.userId,
+            playerName: identity.name || identity.userId,
+            playerKind: 'human',
+            email: identity.email,
+            avatar: identity.avatar,
+            authSource: 'supabase',
+        };
+    }
+    return null;
 }
 function authenticateGatewayToken(config, token) {
     if (!config.authRequired) {
@@ -42,16 +48,13 @@ function authenticateGatewayToken(config, token) {
             playerId: fallback.playerId,
             playerName: fallback.playerName,
             playerKind: fallback.playerKind,
+            authSource: 'static',
         };
     }
     if (!token) {
         return null;
     }
-    // 优先检查 session token（OAuth 登录用户）
-    const sessionPrincipal = resolveSessionPrincipal(token);
-    if (sessionPrincipal)
-        return sessionPrincipal;
-    // 回退到静态 token 匹配（dev/agent token）
+    // 静态 token 只用于开发、E2E 和 agent 接入；真人使用异步 Supabase JWT 验证。
     const match = config.authTokens.find((candidate) => candidate.token === token);
     if (!match) {
         return null;
@@ -61,6 +64,7 @@ function authenticateGatewayToken(config, token) {
         playerId: match.playerId,
         playerName: match.playerName,
         playerKind: match.playerKind,
+        authSource: 'static',
     };
 }
 function extractHttpToken(request) {

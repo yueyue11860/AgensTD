@@ -1,0 +1,160 @@
+{
+  "_combat-event-stream-BBz79Ps9.js": {
+    "file": "assets/combat-event-stream-BBz79Ps9.js",
+    "name": "combat-event-stream",
+    "imports": [
+      "_react-vendor-BvK9ARaL.js"
+    ]
+  },
+  "_cx-CdqOlVAM.js": {
+    "file": "assets/cx-CdqOlVAM.js",
+    "name": "cx",
+    "imports": [
+      "_ui-vendor-4wN-b1e8.js"
+    ]
+  },
+  "_gaming-page-LLusLiCr.js": {
+    "file": "assets/gaming-page-LLusLiCr.js",
+    "name": "gaming-page",
+    "isDynamicEntry": true,
+    "imports": [
+      "index.html",
+      "_react-vendor-BvK9ARaL.js",
+      "_realtime-vendor-Ba-X_5Ya.js",
+      "_cx-CdqOlVAM.js",
+      "_ui-vendor-4wN-b1e8.js",
+      "_use-player-account-DInR6BO8.js",
+      "_combat-event-stream-BBz79Ps9.js"
+    ],
+    "dynamicImports": [
+      "components/phaser-battlefield.tsx"
+    ]
+  },
+  "_markdown-vendor-C8cmFFPF.js": {
+    "file": "assets/markdown-vendor-C8cmFFPF.js",
+    "name": "markdown-vendor",
+    "imports": [
+      "_react-vendor-BvK9ARaL.js"
+    ]
+  },
+  "_phaser-vendor-BTGbtjln.js": {
+    "file": "assets/phaser-vendor-BTGbtjln.js",
+    "name": "phaser-vendor"
+  },
+  "_react-vendor-BvK9ARaL.js": {
+    "file": "assets/react-vendor-BvK9ARaL.js",
+    "name": "react-vendor"
+  },
+  "_realtime-vendor-Ba-X_5Ya.js": {
+    "file": "assets/realtime-vendor-Ba-X_5Ya.js",
+    "name": "realtime-vendor"
+  },
+  "_supabase-vendor-DiOMTyHL.js": {
+    "file": "assets/supabase-vendor-DiOMTyHL.js",
+    "name": "supabase-vendor"
+  },
+  "_ui-vendor-4wN-b1e8.js": {
+    "file": "assets/ui-vendor-4wN-b1e8.js",
+    "name": "ui-vendor",
+    "imports": [
+      "_react-vendor-BvK9ARaL.js"
+    ]
+  },
+  "_use-player-account-DInR6BO8.js": {
+    "file": "assets/use-player-account-DInR6BO8.js",
+    "name": "use-player-account",
+    "imports": [
+      "_react-vendor-BvK9ARaL.js",
+      "index.html"
+    ]
+  },
+  "components/phaser-battlefield.tsx": {
+    "file": "assets/phaser-battlefield-BYFI_lfk.js",
+    "name": "phaser-battlefield",
+    "src": "components/phaser-battlefield.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_react-vendor-BvK9ARaL.js",
+      "_phaser-vendor-BTGbtjln.js",
+      "_gaming-page-LLusLiCr.js",
+      "index.html",
+      "_ui-vendor-4wN-b1e8.js",
+      "_realtime-vendor-Ba-X_5Ya.js",
+      "_cx-CdqOlVAM.js",
+      "_use-player-account-DInR6BO8.js",
+      "_combat-event-stream-BBz79Ps9.js"
+    ]
+  },
+  "components/require-auth.tsx": {
+    "file": "assets/require-auth-BceJrooB.js",
+    "name": "require-auth",
+    "src": "components/require-auth.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_react-vendor-BvK9ARaL.js",
+      "index.html",
+      "_ui-vendor-4wN-b1e8.js"
+    ]
+  },
+  "index.html": {
+    "file": "assets/index-DqeRfBDV.js",
+    "name": "index",
+    "src": "index.html",
+    "isEntry": true,
+    "imports": [
+      "_react-vendor-BvK9ARaL.js",
+      "_ui-vendor-4wN-b1e8.js"
+    ],
+    "dynamicImports": [
+      "components/require-auth.tsx",
+      "pages/tower-defense-frontend-page.tsx",
+      "_gaming-page-LLusLiCr.js",
+      "pages/meta-system-page.tsx",
+      "pages/pvp-page.tsx"
+    ],
+    "css": [
+      "assets/index-D6E3dDSF.css"
+    ]
+  },
+  "pages/meta-system-page.tsx": {
+    "file": "assets/meta-system-page-CgwKy_Pb.js",
+    "name": "meta-system-page",
+    "src": "pages/meta-system-page.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_react-vendor-BvK9ARaL.js",
+      "_cx-CdqOlVAM.js",
+      "_use-player-account-DInR6BO8.js",
+      "_ui-vendor-4wN-b1e8.js",
+      "index.html"
+    ]
+  },
+  "pages/pvp-page.tsx": {
+    "file": "assets/pvp-page-xp2Sv7TB.js",
+    "name": "pvp-page",
+    "src": "pages/pvp-page.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_react-vendor-BvK9ARaL.js",
+      "index.html",
+      "_cx-CdqOlVAM.js",
+      "_ui-vendor-4wN-b1e8.js"
+    ]
+  },
+  "pages/tower-defense-frontend-page.tsx": {
+    "file": "assets/tower-defense-frontend-page-B7QQ9kSY.js",
+    "name": "tower-defense-frontend-page",
+    "src": "pages/tower-defense-frontend-page.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_react-vendor-BvK9ARaL.js",
+      "_supabase-vendor-DiOMTyHL.js",
+      "index.html",
+      "_realtime-vendor-Ba-X_5Ya.js",
+      "_combat-event-stream-BBz79Ps9.js",
+      "_cx-CdqOlVAM.js",
+      "_ui-vendor-4wN-b1e8.js",
+      "_markdown-vendor-C8cmFFPF.js"
+    ]
+  }
+}

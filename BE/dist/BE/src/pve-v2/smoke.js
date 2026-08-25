@@ -71,9 +71,8 @@ function runPveV2SmokeChecks() {
     const runtime = createPreparedRuntime('smoke-combat');
     let snapshot = runtime.snapshot();
     strict_1.default.equal(snapshot.players[0].rice, 5);
-    strict_1.default.equal(snapshot.players[0].nextRecruitCost, 7);
+    strict_1.default.equal(snapshot.players[0].nextRecruitCost, 5);
     strict_1.default.ok(snapshot.players[0].tray.some((piece) => piece?.kind === 'soldier'));
-    strict_1.default.equal(runtime.handleAction('player-1', { type: 'RECRUIT_BATCH', actionId: 'recruit-2' }).code, 'INSUFFICIENT_RICE');
     const duplicateRecruit = runtime.handleAction('player-1', { type: 'RECRUIT_BATCH', actionId: 'recruit-1' });
     strict_1.default.equal(duplicateRecruit.ok, true);
     strict_1.default.equal(runtime.snapshot().players[0].rice, 5);
@@ -107,7 +106,7 @@ function runPveV2SmokeChecks() {
     }
     snapshot = runtime.snapshot();
     strict_1.default.equal(snapshot.result?.outcome, 'victory');
-    strict_1.default.equal(snapshot.players[0].rice, 20);
+    strict_1.default.equal(snapshot.players[0].rice, 18);
     strict_1.default.deepEqual(snapshot.players[0].clearedWaves, [1]);
     const mergeRuntime = new runtime_1.PveGameRuntime({ seed: 'smoke-merge', characterTokens: {} });
     strict_1.default.equal(mergeRuntime.registerPlayer('merge-player', 'P1').ok, true);
@@ -370,6 +369,10 @@ function runPveV2SmokeChecks() {
             break;
     }
     houyiSnapshot = houyiRuntime.snapshot();
+    const houyiActionEvent = houyiSnapshot.recentEvents.find((event) => (event.type === 'GENERAL_SKILL_CAST' || event.type === 'GENERAL_BASIC_ATTACK_STARTED'));
+    strict_1.default.ok(houyiActionEvent?.actionId?.startsWith(`${firstFormationId}:`));
+    strict_1.default.ok((houyiActionEvent?.targetIds?.length ?? 0) > 0);
+    strict_1.default.equal(houyiActionEvent?.geometry?.kind, 'polyline');
     const experienceBeforeDisband = houyiSnapshot.players[0].generalProgress[0]?.experiencePoints ?? 0;
     strict_1.default.ok(experienceBeforeDisband > 0, 'Houyi should deal a killing contribution and receive experience');
     strict_1.default.equal(houyiRuntime.handleAction('houyi-player', {
@@ -382,6 +385,16 @@ function runPveV2SmokeChecks() {
     strict_1.default.equal(houyiSnapshot.players[0].generalFormations.length, 0);
     strict_1.default.equal(houyiSnapshot.players[0].populationUsed, 0);
     strict_1.default.equal(houyiSnapshot.players[0].generalProgress[0]?.experiencePoints, experienceBeforeDisband);
+    const yangjianRuntime = createFormedGeneralRuntime(catalog_1.GENERAL_CATALOG.yangjian, 'yangjian-choreography');
+    strict_1.default.equal(yangjianRuntime.start().ok, true);
+    let yangjianSkillEvent;
+    for (let tick = 0; tick < 300 && !yangjianSkillEvent; tick += 1) {
+        const next = yangjianRuntime.tick();
+        yangjianSkillEvent = next.recentEvents.find((event) => event.type === 'GENERAL_SKILL_CAST');
+    }
+    strict_1.default.ok(yangjianSkillEvent?.actionId?.includes('yangjian_sanjian_liangrenzhan'));
+    strict_1.default.ok((yangjianSkillEvent?.targetIds?.length ?? 0) > 0);
+    strict_1.default.equal(yangjianSkillEvent?.geometry?.kind, 'corridor');
     strict_1.default.equal(houyiRuntime.handleAction('houyi-player', {
         type: 'MOVE_BOARD_PIECE', actionId: 'reform-houyi', pieceId: yiPieceId, targetX: 11, targetY: 17,
     }).ok, true);

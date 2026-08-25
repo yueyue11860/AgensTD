@@ -7,6 +7,7 @@ exports.projectFrontendNoticeUpdate = projectFrontendNoticeUpdate;
 exports.projectFrontendUiStateUpdate = projectFrontendUiStateUpdate;
 const enemy_catalog_1 = require("../domain/enemy-catalog");
 const tower_catalog_1 = require("../domain/tower-catalog");
+const pve_state_delta_1 = require("../../../shared/contracts/pve-state-delta");
 let cachedMapCellsSource = null;
 let cachedProjectedMapCells = null;
 function areMapCellsEquivalent(left, right) {
@@ -370,8 +371,15 @@ function projectFrontendGameStatePatch(state, config, previousState) {
         wave: runtimeState.wave,
         score: runtimeState.score,
         updatedAt: runtimeState.updatedAt,
-        pve: runtimeState.pve,
     };
+    if (runtimeState.pve) {
+        if (previousState?.pve && previousState.matchId === state.matchId) {
+            patch.pvePatch = (0, pve_state_delta_1.createPveMatchStatePatch)(previousState.pve, runtimeState.pve);
+        }
+        else {
+            patch.pve = runtimeState.pve;
+        }
+    }
     if (!previousState) {
         patch.towers = runtimeState.towers;
         patch.enemies = runtimeState.enemies;

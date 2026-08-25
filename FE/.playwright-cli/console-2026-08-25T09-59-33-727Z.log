@@ -1,0 +1,51 @@
+[    2838ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[    2879ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:5174/pages/tower-defense-frontend-page.tsx?t=1787651924941:0
+[    3161ms] [ERROR] %o
+
+%s
+
+%s
+ TypeError: Failed to fetch dynamically imported module: http://127.0.0.1:5174/pages/tower-defense-frontend-page.tsx?t=1787651924941 The above error occurred in one of your React components. React will try to recreate this component tree from scratch using the error boundary you provided, RouteErrorBoundaryInner. @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:7000
+[    3161ms] [ERROR] Route rendering failed {name: TypeError} @ http://127.0.0.1:5174/components/route-boundary.tsx?t=1787651813477:35
+[   18400ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[   18726ms] [WARNING] WebSocket connection to 'ws://127.0.0.1:3000/socket.io/?token=human-dev-token&playerId=human-dev&playerName=human-dev&playerKind=human&EIO=4&transport=websocket' failed: WebSocket is closed before the connection is established. @ http://127.0.0.1:5174/node_modules/.vite/deps/socket__io-client.js?v=1fd8c596:1038
+[   31719ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[   32033ms] [WARNING] WebSocket connection to 'ws://127.0.0.1:3000/socket.io/?token=human-dev-token&playerId=human-dev&playerName=human-dev&playerKind=human&EIO=4&transport=websocket' failed: WebSocket is closed before the connection is established. @ http://127.0.0.1:5174/node_modules/.vite/deps/socket__io-client.js?v=1fd8c596:1038
+[   38236ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[   38547ms] [WARNING] WebSocket connection to 'ws://127.0.0.1:3000/socket.io/?token=human-dev-token&playerId=human-dev&playerName=human-dev&playerKind=human&EIO=4&transport=websocket' failed: WebSocket is closed before the connection is established. @ http://127.0.0.1:5174/node_modules/.vite/deps/socket__io-client.js?v=1fd8c596:1038
+[   41451ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[   41487ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:5174/pages/tower-defense-frontend-page.tsx?t=1787651924941:0
+[   41760ms] [ERROR] %o
+
+%s
+
+%s
+ TypeError: Failed to fetch dynamically imported module: http://127.0.0.1:5174/pages/tower-defense-frontend-page.tsx?t=1787651924941 The above error occurred in one of your React components. React will try to recreate this component tree from scratch using the error boundary you provided, RouteErrorBoundaryInner. @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:7000
+[   41760ms] [ERROR] Route rendering failed {name: TypeError} @ http://127.0.0.1:5174/components/route-boundary.tsx?t=1787651813477:35
+[   99463ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[   99476ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:5174/pages/tower-defense-frontend-page.tsx?t=1787652043454:0
+[   99775ms] [ERROR] %o
+
+%s
+
+%s
+ TypeError: Failed to fetch dynamically imported module: http://127.0.0.1:5174/pages/tower-defense-frontend-page.tsx?t=1787652043454 The above error occurred in one of your React components. React will try to recreate this component tree from scratch using the error boundary you provided, RouteErrorBoundaryInner. @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:7000
+[   99775ms] [ERROR] Route rendering failed {name: TypeError} @ http://127.0.0.1:5174/components/route-boundary.tsx?t=1787651813477:35
+[  170730ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[  170743ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:5174/pages/tower-defense-frontend-page.tsx?t=1787652043454:0
+[  171043ms] [ERROR] %o
+
+%s
+
+%s
+ TypeError: Failed to fetch dynamically imported module: http://127.0.0.1:5174/pages/tower-defense-frontend-page.tsx?t=1787652043454 The above error occurred in one of your React components. React will try to recreate this component tree from scratch using the error boundary you provided, RouteErrorBoundaryInner. @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:7000
+[  171043ms] [ERROR] Route rendering failed {name: TypeError} @ http://127.0.0.1:5174/components/route-boundary.tsx?t=1787651813477:35
+[  286596ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[  286615ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:5174/pages/tower-defense-frontend-page.tsx?t=1787652197602:0
+[  286908ms] [ERROR] %o
+
+%s
+
+%s
+ TypeError: Failed to fetch dynamically imported module: http://127.0.0.1:5174/pages/tower-defense-frontend-page.tsx?t=1787652197602 The above error occurred in one of your React components. React will try to recreate this component tree from scratch using the error boundary you provided, RouteErrorBoundaryInner. @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:7000
+[  286909ms] [ERROR] Route rendering failed {name: TypeError} @ http://127.0.0.1:5174/components/route-boundary.tsx?t=1787651813477:35

@@ -1,0 +1,51 @@
+- main [ref=f7e3]:
+  - generic [ref=f7e8]:
+    - generic [ref=f7e9]:
+      - button "返回主页" [ref=f7e10]
+      - button "排行榜" [ref=f7e15]
+    - generic [ref=f7e25]:
+      - generic [ref=f7e26]:
+        - generic [ref=f7e27]:
+          - generic [ref=f7e28]: 南天门 · 守关集结处
+          - heading "寻一队同道，共赴西游章回" [level=1] [ref=f7e29]
+          - paragraph [ref=f7e30]: 选择已有战旗加入，或自行立旗召集一至四位守关者。
+        - generic [ref=f7e31]:
+          - generic [ref=f7e35]: 寻找队伍
+          - textbox "输入队伍名或房号…" [ref=f7e37]
+        - generic [ref=f7e38]:
+          - button "刷新队伍" [ref=f7e39]
+          - button "立下战旗" [ref=f7e46]
+      - generic [ref=f7e49]:
+        - generic [ref=f7e50]: 房号
+        - generic [ref=f7e51]: 守关队伍
+        - generic [ref=f7e52]: 同道
+        - generic [ref=f7e53]: 灵犀
+        - generic [ref=f7e54]: 口令
+        - generic [ref=f7e55]: 军情
+        - generic [ref=f7e56]: 入队
+      - generic [ref=f7e69] [cursor=pointer]:
+        - generic [ref=f7e70]: RM-5804
+        - generic [ref=f7e71]: RM-5804
+        - generic [ref=f7e72]: 1 / 4
+        - generic [ref=f7e73]: "--"
+        - generic [ref=f7e74]: 部署中
+        - button "加入" [ref=f7e77]
+      - generic [ref=f7e60]:
+        - button "上一页" [disabled] [ref=f7e61]
+        - button "下一页" [disabled] [ref=f7e65]
+  - generic [ref=f7e79]:
+    - generic [ref=f7e80]:
+      - generic [ref=f7e81]: 立下守关战旗
+      - generic [ref=f7e82]: 为同行者建立一支西游守关队伍
+    - generic [ref=f7e84]:
+      - generic [ref=f7e85]:
+        - generic [ref=f7e86]: 队伍名 最多十二字
+        - textbox "例如：水帘洞守关队" [active] [ref=f7e88]
+      - generic [ref=f7e89]:
+        - generic [ref=f7e90]: 入队口令 可选
+        - textbox "留空则欢迎所有同道" [ref=f7e92]
+    - generic [ref=f7e94]:
+      - generic [ref=f7e95]: 战旗待命，可召集一至四位守关者。
+      - generic [ref=f7e96]:
+        - button "取消" [ref=f7e97] [cursor=pointer]
+        - button "建立队伍" [ref=f7e98] [cursor=pointer]

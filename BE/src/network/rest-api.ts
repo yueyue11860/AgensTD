@@ -6,9 +6,9 @@ import { GameEngine } from '../core/game-engine'
 import { RoomManager, type RoomSummarySnapshot } from '../core/Room'
 import type { ServerConfig } from '../config/server-config'
 import type { ReplaySummary } from '../domain/competition'
-import { submitAction } from './action-submission'
+import { submitAction, submitDurablePveAction } from './action-submission'
 import { ActionRateLimiter } from './action-rate-limiter'
-import { authenticateGatewayToken, extractHttpToken } from './gateway-auth'
+import { authenticateGatewayTokenAsync, extractHttpToken } from './gateway-auth'
 import type { CompetitionStore } from '../data/competition-store'
 import type { ProgressStore } from '../data/progress-store'
 import type { PlayerType } from '../domain/progress'
@@ -21,9 +21,11 @@ import { validateItemLoadout } from '../item-v1/account'
 import { getWeaponDefinition } from '../weapon-v1/catalog'
 import { validateWeaponLoadout } from '../weapon-v1/account'
 import { WeaponDomainError, type PlayerWeaponAccount } from '../weapon-v1/types'
+import type { PveRewardStore } from '../pve-reward-v1'
+import type { PveCheckpointCoordinator } from '../pve-checkpoint-v1'
 
 function resolvePrincipal(request: Request, config: ServerConfig) {
-  return authenticateGatewayToken(config, extractHttpToken(request))
+  return authenticateGatewayTokenAsync(config, extractHttpToken(request))
 }
 
 function rejectUnauthorized(response: Response) {
@@ -186,13 +188,15 @@ export function createRestApiRouter(
   competitionStore: CompetitionStore | null,
   progressStore: ProgressStore,
   accountService?: PlayerAccountService,
+  pveRewardStore?: PveRewardStore,
+  checkpointCoordinator?: PveCheckpointCoordinator,
 ) {
   const router = Router()
 
   // ── 局外账户 / 道具 / 武器 ───────────────────────────────────────────
 
   router.get('/account', async (request, response) => {
-    const principal = resolvePrincipal(request, config)
+    const principal = await resolvePrincipal(request, config)
     if (!principal) return rejectUnauthorized(response)
     if (!accountService) return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' })
     try {
@@ -206,7 +210,7 @@ export function createRestApiRouter(
   })
 
   router.put('/loadouts/items', async (request, response) => {
-    const principal = resolvePrincipal(request, config)
+    const principal = await resolvePrincipal(request, config)
     if (!principal) return rejectUnauthorized(response)
     if (!accountService) return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' })
     try {
@@ -285,7 +289,7 @@ export function createRestApiRouter(
   })
 
   router.put('/loadouts/weapons/:generalId', async (request, response) => {
-    const principal = resolvePrincipal(request, config)
+    const principal = await resolvePrincipal(request, config)
     if (!principal) return rejectUnauthorized(response)
     if (!accountService) return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' })
     try {
@@ -339,7 +343,7 @@ export function createRestApiRouter(
   })
 
   router.post('/weapons/:weaponId/craft', async (request, response) => {
-    const principal = resolvePrincipal(request, config)
+    const principal = await resolvePrincipal(request, config)
     if (!principal) return rejectUnauthorized(response)
     if (!accountService) return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' })
     try {
@@ -407,7 +411,7 @@ export function createRestApiRouter(
   })
 
   router.post('/shop/offers', async (request, response) => {
-    const principal = resolvePrincipal(request, config)
+    const principal = await resolvePrincipal(request, config)
     if (!principal) return rejectUnauthorized(response)
     if (!accountService) return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' })
     try {
@@ -426,7 +430,7 @@ export function createRestApiRouter(
   })
 
   router.post('/shop/purchase', async (request, response) => {
-    const principal = resolvePrincipal(request, config)
+    const principal = await resolvePrincipal(request, config)
     if (!principal) return rejectUnauthorized(response)
     if (!accountService) return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' })
     try {
@@ -449,22 +453,41 @@ export function createRestApiRouter(
   })
 
   router.get('/settlements/:matchId', async (request, response) => {
-    const principal = resolvePrincipal(request, config)
+    const principal = await resolvePrincipal(request, config)
     if (!principal) return rejectUnauthorized(response)
     if (!accountService) return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' })
     try {
+      const settlementId = `${request.params.matchId}:${principal.playerId}`
+      const outboxRecord = await pveRewardStore?.getSettlement(settlementId)
+      if (outboxRecord) {
+        return response.json({
+          ok: true,
+          settlementId,
+          status: outboxRecord.status,
+          attempts: outboxRecord.attempts,
+          lastError: outboxRecord.lastError,
+          settlement: outboxRecord.settlement
+            ? { ...outboxRecord.settlement, ...(outboxRecord.detail ? { detail: outboxRecord.detail } : {}) }
+            : null,
+          ...(outboxRecord.detail ? { detail: outboxRecord.detail } : {}),
+          combatRulesetVersion: outboxRecord.combatRulesetVersion,
+          configSnapshot: outboxRecord.configSnapshot,
+          rewardTableRevision: outboxRecord.rewardTableRevision,
+          updatedAt: outboxRecord.updatedAt,
+        })
+      }
       const account = await accountService.getOrCreate(principal.playerId)
-      const settlement = account.settlementsById[`${request.params.matchId}:${principal.playerId}`]
+      const settlement = account.settlementsById[settlementId]
       if (!settlement) return response.status(404).json({ ok: false, code: 'SETTLEMENT_NOT_FOUND' })
-      response.json({ ok: true, settlement })
+      response.json({ ok: true, settlementId, status: 'committed', attempts: 1, lastError: null, settlement })
     }
     catch (error) {
       sendAccountError(response, error)
     }
   })
 
-  router.get('/rooms', (request, response) => {
-    const principal = resolvePrincipal(request, config)
+  router.get('/rooms', async (request, response) => {
+    const principal = await resolvePrincipal(request, config)
     if (!principal) {
       rejectUnauthorized(response)
       return
@@ -477,8 +500,8 @@ export function createRestApiRouter(
     response.json({ ok: true, rooms })
   })
 
-  router.post('/rooms', (request, response) => {
-    const principal = resolvePrincipal(request, config)
+  router.post('/rooms', async (request, response) => {
+    const principal = await resolvePrincipal(request, config)
     if (!principal) {
       rejectUnauthorized(response)
       return
@@ -492,6 +515,15 @@ export function createRestApiRouter(
       displayName: requestedName || roomId,
       hasPassword: password.length > 0,
     })
+    // REST 建房人必须在返回前成为房主；否则路由切换后的 GET /rooms 会过滤空房，
+    // 前端将在 Socket 来得及 join 前丢失 activeRoom 并退回大厅。
+    const creatorSlot = room.joinPlayer(principal.playerId)
+    if (!creatorSlot) {
+      roomManager.removeRoom(roomId)
+      response.status(409).json({ ok: false, code: 'ROOM_CREATOR_JOIN_FAILED', message: '建房人无法加入新房间' })
+      return
+    }
+    room.engine.registerPlayer(principal)
 
     response.status(201).json({
       ok: true,
@@ -499,8 +531,8 @@ export function createRestApiRouter(
     })
   })
 
-  router.get('/state', (request, response) => {
-    const principal = resolvePrincipal(request, config)
+  router.get('/state', async (request, response) => {
+    const principal = await resolvePrincipal(request, config)
     if (!principal) {
       rejectUnauthorized(response)
       return
@@ -517,19 +549,27 @@ export function createRestApiRouter(
     })
   })
 
-  router.post('/actions', (request, response) => {
-    const principal = resolvePrincipal(request, config)
+  router.post('/actions', async (request, response) => {
+    const principal = await resolvePrincipal(request, config)
     if (!principal) {
       rejectUnauthorized(response)
       return
     }
 
-    const submission = submitAction({
-      engine,
-      limiter,
-      player: principal,
-      payload: request.body,
-    })
+    let submission
+    try {
+      const room = roomManager.listRooms().find((candidate) => candidate.engine === engine)
+      const state = engine.getStateSnapshot()
+      submission = checkpointCoordinator && room && state.status === 'running' && state.pve
+        ? await submitDurablePveAction({
+            engine, room, checkpointCoordinator, limiter, player: principal, payload: request.body,
+          })
+        : submitAction({ engine, limiter, player: principal, payload: request.body })
+    }
+    catch {
+      response.status(503).json({ ok: false, code: 'PVE_PERSISTENCE_UNAVAILABLE', message: 'Authoritative PVE persistence is unavailable' })
+      return
+    }
 
     if (!submission.ok) {
       response.status(submission.status).json({
@@ -552,7 +592,7 @@ export function createRestApiRouter(
   })
 
   router.get('/leaderboard', async (request, response) => {
-    const principal = resolvePrincipal(request, config)
+    const principal = await resolvePrincipal(request, config)
     if (!principal) {
       rejectUnauthorized(response)
       return
@@ -592,7 +632,7 @@ export function createRestApiRouter(
   })
 
   router.get('/replays', async (request, response) => {
-    const principal = resolvePrincipal(request, config)
+    const principal = await resolvePrincipal(request, config)
     if (!principal) {
       rejectUnauthorized(response)
       return
@@ -626,8 +666,8 @@ export function createRestApiRouter(
 
   // ── POST /replays — 仅存储胜利录像 ─────────────────────────────────────────
   // 收到失败数据包时，直接丢弃并返回 200 OK，不占用数据库空间。
-  router.post('/replays', (request, response) => {
-    const principal = resolvePrincipal(request, config)
+  router.post('/replays', async (request, response) => {
+    const principal = await resolvePrincipal(request, config)
     if (!principal) {
       rejectUnauthorized(response)
       return
@@ -659,7 +699,7 @@ export function createRestApiRouter(
   })
 
   router.get('/replays/current', async (request, response) => {
-    const principal = resolvePrincipal(request, config)
+    const principal = await resolvePrincipal(request, config)
     if (!principal) {
       rejectUnauthorized(response)
       return
@@ -675,7 +715,7 @@ export function createRestApiRouter(
   })
 
   router.get('/replays/:matchId', async (request, response) => {
-    const principal = resolvePrincipal(request, config)
+    const principal = await resolvePrincipal(request, config)
     if (!principal) {
       rejectUnauthorized(response)
       return
@@ -710,7 +750,7 @@ export function createRestApiRouter(
   // ── GET /leaderboard/level5 — Level 5 大师排行榜 ───────────────────────────
   // 只返回 level5ClearCount > 0 的玩家，按通关次数降序，包含名次与硅基/碳基标识。
   router.get('/leaderboard/level5', async (request, response) => {
-    const principal = resolvePrincipal(request, config)
+    const principal = await resolvePrincipal(request, config)
     if (!principal) {
       rejectUnauthorized(response)
       return
@@ -721,8 +761,8 @@ export function createRestApiRouter(
   })
 
   // ── GET /progress/:playerId — 查询玩家进度 ────────────────────────────────────
-  router.get('/progress/:playerId', (request, response) => {
-    const principal = resolvePrincipal(request, config)
+  router.get('/progress/:playerId', async (request, response) => {
+    const principal = await resolvePrincipal(request, config)
     if (!principal) {
       rejectUnauthorized(response)
       return
@@ -739,8 +779,8 @@ export function createRestApiRouter(
   })
 
   // ── GET /progress/:playerId/unlock/:level — 检查关卡解锁状态 ─────────────────
-  router.get('/progress/:playerId/unlock/:level', (request, response) => {
-    const principal = resolvePrincipal(request, config)
+  router.get('/progress/:playerId/unlock/:level', async (request, response) => {
+    const principal = await resolvePrincipal(request, config)
     if (!principal) {
       rejectUnauthorized(response)
       return

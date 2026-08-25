@@ -1,9 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PvpMatchRuntime = void 0;
+exports.PvpMatchRuntime = exports.PVP_ASSETS_VERSION = void 0;
 const node_crypto_1 = require("node:crypto");
 const prng_1 = require("../pve-v2/prng");
 const map_1 = require("./map");
+const catalog_1 = require("./catalog");
 const SIDES = ['A', 'B'];
 const CORE_HP = 10;
 const INITIAL_RATIONS = 10;
@@ -20,6 +21,8 @@ const TRIBULATION_START_MS = 6 * 60_000;
 const CORE_DAMAGE_BONUS_START_MS = 8 * 60_000;
 const ONE_LEAK_DEFEAT_START_MS = 10 * 60_000;
 const HARD_TIMEOUT_MS = 12 * 60_000;
+const DEFAULT_LOAD_TIMEOUT_MS = 45_000;
+exports.PVP_ASSETS_VERSION = 'pvp_assets_v1';
 function oppositeSide(side) {
     return side === 'A' ? 'B' : 'A';
 }
@@ -41,6 +44,10 @@ class PvpMatchRuntime {
     countdownTicks;
     roundIntervalTicks;
     eventHistoryLimit;
+    loadTimeoutTicks;
+    assetsVersion;
+    rulesSnapshot = structuredClone(catalog_1.PVP_V1_RULES_SNAPSHOT);
+    disconnectForfeitTicks;
     prng;
     sides = { A: null, B: null };
     commandReceipts = new Map();
@@ -48,6 +55,7 @@ class PvpMatchRuntime {
     phase = 'created';
     currentTick = 0;
     countdownRemainingTicks = 0;
+    loadDeadlineAtTick = null;
     roundNumber = 0;
     nextRoundAtTick = null;
     playingStartedAtTick = null;
@@ -56,6 +64,7 @@ class PvpMatchRuntime {
     enemySequence = 0;
     pressureSequence = 0;
     spawnSequence = 0;
+    unitSequence = 0;
     constructor(options) {
         if (!options.matchId.trim())
             throw new Error('PVP_MATCH_ID_REQUIRED');
@@ -69,10 +78,13 @@ class PvpMatchRuntime {
         this.countdownTicks = Math.max(0, Math.ceil((options.countdownMs ?? 5000) / this.tickRateMs));
         this.roundIntervalTicks = Math.max(1, Math.ceil((options.roundIntervalMs ?? 20_000) / this.tickRateMs));
         this.eventHistoryLimit = Math.max(20, Math.floor(options.eventHistoryLimit ?? 500));
+        this.loadTimeoutTicks = Math.max(1, Math.ceil((options.loadTimeoutMs ?? DEFAULT_LOAD_TIMEOUT_MS) / this.tickRateMs));
+        this.disconnectForfeitTicks = Math.max(1, Math.ceil((options.disconnectForfeitMs ?? DISCONNECT_FORFEIT_MS) / this.tickRateMs));
+        this.assetsVersion = options.assetsVersion ?? exports.PVP_ASSETS_VERSION;
         this.prng = new prng_1.DeterministicPrng(`${this.seed}:pvp-runtime`);
         this.transitionTo('waiting_players');
     }
-    registerParticipant(side, participant) {
+    registerParticipant(side, participant, confirmedReady = false) {
         if (this.phase !== 'waiting_players')
             return this.command(false, 'WRONG_PHASE');
         if (!participant.playerId.trim() || !participant.playerName.trim())
@@ -110,8 +122,11 @@ class PvpMatchRuntime {
                 playerName: participant.playerName,
                 connected: true,
                 disconnectedAtTick: null,
-                ready: false,
+                ready: confirmedReady,
                 loaded: false,
+                loadStatus: 'idle',
+                loadFailureCode: null,
+                loadAcknowledgedAtTick: null,
                 coreHp: CORE_HP,
                 coreMaxHp: CORE_HP,
                 rations: INITIAL_RATIONS,
@@ -133,9 +148,13 @@ class PvpMatchRuntime {
             spawnQueue: [],
             lastSpawnedEnemyId: null,
             lastPressureAtTick: null,
+            lastAttackAtTick: new Map(),
         };
-        if (this.sides.A && this.sides.B)
+        if (this.sides.A && this.sides.B) {
             this.transitionTo('ready_check');
+            if (this.sides.A.state.ready && this.sides.B.state.ready)
+                this.enterLoading();
+        }
         return this.command(true, 'PARTICIPANT_REGISTERED');
     }
     setReady(playerId, ready = true) {
@@ -146,23 +165,170 @@ class PvpMatchRuntime {
             return this.command(false, 'PLAYER_NOT_FOUND');
         this.sides[side].state.ready = ready;
         if (this.sides.A?.state.ready && this.sides.B?.state.ready)
-            this.transitionTo('loading');
+            this.enterLoading();
         return this.command(true, 'READY_STATE_UPDATED');
     }
     markLoaded(playerId) {
-        if (this.phase !== 'loading')
-            return this.command(false, 'WRONG_PHASE');
-        const side = this.requirePlayerSide(playerId);
-        if (!side)
-            return this.command(false, 'PLAYER_NOT_FOUND');
-        this.sides[side].state.loaded = true;
-        if (this.sides.A?.state.loaded && this.sides.B?.state.loaded) {
-            this.countdownRemainingTicks = this.countdownTicks;
-            this.transitionTo('countdown');
-            if (this.countdownRemainingTicks === 0)
-                this.beginPlaying();
-        }
-        return this.command(true, 'PLAYER_LOADED');
+        return this.acknowledgeLoad(playerId, {
+            requestId: `legacy-loaded:${playerId}`,
+            rulesetVersion: this.rulesetVersion,
+            mapId: map_1.DUAL_REALM_MAP.mapId,
+            mapVersion: map_1.DUAL_REALM_MAP.mapVersion,
+            routeHash: map_1.DUAL_REALM_MAP.routeHash,
+            assetsVersion: this.assetsVersion,
+            status: 'loaded',
+        });
+    }
+    acknowledgeLoad(playerId, input) {
+        return this.idempotent(playerId, input.requestId, 'load_ack', { ...input }, () => {
+            if (this.phase !== 'loading')
+                return this.command(false, 'WRONG_PHASE', input.requestId);
+            const side = this.requirePlayerSide(playerId);
+            if (!side)
+                return this.command(false, 'PLAYER_NOT_FOUND', input.requestId);
+            if (input.rulesetVersion !== this.rulesetVersion || input.mapId !== map_1.DUAL_REALM_MAP.mapId
+                || input.mapVersion !== map_1.DUAL_REALM_MAP.mapVersion || input.routeHash !== map_1.DUAL_REALM_MAP.routeHash
+                || input.assetsVersion !== this.assetsVersion) {
+                return this.command(false, 'LOAD_VERSION_MISMATCH', input.requestId);
+            }
+            const state = this.sides[side].state;
+            state.loadAcknowledgedAtTick = this.currentTick;
+            if (input.status === 'failed') {
+                state.loadStatus = 'failed';
+                state.loadFailureCode = (input.failureCode?.trim() || 'CLIENT_LOAD_FAILED').slice(0, 120);
+                this.emit('LOAD_ACK_UPDATED', { playerId, side, status: 'failed', failureCode: state.loadFailureCode });
+                this.voidMatch('load_failed');
+                return this.command(true, 'PLAYER_LOAD_FAILED', input.requestId);
+            }
+            state.loaded = true;
+            state.loadStatus = 'loaded';
+            state.loadFailureCode = null;
+            this.emit('LOAD_ACK_UPDATED', { playerId, side, status: 'loaded' });
+            if (this.sides.A?.state.loaded && this.sides.B?.state.loaded) {
+                this.loadDeadlineAtTick = null;
+                this.countdownRemainingTicks = this.countdownTicks;
+                this.transitionTo('countdown');
+                if (this.countdownRemainingTicks === 0)
+                    this.beginPlaying();
+            }
+            return this.command(true, 'PLAYER_LOADED', input.requestId);
+        });
+    }
+    recruit(playerId, input) {
+        return this.idempotent(playerId, input.requestId, 'recruit', { expectedTrayRevision: input.expectedTrayRevision }, () => {
+            if (this.phase !== 'playing')
+                return this.command(false, 'WRONG_PHASE', input.requestId);
+            const side = this.requirePlayerSide(playerId);
+            if (!side)
+                return this.command(false, 'PLAYER_NOT_FOUND', input.requestId);
+            const runtime = this.sides[side];
+            const privateState = runtime.state.privateState;
+            if (input.expectedTrayRevision !== privateState.trayRevision) {
+                return this.command(false, 'TRAY_REVISION_CONFLICT', input.requestId, { currentTrayRevision: privateState.trayRevision });
+            }
+            const trayIndex = privateState.tray.findIndex((unit) => unit === null);
+            const reserveIndex = trayIndex < 0 ? privateState.reserve.findIndex((unit) => unit === null) : -1;
+            if (trayIndex < 0 && reserveIndex < 0)
+                return this.command(false, 'RECRUIT_STORAGE_FULL', input.requestId);
+            const cost = this.rulesSnapshot.recruitCost;
+            if (runtime.state.rations < cost)
+                return this.command(false, 'INSUFFICIENT_RATIONS', input.requestId);
+            const soldierType = catalog_1.PVP_SOLDIER_TYPES[this.prng.nextInt(catalog_1.PVP_SOLDIER_TYPES.length)];
+            const definition = (0, catalog_1.pvpSoldier)(soldierType);
+            this.unitSequence += 1;
+            const unit = { unitId: `pvp-unit-${this.unitSequence}`, soldierType, glyph: definition.glyph, level: 1 };
+            if (trayIndex >= 0)
+                privateState.tray[trayIndex] = unit;
+            else
+                privateState.reserve[reserveIndex] = unit;
+            runtime.state.rations -= cost;
+            runtime.state.stats.rationsSpent += cost;
+            runtime.state.stats.paidRecruitCount += 1;
+            privateState.trayRevision += 1;
+            this.emit('PIECE_RECRUITED', { playerId, side, unitId: unit.unitId, soldierType, glyph: unit.glyph });
+            return this.command(true, 'PIECE_RECRUITED', input.requestId, {
+                unitId: unit.unitId, soldierType, glyph: unit.glyph, trayRevision: privateState.trayRevision,
+            });
+        });
+    }
+    deploy(playerId, input) {
+        return this.idempotent(playerId, input.requestId, 'deploy', { ...input }, () => {
+            if (this.phase !== 'playing')
+                return this.command(false, 'WRONG_PHASE', input.requestId);
+            const side = this.requirePlayerSide(playerId);
+            if (!side)
+                return this.command(false, 'PLAYER_NOT_FOUND', input.requestId);
+            const runtime = this.sides[side];
+            const state = runtime.state;
+            if (input.expectedTrayRevision !== state.privateState.trayRevision)
+                return this.command(false, 'TRAY_REVISION_CONFLICT', input.requestId, { currentTrayRevision: state.privateState.trayRevision });
+            if (input.expectedBoardRevision !== state.privateState.boardRevision)
+                return this.command(false, 'BOARD_REVISION_CONFLICT', input.requestId, { currentBoardRevision: state.privateState.boardRevision });
+            if (state.populationUsed >= state.populationCap)
+                return this.command(false, 'POPULATION_CAP_REACHED', input.requestId);
+            if (!this.isStandardDeploymentSlot(side, input.x, input.y) || !(0, map_1.isPvpDeployableCell)(side, input.x, input.y))
+                return this.command(false, 'CELL_NOT_DEPLOYABLE', input.requestId);
+            if (state.boardPieces.some((piece) => piece.x === input.x && piece.y === input.y))
+                return this.command(false, 'CELL_OCCUPIED', input.requestId);
+            const located = this.findRecruit(runtime, input.unitId);
+            if (!located)
+                return this.command(false, 'UNIT_NOT_IN_PRIVATE_STORAGE', input.requestId);
+            located.collection[located.index] = null;
+            state.boardPieces.push({
+                entityId: located.unit.unitId, ownerPlayerId: playerId, kind: 'soldier', glyph: located.unit.glyph,
+                soldierType: located.unit.soldierType, level: 1, x: input.x, y: input.y,
+            });
+            state.populationUsed += 1;
+            state.stats.peakPopulation = Math.max(state.stats.peakPopulation, state.populationUsed);
+            state.stats.highestSoldierLevel = Math.max(state.stats.highestSoldierLevel, 1);
+            state.privateState.trayRevision += 1;
+            state.privateState.boardRevision += 1;
+            this.emit('PIECE_DEPLOYED', { playerId, side, entityId: located.unit.unitId, soldierType: located.unit.soldierType, glyph: located.unit.glyph, x: input.x, y: input.y, boardRevision: state.privateState.boardRevision });
+            return this.command(true, 'PIECE_DEPLOYED', input.requestId, { entityId: located.unit.unitId, trayRevision: state.privateState.trayRevision, boardRevision: state.privateState.boardRevision });
+        });
+    }
+    moveOrMerge(playerId, input) {
+        return this.idempotent(playerId, input.requestId, 'move_or_merge', { ...input }, () => {
+            if (this.phase !== 'playing')
+                return this.command(false, 'WRONG_PHASE', input.requestId);
+            const side = this.requirePlayerSide(playerId);
+            if (!side)
+                return this.command(false, 'PLAYER_NOT_FOUND', input.requestId);
+            const runtime = this.sides[side];
+            const state = runtime.state;
+            if (input.expectedBoardRevision !== state.privateState.boardRevision)
+                return this.command(false, 'BOARD_REVISION_CONFLICT', input.requestId, { currentBoardRevision: state.privateState.boardRevision });
+            if (!this.isStandardDeploymentSlot(side, input.x, input.y) || !(0, map_1.isPvpDeployableCell)(side, input.x, input.y))
+                return this.command(false, 'CELL_NOT_DEPLOYABLE', input.requestId);
+            const sourceIndex = state.boardPieces.findIndex((piece) => piece.entityId === input.entityId && piece.ownerPlayerId === playerId);
+            if (sourceIndex < 0)
+                return this.command(false, 'PIECE_NOT_OWNED', input.requestId);
+            const source = state.boardPieces[sourceIndex];
+            if (source.x === input.x && source.y === input.y)
+                return this.command(false, 'PIECE_ALREADY_AT_CELL', input.requestId);
+            const targetIndex = state.boardPieces.findIndex((piece) => piece.x === input.x && piece.y === input.y);
+            if (targetIndex < 0) {
+                source.x = input.x;
+                source.y = input.y;
+                state.privateState.boardRevision += 1;
+                this.emit('PIECE_MOVED', { playerId, side, entityId: source.entityId, x: input.x, y: input.y, boardRevision: state.privateState.boardRevision });
+                return this.command(true, 'PIECE_MOVED', input.requestId, { entityId: source.entityId, boardRevision: state.privateState.boardRevision });
+            }
+            const target = state.boardPieces[targetIndex];
+            if (target.ownerPlayerId !== playerId || target.kind !== 'soldier' || source.kind !== 'soldier'
+                || target.soldierType !== source.soldierType || target.level !== source.level)
+                return this.command(false, 'MERGE_INCOMPATIBLE', input.requestId);
+            if ((target.level ?? 1) >= this.rulesSnapshot.maxMergeLevel)
+                return this.command(false, 'MERGE_LEVEL_CAP', input.requestId);
+            target.level = ((target.level ?? 1) + 1);
+            state.boardPieces.splice(sourceIndex, 1);
+            state.populationUsed = Math.max(0, state.populationUsed - 1);
+            state.stats.highestSoldierLevel = Math.max(state.stats.highestSoldierLevel, target.level);
+            runtime.lastAttackAtTick.delete(source.entityId);
+            state.privateState.boardRevision += 1;
+            this.emit('PIECE_MERGED', { playerId, side, consumedEntityId: source.entityId, entityId: target.entityId, soldierType: target.soldierType ?? null, level: target.level, x: target.x, y: target.y, boardRevision: state.privateState.boardRevision });
+            return this.command(true, 'PIECE_MERGED', input.requestId, { entityId: target.entityId, level: target.level, boardRevision: state.privateState.boardRevision });
+        });
     }
     tick() {
         if (this.phase === 'completed' || this.phase === 'voided' || this.phase === 'settling')
@@ -174,6 +340,13 @@ class PvpMatchRuntime {
                 this.beginPlaying();
             return this.snapshot();
         }
+        if (this.phase === 'loading') {
+            if (this.loadDeadlineAtTick !== null && this.currentTick >= this.loadDeadlineAtTick) {
+                const disconnected = SIDES.some(side => this.sides[side]?.state.connected === false);
+                this.voidMatch(disconnected ? 'load_disconnect' : 'load_timeout');
+            }
+            return this.snapshot();
+        }
         if (this.phase !== 'playing')
             return this.snapshot();
         this.updateTribulation();
@@ -183,11 +356,15 @@ class PvpMatchRuntime {
         while (this.nextRoundAtTick !== null && this.currentTick >= this.nextRoundAtTick)
             this.beginRound();
         this.spawnSafeEnemies();
+        this.resolveBoardAttacks();
         const leaks = this.moveEnemiesAndCollectLeaks();
         this.applyLeaks(leaks);
         if (this.phase === 'playing')
             this.evaluateHardTimeout();
         return this.snapshot();
+    }
+    isQuiescent() {
+        return this.phase === 'completed' || this.phase === 'voided';
     }
     sendPressure(playerId, requestId) {
         return this.idempotent(playerId, requestId, 'send_pressure', {}, () => {
@@ -362,7 +539,17 @@ class PvpMatchRuntime {
             mapId: map_1.DUAL_REALM_MAP.mapId,
             mapVersion: map_1.DUAL_REALM_MAP.mapVersion,
             routeHash: map_1.DUAL_REALM_MAP.routeHash,
+            rulesSnapshot: this.rulesSnapshot,
             countdownRemainingTicks: this.countdownRemainingTicks,
+            loading: {
+                rulesetVersion: this.rulesetVersion,
+                mapId: map_1.DUAL_REALM_MAP.mapId,
+                mapVersion: map_1.DUAL_REALM_MAP.mapVersion,
+                routeHash: map_1.DUAL_REALM_MAP.routeHash,
+                assetsVersion: this.assetsVersion,
+                deadlineAtTick: this.loadDeadlineAtTick,
+                remainingTicks: this.loadDeadlineAtTick === null ? 0 : Math.max(0, this.loadDeadlineAtTick - this.currentTick),
+            },
             round: {
                 number: this.roundNumber,
                 nextRoundAtTick: this.nextRoundAtTick,
@@ -394,6 +581,8 @@ class PvpMatchRuntime {
         };
         const { seed: _hiddenSeed, sides: _authoritySides, ...publicState } = authority;
         const recentEvents = publicState.recentEvents.filter((event) => {
+            if (event.type === 'PIECE_RECRUITED')
+                return viewerPlayerId !== null && event.data.playerId === viewerPlayerId;
             if (event.type !== 'PRESSURE_QUEUED' && event.type !== 'PRESSURE_REJECTED')
                 return true;
             return viewerSide !== null && event.data.senderSide === viewerSide;
@@ -410,6 +599,19 @@ class PvpMatchRuntime {
         this.transitionTo('playing');
         this.emit('MATCH_STARTED', { matchId: this.matchId, rulesetVersion: this.rulesetVersion });
         this.beginRound();
+    }
+    enterLoading() {
+        for (const side of SIDES) {
+            const state = this.sides[side]?.state;
+            if (!state)
+                continue;
+            state.loaded = false;
+            state.loadStatus = 'loading';
+            state.loadFailureCode = null;
+            state.loadAcknowledgedAtTick = null;
+        }
+        this.loadDeadlineAtTick = this.currentTick + this.loadTimeoutTicks;
+        this.transitionTo('loading');
     }
     beginRound() {
         this.roundNumber += 1;
@@ -494,6 +696,69 @@ class PvpMatchRuntime {
             return true;
         const enemy = runtime.state.enemies.find((candidate) => candidate.enemyId === runtime.lastSpawnedEnemyId);
         return !enemy || !enemy.spawnProtected;
+    }
+    resolveBoardAttacks() {
+        for (const side of SIDES) {
+            const runtime = this.sides[side];
+            for (const piece of runtime.state.boardPieces) {
+                if (piece.kind !== 'soldier' || !piece.soldierType)
+                    continue;
+                const definition = (0, catalog_1.pvpSoldier)(piece.soldierType);
+                const intervalTicks = Math.max(1, Math.ceil(definition.attackIntervalMs / this.tickRateMs));
+                const lastAttack = runtime.lastAttackAtTick.get(piece.entityId);
+                if (lastAttack !== undefined && this.currentTick - lastAttack < intervalTicks)
+                    continue;
+                const rangeSquared = definition.rangeMilli * definition.rangeMilli;
+                const candidates = runtime.state.enemies
+                    .filter((enemy) => !enemy.spawnProtected && this.distanceSquared(piece.x * 1000, piece.y * 1000, enemy.xMilli, enemy.yMilli) <= rangeSquared)
+                    .sort((left, right) => (right.routeCellIndex * 1000 + right.routeProgressMilli) - (left.routeCellIndex * 1000 + left.routeProgressMilli) || left.enemyId.localeCompare(right.enemyId));
+                const primary = candidates[0];
+                if (!primary)
+                    continue;
+                const targets = definition.attackStyle === 'pierce'
+                    ? candidates.slice(0, 2)
+                    : definition.attackStyle === 'splash'
+                        ? runtime.state.enemies.filter((enemy) => !enemy.spawnProtected && this.distanceSquared(primary.xMilli, primary.yMilli, enemy.xMilli, enemy.yMilli) <= 1_500 * 1_500)
+                        : [primary];
+                runtime.lastAttackAtTick.set(piece.entityId, this.currentTick);
+                let hitCount = 0;
+                const level = piece.level ?? 1;
+                const levelBps = level === 1 ? 10_000 : level === 2 ? 17_000 : 26_000;
+                const rawDamage = Math.max(1, Math.round(definition.damage * levelBps / 10_000));
+                for (const [targetIndex, target] of targets.entries()) {
+                    const resolvedDamage = Math.max(1, rawDamage - Math.max(0, target.armor - definition.armorPierce));
+                    const result = this.applyAuthoritativeDamage({
+                        eventId: `auto:${this.currentTick}:${piece.entityId}:${targetIndex}:${target.enemyId}`,
+                        sourcePlayerId: runtime.state.playerId,
+                        enemyId: target.enemyId,
+                        rawDamage,
+                        resolvedDamage,
+                    });
+                    if (result.ok)
+                        hitCount += 1;
+                }
+                this.emit('PIECE_ATTACKED', {
+                    playerId: runtime.state.playerId, side, entityId: piece.entityId, soldierType: piece.soldierType,
+                    attackStyle: definition.attackStyle, primaryEnemyId: primary.enemyId, hitCount,
+                });
+            }
+        }
+    }
+    distanceSquared(ax, ay, bx, by) {
+        const dx = ax - bx;
+        const dy = ay - by;
+        return dx * dx + dy * dy;
+    }
+    isStandardDeploymentSlot(side, x, y) {
+        return this.rulesSnapshot.deploymentSlots[side].some((cell) => cell.x === x && cell.y === y);
+    }
+    findRecruit(runtime, unitId) {
+        for (const collection of [runtime.state.privateState.tray, runtime.state.privateState.reserve]) {
+            const index = collection.findIndex((unit) => unit?.unitId === unitId);
+            if (index >= 0)
+                return { collection, index, unit: collection[index] };
+        }
+        return null;
     }
     moveEnemiesAndCollectLeaks() {
         const leaks = [];
@@ -606,12 +871,22 @@ class PvpMatchRuntime {
         this.emit('ENEMY_KILLED', { enemyId: enemy.enemyId, side: runtime.state.side, kind: enemy.kind });
     }
     evaluateDisconnectForfeits() {
-        const limitTicks = Math.ceil(DISCONNECT_FORFEIT_MS / this.tickRateMs);
+        const disconnected = SIDES.filter((side) => {
+            const state = this.sides[side].state;
+            return !state.connected && state.disconnectedAtTick !== null;
+        });
         const timedOut = SIDES.filter((side) => {
             const state = this.sides[side].state;
             return !state.connected && state.disconnectedAtTick !== null
-                && this.currentTick - state.disconnectedAtTick >= limitTicks;
+                && this.currentTick - state.disconnectedAtTick >= this.disconnectForfeitTicks;
         });
+        // 两端在同一断线窗口内离场时，TCP close 到达的先后不应决定胜负。
+        // 等两侧各自完成超时；若一方提前重连，则另一方按正常断线判负。
+        if (disconnected.length === 2) {
+            if (timedOut.length === 2)
+                this.finishDraw('simultaneous_draw');
+            return;
+        }
         if (timedOut.length === 2)
             this.finishDraw('simultaneous_draw');
         else if (timedOut.length === 1)
@@ -719,6 +994,9 @@ class PvpMatchRuntime {
                     coreHp: runtime.state.coreHp,
                     rations: runtime.state.rations,
                     scripture: runtime.state.scripture,
+                    populationUsed: runtime.state.populationUsed,
+                    boardPieces: runtime.state.boardPieces,
+                    privateState: runtime.state.privateState,
                     enemies: runtime.state.enemies,
                     spawnQueue: runtime.spawnQueue,
                     stats: runtime.state.stats,

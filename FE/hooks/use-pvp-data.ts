@@ -15,7 +15,8 @@ import type {
   PvpSeason,
   PvpTier,
 } from '../types/pvp'
-import type { PvpCommandResult } from '../../shared/contracts/pvp'
+import type { PvpBoardPieceState, PvpCommandResult, PvpEnemyState, PvpRecruitState, PvpRulesSnapshot, PvpRuntimeEvent } from '../../shared/contracts/pvp'
+import { classifyPvpSequence, consumePvpSseBuffer, shouldRequestPvpFullRecovery } from '../game/network/pvp-realtime'
 
 interface UsePvpDataOptions {
   matchId?: string
@@ -208,6 +209,7 @@ function normalizeMatchDetail(payload: unknown): PvpMatchDetail | null {
 }
 
 function normalizeGameState(payload: unknown): PvpMatchPublicState | null {
+  const envelope = asRecord(payload)
   const value = asRecord(unwrap<unknown>(payload, ['state', 'gameState']))
   if (!value || !readString(value, 'matchId')) return null
   if (isRecord(value.self) && isRecord(value.opponent)) return value as unknown as PvpMatchPublicState
@@ -216,14 +218,24 @@ function normalizeGameState(payload: unknown): PvpMatchPublicState | null {
   const viewerPlayerId = readString(value, 'viewerPlayerId') || resolvePlayerId()
   const selfSide = readString(sideA, 'playerId') === viewerPlayerId || sideA?.privateState ? sideA : sideB
   const opponentSide = selfSide === sideA ? sideB : sideA
-  const round = asRecord(value.round); const tribulation = asRecord(value.tribulation)
+  const round = asRecord(value.round); const tribulation = asRecord(value.tribulation); const loading = asRecord(value.loading)
+  const privateState = asRecord(selfSide?.privateState)
   const recentEvents = Array.isArray(value.recentEvents) ? value.recentEvents.map(asRecord).filter((event): event is Record<string, unknown> => event !== null) : []
   return {
     matchId: readString(value, 'matchId'), status: (readString(value, 'phase', 'status') || 'waiting_players') as PvpMatchPublicState['status'],
     mapId: readString(value, 'mapId'), mapVersion: String(value.mapVersion ?? ''), rulesetVersion: readString(value, 'rulesetVersion'),
-    elapsedMs: readNumber(value, 'elapsedMs') || readNumber(value, 'tick') * readNumber(value, 'tickRateMs'), round: readNumber(round, 'number'), disasterLevel: readNumber(tribulation, 'tier'),
-    self: { playerId: readString(selfSide, 'playerId'), playerName: readString(selfSide, 'playerName') || '我方', coreHp: readNumber(selfSide, 'coreHp'), rations: readNumber(selfSide, 'rations'), scripture: readNumber(selfSide, 'scripture') },
-    opponent: { playerId: readString(opponentSide, 'playerId'), playerName: readString(opponentSide, 'playerName') || '对手', coreHp: readNumber(opponentSide, 'coreHp') },
+    elapsedMs: readNumber(value, 'elapsedMs') || readNumber(value, 'tick') * readNumber(value, 'tickRateMs'),
+    tick: readNumber(value, 'tick'), tickRateMs: readNumber(value, 'tickRateMs'), realtimeSeq: readNumber(envelope, 'seq'),
+    rulesSnapshot: value.rulesSnapshot as PvpRulesSnapshot,
+    round: readNumber(round, 'number'), disasterLevel: readNumber(tribulation, 'tier'),
+    loading: {
+      rulesetVersion: readString(loading, 'rulesetVersion'), mapId: readString(loading, 'mapId'), mapVersion: readNumber(loading, 'mapVersion'),
+      routeHash: readString(loading, 'routeHash'), assetsVersion: readString(loading, 'assetsVersion'),
+      remainingMs: readNumber(loading, 'remainingTicks') * readNumber(value, 'tickRateMs'),
+    },
+    self: { side: readString(selfSide, 'side') === 'B' ? 'B' : 'A', playerId: readString(selfSide, 'playerId'), playerName: readString(selfSide, 'playerName') || '我方', coreHp: readNumber(selfSide, 'coreHp'), rations: readNumber(selfSide, 'rations'), scripture: readNumber(selfSide, 'scripture'), connected: selfSide?.connected !== false, loadStatus: readString(selfSide, 'loadStatus') || (selfSide?.loaded ? 'loaded' : 'idle'), loadFailureCode: readString(selfSide, 'loadFailureCode') || null, populationUsed: readNumber(selfSide, 'populationUsed'), populationCap: readNumber(selfSide, 'populationCap'), boardPieces: (Array.isArray(selfSide?.boardPieces) ? selfSide.boardPieces : []) as PvpBoardPieceState[], enemies: (Array.isArray(selfSide?.enemies) ? selfSide.enemies : []) as PvpEnemyState[], tray: (Array.isArray(privateState?.tray) ? privateState.tray : []) as Array<PvpRecruitState | null>, reserve: (Array.isArray(privateState?.reserve) ? privateState.reserve : []) as Array<PvpRecruitState | null>, trayRevision: readNumber(privateState, 'trayRevision'), boardRevision: readNumber(privateState, 'boardRevision') },
+    opponent: { side: readString(opponentSide, 'side') === 'A' ? 'A' : 'B', playerId: readString(opponentSide, 'playerId'), playerName: readString(opponentSide, 'playerName') || '对手', coreHp: readNumber(opponentSide, 'coreHp'), connected: opponentSide?.connected !== false, loadStatus: readString(opponentSide, 'loadStatus') || (opponentSide?.loaded ? 'loaded' : 'idle'), populationUsed: readNumber(opponentSide, 'populationUsed'), boardPieces: (Array.isArray(opponentSide?.boardPieces) ? opponentSide.boardPieces : []) as PvpBoardPieceState[], enemies: (Array.isArray(opponentSide?.enemies) ? opponentSide.enemies : []) as PvpEnemyState[] },
+    recentEvents: recentEvents as unknown as PvpRuntimeEvent[],
     notices: recentEvents.slice(-6).map((event) => readString(event, 'type')).filter(Boolean),
   }
 }
@@ -271,6 +283,21 @@ async function requestJson<T>(url: string, token: string | null, init: RequestIn
   return payload as T
 }
 
+async function consumeSse(response: Response, onData: (payload: unknown) => void, signal: AbortSignal) {
+  if (!response.ok || !response.body) throw new Error(`PVP_REALTIME_HTTP_${response.status}`)
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (!signal.aborted) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const parsed = consumePvpSseBuffer(buffer)
+    buffer = parsed.remainder
+    parsed.payloads.forEach(onData)
+  }
+}
+
 export function usePvpData(options: UsePvpDataOptions = {}) {
   const apiBaseUrl = useMemo(() => resolveApiBaseUrl(), [])
   const token = useMemo(() => resolveGatewayToken(), [])
@@ -286,6 +313,9 @@ export function usePvpData(options: UsePvpDataOptions = {}) {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [pressureMessage, setPressureMessage] = useState<string | null>(null)
+  const [battleActionMessage, setBattleActionMessage] = useState<string | null>(null)
+  const [realtimeStatus, setRealtimeStatus] = useState<'idle' | 'connecting' | 'live' | 'fallback'>('idle')
+  const [loadAckStatus, setLoadAckStatus] = useState<'idle' | 'preloading' | 'acknowledged' | 'failed'>('idle')
 
   const endpoint = useCallback((path: string) => apiBaseUrl ? `${apiBaseUrl}/pvp${path}` : null, [apiBaseUrl])
 
@@ -365,29 +395,116 @@ export function usePvpData(options: UsePvpDataOptions = {}) {
   useEffect(() => {
     if (!options.matchId || !apiBaseUrl) return
     let active = true
-    let timer: number | null = null
-    let receivedState = false
-    const poll = async () => {
-      try {
-        const payload = await requestJson<unknown>(`${apiBaseUrl}/pvp/matches/${encodeURIComponent(options.matchId!)}/state`, token)
-        if (!active) return
-        const next = normalizeGameState(payload)
-        if (next) {
-          receivedState = true
-          setGameState(next)
-          if (next.status === 'completed' || next.status === 'voided') return
+    let reconnectTimer: number | null = null
+    let controller: AbortController | null = null
+    let lastSeq = 0
+    let fullRefreshInFlight: Promise<void> | null = null
+    let gapRecoveryPending = false
+    let lastGapRecoveryAt = Number.NEGATIVE_INFINITY
+    const refreshFull = (reason: 'initial' | 'gap' | 'stream_end' | 'stream_error' | 'visibility'): Promise<void> => {
+      const now = performance.now()
+      if (reason === 'gap' && !shouldRequestPvpFullRecovery(gapRecoveryPending, lastGapRecoveryAt, now)) return Promise.resolve()
+      if (fullRefreshInFlight) return fullRefreshInFlight
+      if (reason === 'gap') { gapRecoveryPending = true; lastGapRecoveryAt = now }
+      fullRefreshInFlight = (async () => {
+        try {
+          const payload = await requestJson<unknown>(`${apiBaseUrl}/pvp/matches/${encodeURIComponent(options.matchId!)}/state`, token, {
+            headers: { 'X-PVP-Recovery': reason },
+          })
+          if (!active) return
+          const next = normalizeGameState(payload)
+          if (next) setGameState(next)
+        } catch {
+          if (active) setRealtimeStatus('fallback')
+        } finally {
+          if (reason === 'gap') gapRecoveryPending = false
+          fullRefreshInFlight = null
         }
-      } catch (requestError) {
-        if (active && !receivedState) setError(requestError instanceof Error ? requestError.message : 'PVP 权威状态读取失败。')
-      }
-      if (active) timer = window.setTimeout(() => void poll(), 500)
+      })()
+      return fullRefreshInFlight
     }
-    void poll()
+    const connect = async () => {
+      if (!active || document.visibilityState === 'hidden') return
+      controller?.abort()
+      const streamController = new AbortController()
+      controller = streamController
+      setRealtimeStatus('connecting')
+      try {
+        const headers = new Headers({ Accept: 'text/event-stream' })
+        if (token) headers.set('Authorization', `Bearer ${token}`)
+        const response = await fetch(`${apiBaseUrl}/pvp/matches/${encodeURIComponent(options.matchId!)}/events`, { headers, signal: streamController.signal })
+        setRealtimeStatus('live')
+        await consumeSse(response, (payload) => {
+          const root = asRecord(payload)
+          const seq = readNumber(root, 'seq')
+          const sequenceDecision = classifyPvpSequence(lastSeq, seq)
+          if (sequenceDecision === 'stale') return
+          if (sequenceDecision === 'gap') void refreshFull('gap')
+          const next = normalizeGameState(payload)
+          if (next) setGameState(next)
+          lastSeq = seq
+        }, streamController.signal)
+        if (active && !document.hidden) {
+          setRealtimeStatus('fallback')
+          await refreshFull('stream_end')
+          reconnectTimer = window.setTimeout(() => void connect(), 1_000)
+        }
+      } catch (streamError) {
+        if (!active || streamController.signal.aborted) return
+        setRealtimeStatus('fallback')
+        await refreshFull('stream_error')
+        reconnectTimer = window.setTimeout(() => void connect(), 1_000)
+      }
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') { controller?.abort(); setRealtimeStatus('idle') }
+      else { void refreshFull('visibility'); void connect() }
+    }
+    void refreshFull('initial')
+    void connect()
+    document.addEventListener('visibilitychange', onVisibility)
     return () => {
       active = false
-      if (timer !== null) window.clearTimeout(timer)
+      controller?.abort()
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
+      document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [apiBaseUrl, options.matchId, token])
+
+  useEffect(() => {
+    if (!options.matchId || !apiBaseUrl || !gameState || gameState.status !== 'loading'
+      || gameState.self.loadStatus === 'loaded' || loadAckStatus === 'preloading' || loadAckStatus === 'acknowledged'
+      || loadAckStatus === 'failed') return
+    let cancelled = false
+    const acknowledge = async () => {
+      setLoadAckStatus('preloading')
+      const requestKey = `pvp-load-ack:${options.matchId}`
+      const requestId = sessionStorage.getItem(requestKey) ?? crypto.randomUUID()
+      sessionStorage.setItem(requestKey, requestId)
+      try {
+        if (!gameState.loading.rulesetVersion || !gameState.loading.routeHash || gameState.loading.assetsVersion !== 'pvp_assets_v1') {
+          throw new Error('PVP_LOAD_MANIFEST_MISMATCH')
+        }
+        await document.fonts?.ready
+        if (cancelled) return
+        const result = await requestJson<PvpCommandResult>(`${apiBaseUrl}/pvp/matches/${encodeURIComponent(options.matchId!)}/load-ack`, token, {
+          method: 'POST', body: JSON.stringify({ requestId, status: 'loaded', ...gameState.loading }),
+        })
+        if (!result.ok) throw new Error(result.code)
+        setLoadAckStatus('acknowledged')
+      } catch (loadError) {
+        if (cancelled) return
+        const failureCode = loadError instanceof Error ? loadError.message : 'PVP_CLIENT_LOAD_FAILED'
+        await requestJson(`${apiBaseUrl}/pvp/matches/${encodeURIComponent(options.matchId!)}/load-ack`, token, {
+          method: 'POST', body: JSON.stringify({ requestId: `${requestId}:failed`, status: 'failed', ...gameState.loading, failureCode }),
+        }).catch(() => null)
+        setLoadAckStatus('failed')
+        setError(failureCode)
+      }
+    }
+    void acknowledge()
+    return () => { cancelled = true }
+  }, [apiBaseUrl, gameState, loadAckStatus, options.matchId, token])
 
   useEffect(() => {
     if (!options.roomId || !apiBaseUrl) {
@@ -423,7 +540,7 @@ export function usePvpData(options: UsePvpDataOptions = {}) {
     try {
       const payload = await requestJson<unknown>(url, token, {
         method,
-        body: body ? JSON.stringify({ ...body, requestId: crypto.randomUUID() }) : undefined,
+        body: body ? JSON.stringify({ ...body, requestId: typeof body.requestId === 'string' ? body.requestId : crypto.randomUUID() }) : undefined,
       })
       return keys.length ? unwrap<T>(payload, keys) : payload as T
     } catch (requestError) {
@@ -530,6 +647,65 @@ export function usePvpData(options: UsePvpDataOptions = {}) {
     }
   }, [mutate])
 
+  const resyncBattle = useCallback(async (matchId: string) => {
+    if (!apiBaseUrl) return
+    const payload = await requestJson<unknown>(`${apiBaseUrl}/pvp/matches/${encodeURIComponent(matchId)}/state`, token)
+    const next = normalizeGameState(payload)
+    if (next) setGameState(next)
+  }, [apiBaseUrl, token])
+
+  const recruit = useCallback(async (matchId: string) => {
+    if (!gameState) return null
+    setBattleActionMessage('正在请求权威招募…')
+    try {
+      const result = await mutate<PvpCommandResult>(`/matches/${encodeURIComponent(matchId)}/recruit`, 'POST', {
+        requestId: crypto.randomUUID(), expectedTrayRevision: gameState.self.trayRevision,
+      })
+      setBattleActionMessage(result?.ok ? `招募成功：${String(result.details?.glyph ?? '')}` : `招募失败：${result?.code ?? 'UNKNOWN'}`)
+      return result
+    } catch (error) {
+      await resyncBattle(matchId).catch(() => null)
+      setBattleActionMessage(`招募未接受：${error instanceof Error ? error.message : 'UNKNOWN'}`)
+      setError(null)
+      return null
+    }
+  }, [gameState, mutate, resyncBattle])
+
+  const deploy = useCallback(async (matchId: string, unitId: string, x: number, y: number) => {
+    if (!gameState) return null
+    setBattleActionMessage('部署请求已发送…')
+    try {
+      const result = await mutate<PvpCommandResult>(`/matches/${encodeURIComponent(matchId)}/deploy`, 'POST', {
+        requestId: crypto.randomUUID(), unitId, x, y,
+        expectedTrayRevision: gameState.self.trayRevision, expectedBoardRevision: gameState.self.boardRevision,
+      })
+      setBattleActionMessage(result?.ok ? '部署成功。' : `部署失败：${result?.code ?? 'UNKNOWN'}`)
+      return result
+    } catch (error) {
+      await resyncBattle(matchId).catch(() => null)
+      setBattleActionMessage(`部署未接受：${error instanceof Error ? error.message : 'UNKNOWN'}`)
+      setError(null)
+      return null
+    }
+  }, [gameState, mutate, resyncBattle])
+
+  const moveOrMerge = useCallback(async (matchId: string, entityId: string, x: number, y: number) => {
+    if (!gameState) return null
+    setBattleActionMessage('移动/合成请求已发送…')
+    try {
+      const result = await mutate<PvpCommandResult>(`/matches/${encodeURIComponent(matchId)}/move-or-merge`, 'POST', {
+        requestId: crypto.randomUUID(), entityId, x, y, expectedBoardRevision: gameState.self.boardRevision,
+      })
+      setBattleActionMessage(result?.code === 'PIECE_MERGED' ? '合成成功。' : result?.ok ? '移动成功。' : `操作失败：${result?.code ?? 'UNKNOWN'}`)
+      return result
+    } catch (error) {
+      await resyncBattle(matchId).catch(() => null)
+      setBattleActionMessage(`操作未接受：${error instanceof Error ? error.message : 'UNKNOWN'}`)
+      setError(null)
+      return null
+    }
+  }, [gameState, mutate, resyncBattle])
+
   return {
     apiBaseUrl,
     data,
@@ -544,6 +720,10 @@ export function usePvpData(options: UsePvpDataOptions = {}) {
     error,
     notice,
     pressureMessage,
+    battleActionMessage,
+    realtimeStatus,
+    loadAckStatus,
+    retryLoad: () => setLoadAckStatus('idle'),
     refresh,
     joinQueue,
     cancelQueue,
@@ -553,5 +733,8 @@ export function usePvpData(options: UsePvpDataOptions = {}) {
     setReady,
     surrender,
     sendPressure,
+    recruit,
+    deploy,
+    moveOrMerge,
   }
 }

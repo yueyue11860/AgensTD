@@ -10,6 +10,8 @@ const fs_1 = require("fs");
 const cors_1 = __importDefault(require("cors"));
 const express_1 = __importDefault(require("express"));
 const server_config_1 = require("./config/server-config");
+const production_policy_1 = require("./config/production-policy");
+const supabase_auth_1 = require("./auth/supabase-auth");
 const Room_1 = require("./core/Room");
 const performance_telemetry_1 = require("./core/performance-telemetry");
 const projected_tick_stream_1 = require("./core/projected-tick-stream");
@@ -21,7 +23,8 @@ const action_rate_limiter_1 = require("./network/action-rate-limiter");
 const agent_api_1 = require("./network/agent-api");
 const rest_api_1 = require("./network/rest-api");
 const pvp_rest_api_1 = require("./network/pvp-rest-api");
-const oauth_routes_1 = require("./network/oauth-routes");
+const supabase_auth_routes_1 = require("./network/supabase-auth-routes");
+const e2e_control_api_1 = require("./network/e2e-control-api");
 const socket_gateway_1 = require("./network/socket-gateway");
 const pvp_platform_v1_1 = require("./pvp-platform-v1");
 const progress_store_1 = require("./data/progress-store");
@@ -30,8 +33,44 @@ const account_v1_1 = require("./account-v1");
 const memory_store_1 = require("./account-v1/memory-store");
 const supabase_player_account_store_1 = require("./data/supabase-player-account-store");
 const resilient_player_account_store_1 = require("./data/resilient-player-account-store");
+const supabase_pve_reward_store_1 = require("./data/supabase-pve-reward-store");
+const persistence_readiness_1 = require("./data/persistence-readiness");
+const pve_reward_v1_1 = require("./pve-reward-v1");
+const pve_checkpoint_v1_1 = require("./pve-checkpoint-v1");
+const supabase_pve_checkpoint_store_1 = require("./data/supabase-pve-checkpoint-store");
 const player_account_adapters_1 = require("./data/player-account-adapters");
 const config = (0, server_config_1.createServerConfig)();
+const isProduction = process.env.NODE_ENV === 'production';
+const persistencePolicy = (0, production_policy_1.resolvePersistencePolicy)({
+    nodeEnv: process.env.NODE_ENV,
+    pvpStore: process.env.PVP_STORE,
+    hasSupabaseCredentials: Boolean(config.supabaseUrl && config.supabaseServiceRoleKey),
+});
+const persistenceReadiness = new persistence_readiness_1.PersistenceReadinessTracker(persistencePolicy.requiresWritablePersistence || persistencePolicy.pvpStoreMode === 'supabase'
+    ? 'supabase'
+    : 'memory');
+let pveCheckpointReadiness = {
+    status: 'checking', code: null, recovered: false,
+};
+let gateway = null;
+const checkpointStoreMode = (0, production_policy_1.resolvePveCheckpointStoreMode)(process.env.NODE_ENV, process.env.PVE_CHECKPOINT_STORE);
+const supabaseCheckpointStore = new supabase_pve_checkpoint_store_1.SupabasePveCheckpointStore(config);
+if (checkpointStoreMode === 'supabase' && !supabaseCheckpointStore.isEnabled()) {
+    throw new Error('PVE_CHECKPOINT_STORE=supabase requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY');
+}
+const pveCheckpointStore = checkpointStoreMode === 'supabase'
+    ? supabaseCheckpointStore
+    : new pve_checkpoint_v1_1.MemoryPveCheckpointStore();
+const pveCheckpointCoordinator = new pve_checkpoint_v1_1.PveCheckpointCoordinator(pveCheckpointStore, {
+    checkpointEveryTicks: (() => {
+        const configured = Number(process.env.PVE_CHECKPOINT_EVERY_TICKS ?? 50);
+        return Number.isFinite(configured) ? Math.max(1, Math.round(configured)) : 50;
+    })(),
+    onFatal: () => {
+        pveCheckpointReadiness = { status: 'not_ready', code: 'PVE_CHECKPOINT_UNHEALTHY', recovered: pveCheckpointReadiness.recovered };
+        gateway?.stopRoomLoops();
+    },
+});
 const app = (0, express_1.default)();
 const frontendDistDir = path_1.default.resolve(process.cwd(), '../FE/dist');
 const frontendIndexFile = path_1.default.join(frontendDistDir, 'index.html');
@@ -55,17 +94,35 @@ if (hasFrontendBuild) {
     app.use(express_1.default.static(frontendDistDir));
 }
 app.get('/health', (_request, response) => {
-    response.json({
-        ok: true,
+    const persistence = persistenceReadiness.snapshot();
+    const ok = (0, persistence_readiness_1.isPersistenceReadyForTraffic)(persistence, persistencePolicy.requiresWritablePersistence)
+        && pveCheckpointReadiness.status === 'ready';
+    response.status(ok ? 200 : 503).json({
+        ok,
         service: 'agenstd-houduan',
-        port: config.port,
-        tickRateMs: config.tickRateMs,
+        persistence,
+        stores: { auth: 'supabase', pvp: persistencePolicy.pvpStoreMode, pveCheckpoint: checkpointStoreMode },
+        pveCheckpoint: pveCheckpointReadiness,
     });
 });
 const httpServer = http_1.default.createServer(app);
-const accountStore = new resilient_player_account_store_1.ResilientPlayerAccountStore(new supabase_player_account_store_1.SupabasePlayerAccountStore(config), new memory_store_1.MemoryPlayerAccountStore());
+const supabaseAccountStore = new supabase_player_account_store_1.SupabasePlayerAccountStore(config);
+if (isProduction && !supabaseAccountStore.isEnabled()) {
+    throw new Error('Production requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY for player accounts');
+}
+const accountStore = isProduction
+    ? supabaseAccountStore
+    : new resilient_player_account_store_1.ResilientPlayerAccountStore(supabaseAccountStore, new memory_store_1.MemoryPlayerAccountStore());
 const accountBuildResolver = new player_account_adapters_1.V1MatchBuildDefinitionResolver();
 const accountService = new account_v1_1.PlayerAccountService(accountStore, new player_account_adapters_1.V1AccountShopCatalog());
+const rewardStoreMode = (0, production_policy_1.resolvePveRewardStoreMode)(process.env.NODE_ENV, process.env.PVE_REWARD_STORE);
+const supabaseRewardStore = new supabase_pve_reward_store_1.SupabasePveRewardStore(config);
+if (rewardStoreMode === 'supabase' && !supabaseRewardStore.isEnabled()) {
+    throw new Error('PVE_REWARD_STORE=supabase requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY');
+}
+const pveRewardStore = rewardStoreMode === 'supabase' ? supabaseRewardStore : new pve_reward_v1_1.MemoryPveRewardStore();
+const pveRewardService = new pve_reward_v1_1.PveRewardService(pveRewardStore);
+const pveSettlementCoordinator = new pve_reward_v1_1.PveSettlementCoordinator(pveRewardStore, accountService);
 const roomManager = new Room_1.RoomManager(config, {
     accountService,
     buildResolver: accountBuildResolver,
@@ -81,21 +138,18 @@ const actionLimiter = new action_rate_limiter_1.ActionRateLimiter(config.actionR
 const progressStore = new progress_store_1.ProgressStore();
 const userStore = new supabase_user_store_1.SupabaseUserStore(config);
 progressStore.setUserStore(userStore);
-// 本地默认内存，避免仅因 .env 中存在 Supabase 凭据就误写远端。
-// 正式持久化必须显式设置 PVP_STORE=supabase；凭据缺失时直接拒绝启动，不静默丢战绩。
-const pvpStoreMode = (process.env.PVP_STORE ?? 'memory').trim().toLowerCase();
-if (pvpStoreMode !== 'memory' && pvpStoreMode !== 'supabase') {
-    throw new Error(`Unsupported PVP_STORE=${pvpStoreMode}; expected memory or supabase`);
+const supabaseAuthVerifier = new supabase_auth_1.SupabaseAuthVerifier(config);
+(0, supabase_auth_1.configureSupabaseAuthVerifier)(supabaseAuthVerifier);
+if (isProduction && (!supabaseAuthVerifier.isEnabled() || !userStore.isEnabled())) {
+    throw new Error('Production Supabase Auth requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY');
 }
-if (pvpStoreMode === 'supabase' && (!config.supabaseUrl || !config.supabaseServiceRoleKey)) {
-    throw new Error('PVP_STORE=supabase requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY');
-}
-const pvpStore = pvpStoreMode === 'supabase' ? new supabase_pvp_store_1.SupabasePvpStore(config) : new memory_pvp_store_1.MemoryPvpStore();
+const pvpStore = persistencePolicy.pvpStoreMode === 'supabase' ? new supabase_pvp_store_1.SupabasePvpStore(config) : new memory_pvp_store_1.MemoryPvpStore();
 const pvpPlatform = new pvp_platform_v1_1.PvpPlatformService({ store: pvpStore });
-const gateway = new socket_gateway_1.SocketGateway(httpServer, roomManager, config, performanceTelemetry, actionLimiter, progressStore, projectedTickStream, accountService);
-app.use('/api', (0, oauth_routes_1.createOAuthRouter)(config, userStore));
+gateway = new socket_gateway_1.SocketGateway(httpServer, roomManager, config, performanceTelemetry, actionLimiter, progressStore, projectedTickStream, accountService, pveRewardService, pveSettlementCoordinator, pveCheckpointCoordinator, true);
+app.use('/api', (0, supabase_auth_routes_1.createSupabaseAuthRouter)(config, userStore));
+app.use('/api/e2e', (0, e2e_control_api_1.createE2eControlRouter)(config, gateway));
 app.use('/api/pvp', (0, pvp_rest_api_1.createPvpRestApiRouter)(config, pvpPlatform));
-app.use('/api', (0, rest_api_1.createRestApiRouter)(engine, roomManager, config, actionLimiter, replayRecorder, competitionStore, progressStore, accountService));
+app.use('/api', (0, rest_api_1.createRestApiRouter)(engine, roomManager, config, actionLimiter, replayRecorder, competitionStore, progressStore, accountService, pveRewardStore, pveCheckpointCoordinator));
 app.use('/api/agent', (0, agent_api_1.createAgentApiRouter)(projectedTickStream, config, replayRecorder, competitionStore, performanceTelemetry));
 if (hasFrontendBuild) {
     app.use((request, response, next) => {
@@ -106,10 +160,54 @@ if (hasFrontendBuild) {
         response.sendFile(frontendIndexFile);
     });
 }
-httpServer.listen(config.port, () => {
+void Promise.all([
+    pveSettlementCoordinator.recover(),
+    persistenceReadiness.snapshot().mode === 'supabase'
+        ? (0, persistence_readiness_1.probeSupabaseWrite)(config)
+        : Promise.resolve({ status: 'ready', writable: true, checkedAt: new Date().toISOString(), code: null }),
+    (async () => {
+        // Ask for one sentinel beyond the supported room budget. Silently omitting an older active
+        // room would advertise readiness while abandoning its authoritative match.
+        const latest = await pveCheckpointStore.listLatestCheckpoints(1001);
+        if (latest.length > 1000)
+            throw new Error('PVE_CHECKPOINT_DISCOVERY_ROOM_LIMIT_EXCEEDED');
+        const roomIds = new Set(latest.flatMap((checkpoint) => {
+            const engineState = checkpoint.payload.engine?.state;
+            return engineState?.status === 'finished' ? [] : [checkpoint.roomId];
+        }));
+        const results = await Promise.all([...roomIds].map((roomId) => (pveCheckpointCoordinator.recoverAndAttach(roomManager.getOrCreateRoom(roomId)))));
+        return {
+            recovered: results.some((result) => result.recovered),
+            recoveredRooms: results.filter((result) => result.recovered).length,
+            replayedActions: results.reduce((total, result) => total + result.replayedActions, 0),
+        };
+    })(),
+])
+    .then(([{ recovered, failed }, persistenceProbe, checkpointRecovery]) => {
+    persistenceReadiness.mark(persistenceProbe);
+    if (persistenceProbe.status !== 'ready' || !persistenceProbe.writable) {
+        throw new Error(`Persistence readiness failed: ${persistenceProbe.code ?? 'NOT_WRITABLE'}`);
+    }
+    pveCheckpointReadiness = { status: 'ready', code: null, recovered: checkpointRecovery.recovered };
+    if (recovered > 0 || failed > 0)
+        console.info(`PVE settlement recovery: recovered=${recovered} failed=${failed}`);
+    if (isProduction && failed > 0)
+        throw new Error(`PVE settlement recovery left ${failed} failed record(s)`);
+    gateway.prepareRoomRuntimes();
+    gateway.startRoomLoops();
+    httpServer.listen(config.port, () => { });
+})
+    .catch((error) => {
+    const details = error instanceof Error ? error.message : String(error);
+    persistenceReadiness.mark({ status: 'not_ready', writable: false, checkedAt: new Date().toISOString(), code: 'BOOTSTRAP_FAILED' });
+    pveCheckpointReadiness = { status: 'not_ready', code: 'BOOTSTRAP_FAILED', recovered: false };
+    console.error(`Persistence bootstrap failed; refusing to listen: ${details}`);
+    pvpPlatform.shutdown();
+    gateway.shutdown(() => { process.exitCode = 1; });
 });
 const shutdown = () => {
     pvpPlatform.shutdown();
+    pveCheckpointCoordinator.shutdown();
     void replayRecorder.flushLatest()
         .catch((error) => {
         const details = error instanceof Error ? error.message : String(error);

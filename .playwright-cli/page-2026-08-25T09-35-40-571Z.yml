@@ -1,0 +1,35 @@
+- main [ref=f17e3]:
+  - generic [ref=f17e8]:
+    - generic [ref=f17e9]:
+      - button "返回主页" [ref=f17e10]
+      - button "排行榜" [ref=f17e15]
+    - generic [ref=f17e25]:
+      - generic [ref=f17e26]:
+        - generic [ref=f17e27]:
+          - generic [ref=f17e28]: 南天门 · 守关集结处
+          - heading "寻一队同道，共赴西游章回" [level=1] [ref=f17e29]
+          - paragraph [ref=f17e30]: 选择已有战旗加入，或自行立旗召集一至四位守关者。
+        - generic [ref=f17e31]:
+          - generic [ref=f17e35]: 寻找队伍
+          - textbox "输入队伍名或房号…" [ref=f17e37]
+        - generic [ref=f17e38]:
+          - button "刷新队伍" [ref=f17e39]
+          - button "立下战旗" [ref=f17e46]
+      - generic [ref=f17e49]:
+        - generic [ref=f17e50]: 房号
+        - generic [ref=f17e51]: 守关队伍
+        - generic [ref=f17e52]: 同道
+        - generic [ref=f17e53]: 灵犀
+        - generic [ref=f17e54]: 口令
+        - generic [ref=f17e55]: 军情
+        - generic [ref=f17e56]: 入队
+      - generic [ref=f17e58] [cursor=pointer]:
+        - generic [ref=f17e59]: RM-3333
+        - generic [ref=f17e60]: RM-3333
+        - generic [ref=f17e61]: 1 / 4
+        - generic [ref=f17e62]: "--"
+        - generic [ref=f17e63]: 部署中
+        - button "加入" [ref=f17e66]
+      - generic [ref=f17e68]:
+        - button "上一页" [disabled] [ref=f17e69]
+        - button "下一页" [disabled] [ref=f17e73]

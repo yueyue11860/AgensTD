@@ -1,146 +1,155 @@
+import type { Session, User } from '@supabase/supabase-js'
 import { useCallback, useEffect, useState } from 'react'
+import { clearRuntimeAuthSession, setRuntimeAuthSession } from '../lib/auth-session-bridge'
 import { resolveApiBaseUrl } from '../lib/runtime-config'
+import { getSupabaseBrowserClient } from '../lib/supabase-browser'
 
 export interface AuthUser {
   userId: string
   name: string
   avatar: string
+  email?: string
 }
 
 interface AuthState {
   user: AuthUser | null
   sessionToken: string | null
   isLoading: boolean
+  error: string | null
 }
 
-const SESSION_TOKEN_KEY = 'agenstd_session_token'
-const AUTH_USER_KEY = 'agenstd_auth_user'
+export interface AuthActionResult {
+  ok: boolean
+  error?: string
+  needsEmailConfirmation?: boolean
+}
 
-function loadPersistedSession(): { token: string | null; user: AuthUser | null } {
-  try {
-    const token = localStorage.getItem(SESSION_TOKEN_KEY)
-    const userJson = localStorage.getItem(AUTH_USER_KEY)
-    const user = userJson ? (JSON.parse(userJson) as AuthUser) : null
-    return { token, user }
-  } catch {
-    return { token: null, user: null }
+function userFromSupabase(user: User): AuthUser {
+  const metadata = user.user_metadata ?? {}
+  const email = user.email ?? undefined
+  return {
+    userId: user.id,
+    name: String(metadata.display_name ?? metadata.full_name ?? metadata.name ?? email?.split('@')[0] ?? user.id),
+    avatar: String(metadata.avatar_url ?? metadata.picture ?? ''),
+    email,
   }
 }
 
-function persistSession(token: string, user: AuthUser) {
-  localStorage.setItem(SESSION_TOKEN_KEY, token)
-  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user))
-}
+async function verifyWithGameServer(session: Session, apiBase: string | null) {
+  const fallbackUser = userFromSupabase(session.user)
+  if (!apiBase) return fallbackUser
 
-function clearPersistedSession() {
-  localStorage.removeItem(SESSION_TOKEN_KEY)
-  localStorage.removeItem(AUTH_USER_KEY)
+  const response = await fetch(`${apiBase}/auth/me`, {
+    headers: { Authorization: `Bearer ${session.access_token}` },
+  })
+  const payload = await response.json().catch(() => null) as { ok?: boolean; user?: AuthUser; message?: string } | null
+  if (!response.ok || !payload?.ok) {
+    throw new Error(payload?.message ?? '游戏服务器未接受当前登录会话')
+  }
+  return payload.user ?? fallbackUser
 }
 
 export function useAuth() {
-  const [state, setState] = useState<AuthState>(() => {
-    const persisted = loadPersistedSession()
-    return {
-      user: persisted.user,
-      sessionToken: persisted.token,
-      isLoading: !!persisted.token,
-    }
+  const [state, setState] = useState<AuthState>({
+    user: null,
+    sessionToken: null,
+    isLoading: true,
+    error: null,
   })
-
   const apiBase = resolveApiBaseUrl()
+  const supabase = getSupabaseBrowserClient()
 
-  // 启动时用 session token 验证会话是否仍有效
   useEffect(() => {
-    if (!state.sessionToken || !apiBase) {
-      setState((prev) => ({ ...prev, isLoading: false }))
+    if (!supabase) {
+      clearRuntimeAuthSession()
+      setState({
+        user: null,
+        sessionToken: null,
+        isLoading: false,
+        error: '缺少 VITE_SUPABASE_URL 或 VITE_SUPABASE_ANON_KEY',
+      })
       return
     }
 
     let cancelled = false
+    let revision = 0
 
-    fetch(`${apiBase}/auth/me`, {
-      headers: { Authorization: `Bearer ${state.sessionToken}` },
-    })
-      .then((res) => res.json())
-      .then((json: Record<string, unknown>) => {
-        if (cancelled) return
-        if (json.ok && json.user) {
-          const user = json.user as AuthUser
-          setState({ user, sessionToken: state.sessionToken, isLoading: false })
-          persistSession(state.sessionToken!, user)
-        } else {
-          clearPersistedSession()
-          setState({ user: null, sessionToken: null, isLoading: false })
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setState((prev) => ({ ...prev, isLoading: false }))
-        }
-      })
-
-    return () => { cancelled = true }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  /** 发起 OAuth 登录：获取授权 URL 并跳转 */
-  const login = useCallback(async () => {
-    if (!apiBase) return
-
-    const res = await fetch(`${apiBase}/auth/login`)
-    const json = (await res.json()) as { ok: boolean; authorizeUrl?: string; state?: string }
-    if (json.ok && json.authorizeUrl) {
-      // 保存 state 用于 CSRF 校验
-      if (json.state) {
-        sessionStorage.setItem('oauth_state', json.state)
+    const applySession = async (session: Session | null) => {
+      const currentRevision = ++revision
+      if (!session) {
+        clearRuntimeAuthSession()
+        if (!cancelled) setState({ user: null, sessionToken: null, isLoading: false, error: null })
+        return
       }
-      window.location.href = json.authorizeUrl
+
+      try {
+        const user = await verifyWithGameServer(session, apiBase)
+        if (cancelled || currentRevision !== revision) return
+        setRuntimeAuthSession(session.access_token, user)
+        setState({ user, sessionToken: session.access_token, isLoading: false, error: null })
+      } catch (error) {
+        if (cancelled || currentRevision !== revision) return
+        clearRuntimeAuthSession()
+        setState({
+          user: null,
+          sessionToken: null,
+          isLoading: false,
+          error: error instanceof Error ? error.message : '登录会话验证失败',
+        })
+      }
     }
-  }, [apiBase])
 
-  /** 用回调中的 code 换取 session */
-  const exchangeCode = useCallback(async (code: string): Promise<boolean> => {
-    if (!apiBase) return false
-
-    const res = await fetch(`${apiBase}/auth/exchange`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
+    void supabase.auth.getSession().then(({ data, error }) => {
+      if (cancelled) return
+      if (error) {
+        clearRuntimeAuthSession()
+        setState({ user: null, sessionToken: null, isLoading: false, error: error.message })
+        return
+      }
+      void applySession(data.session)
     })
 
-    const json = (await res.json()) as {
-      ok: boolean
-      sessionToken?: string
-      user?: AuthUser
-    }
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
+      void applySession(session)
+    })
 
-    if (json.ok && json.sessionToken && json.user) {
-      persistSession(json.sessionToken, json.user)
-      setState({ user: json.user, sessionToken: json.sessionToken, isLoading: false })
-      return true
+    return () => {
+      cancelled = true
+      subscription.subscription.unsubscribe()
     }
-    return false
-  }, [apiBase])
+  }, [apiBase, supabase])
 
-  /** 登出 */
+  const login = useCallback(async (email: string, password: string): Promise<AuthActionResult> => {
+    if (!supabase) return { ok: false, error: 'Supabase 登录尚未配置' }
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
+    return error ? { ok: false, error: error.message } : { ok: true }
+  }, [supabase])
+
+  const register = useCallback(async (name: string, email: string, password: string): Promise<AuthActionResult> => {
+    if (!supabase) return { ok: false, error: 'Supabase 登录尚未配置' }
+    const { data, error } = await supabase.auth.signUp({
+      email: email.trim(),
+      password,
+      options: { data: { display_name: name.trim() || email.split('@')[0] } },
+    })
+    if (error) return { ok: false, error: error.message }
+    return { ok: true, needsEmailConfirmation: !data.session }
+  }, [supabase])
+
   const logout = useCallback(async () => {
-    if (apiBase && state.sessionToken) {
-      await fetch(`${apiBase}/auth/logout`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${state.sessionToken}` },
-      }).catch(() => {})
-    }
-    clearPersistedSession()
-    setState({ user: null, sessionToken: null, isLoading: false })
-  }, [apiBase, state.sessionToken])
+    clearRuntimeAuthSession()
+    setState({ user: null, sessionToken: null, isLoading: false, error: null })
+    if (supabase) await supabase.auth.signOut().catch(() => undefined)
+  }, [supabase])
 
   return {
     user: state.user,
     sessionToken: state.sessionToken,
     isLoading: state.isLoading,
     isLoggedIn: !!state.user,
+    error: state.error,
     login,
-    exchangeCode,
+    register,
     logout,
   }
 }

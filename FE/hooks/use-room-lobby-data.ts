@@ -8,6 +8,9 @@ export interface RoomPlayerSlot {
   playerId: string | null
   playerName: string | null
   connected: boolean
+  connectionState?: 'connected' | 'reconnecting' | 'disconnected'
+  reconnectDeadlineAt?: number
+  reconnectRemainingMs?: number
   isHost?: boolean
 }
 

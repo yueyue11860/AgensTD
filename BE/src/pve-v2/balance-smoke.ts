@@ -12,9 +12,11 @@ import {
 } from './balance-catalog'
 import {
   runPureSoldierMonteCarlo,
+  simulatePureSoldierEconomyRun,
   simulateFixedSoldierWave,
   type PureSoldierMonteCarloSummary,
 } from './balance-simulator'
+import { PVE_FULL_MATCH_BASE_GROSS_RICE } from './economy'
 import { SOLDIER_TYPES } from './catalogs'
 import type { SoldierLevel } from './types'
 import { PveGameRuntime } from './runtime'
@@ -43,7 +45,7 @@ export function runPveBalanceSmokeChecks(): PveBalanceSmokeReport {
 
   assert.deepEqual(PVE_DIFFICULTIES, ['easy', 'normal', 'hard'])
   assert.deepEqual(PVE_BASE_HP_BY_WAVE, [
-    24, 28, 34, 42, 52, 65, 82, 104, 132, 168, 220, 285, 370, 480, 620, 800, 1020, 1300, 1650, 2100,
+    24, 28, 34, 42, 52, 65, 82, 104, 132, 168, 197, 231, 271, 318, 373, 438, 512, 601, 705, 826,
   ])
   assert.deepEqual(PVE_BASE_ARMOR_BY_WAVE, [
     0, 0, 1, 2, 3, 4, 5, 7, 9, 11, 13, 15, 17, 19, 22, 25, 28, 31, 34, 38,
@@ -52,24 +54,24 @@ export function runPveBalanceSmokeChecks(): PveBalanceSmokeReport {
     0, 0, 1, 1, 2, 3, 4, 6, 8, 10, 12, 14, 16, 18, 21, 24, 27, 30, 33, 36,
   ])
   assert.deepEqual(resolvePveBalanceProfile(1, 'easy'), {
-    profileId: 'pve-easy-l1-v1', levelId: 1, difficulty: 'easy',
-    enemyHpMultiplierBps: 8500, enemyDefenseAdd: 0,
+    profileId: 'pve-easy-l1-v2', levelId: 1, difficulty: 'easy',
+    enemyHpMultiplierBps: 12750, enemyDefenseAdd: 0,
   })
   assert.deepEqual(resolvePveBalanceProfile(10, 'easy'), {
-    profileId: 'pve-easy-l10-v1', levelId: 10, difficulty: 'easy',
-    enemyHpMultiplierBps: 13000, enemyDefenseAdd: 9,
+    profileId: 'pve-easy-l10-v2', levelId: 10, difficulty: 'easy',
+    enemyHpMultiplierBps: 12900, enemyDefenseAdd: 9,
   })
   assert.deepEqual(resolvePveBalanceProfile(1, 'normal'), {
-    profileId: 'pve-normal-l1-v1', levelId: 1, difficulty: 'normal',
-    enemyHpMultiplierBps: 13500, enemyDefenseAdd: 8,
+    profileId: 'pve-normal-l1-v2', levelId: 1, difficulty: 'normal',
+    enemyHpMultiplierBps: 12900, enemyDefenseAdd: 4,
   })
   assert.deepEqual(resolvePveBalanceProfile(10, 'normal'), {
-    profileId: 'pve-normal-l10-v1', levelId: 10, difficulty: 'normal',
-    enemyHpMultiplierBps: 19800, enemyDefenseAdd: 17,
+    profileId: 'pve-normal-l10-v2', levelId: 10, difficulty: 'normal',
+    enemyHpMultiplierBps: 13700, enemyDefenseAdd: 13,
   })
   assert.deepEqual(resolvePveBalanceProfile(1, 'hard'), {
-    profileId: 'pve-hard-shared-v1', levelId: 1, difficulty: 'hard',
-    enemyHpMultiplierBps: 24000, enemyDefenseAdd: 26,
+    profileId: 'pve-hard-shared-v2', levelId: 1, difficulty: 'hard',
+    enemyHpMultiplierBps: 14800, enemyDefenseAdd: 18,
   })
   assert.throws(() => resolvePveBalanceProfile(0, 'easy'))
   assert.throws(() => resolvePveBalanceProfile(11, 'easy'))
@@ -79,7 +81,8 @@ export function runPveBalanceSmokeChecks(): PveBalanceSmokeReport {
     for (let levelId = 2; levelId <= PVE_BALANCE_LEVEL_MAX; levelId += 1) {
       const previous = resolvePveWaveCatalog(levelId - 1, difficulty).waves
       const current = resolvePveWaveCatalog(levelId, difficulty).waves
-      assert.ok(current.every((wave, index) => wave.maxHp > previous[index].maxHp))
+      // HP 可使用平台预算，但不得倒退；关卡单调性由下方严格增长的双防一并保证。
+      assert.ok(current.every((wave, index) => wave.maxHp >= previous[index].maxHp))
       assert.ok(current.every((wave, index) => wave.armor > previous[index].armor))
       assert.ok(current.every((wave, index) => wave.magicResistance > previous[index].magicResistance))
     }
@@ -123,7 +126,7 @@ export function runPveBalanceSmokeChecks(): PveBalanceSmokeReport {
   assert.equal(runtime.start().ok, true)
   const runtimeSnapshot = runtime.tick()
   const expectedWave = resolvePveWaveCatalog(7, 'normal').waves[0]
-  assert.equal(runtimeSnapshot.balance.profileId, 'pve-normal-l7-v1')
+  assert.equal(runtimeSnapshot.balance.profileId, 'pve-normal-l7-v2')
   assert.equal(runtimeSnapshot.enemies[0]?.maxHp, expectedWave.maxHp)
   assert.equal(runtimeSnapshot.enemies[0]?.armor, expectedWave.armor)
   assert.equal(runtimeSnapshot.enemies[0]?.magicResistance, expectedWave.magicResistance)
@@ -135,6 +138,17 @@ export function runPveBalanceSmokeChecks(): PveBalanceSmokeReport {
   // 真实“新手首局 >=75%”还需几何机器人/真人埋点验证，这里使用 70% 防回归底线。
   assert.ok(simpleOnePureSoldier.clearRateBps >= 7000)
   assert.ok(simpleOnePureSoldier.p10HighestClearedWave >= 19)
+  assert.equal(PVE_FULL_MATCH_BASE_GROSS_RICE, 335)
+  assert.equal(simpleOnePureSoldier.averageRecruitBatchesAfterWave5Milli, 12_000,
+    '前5波应稳定支撑12批付费招募，形成招募/合成闭环')
+  assert.ok(simpleOnePureSoldier.averageRecruitBatchesMilli >= 26_000
+    && simpleOnePureSoldier.averageRecruitBatchesMilli <= 34_000,
+  '完整简单局付费招募应落在26–34批目标区间')
+  const fullClearEconomy = simulatePureSoldierEconomyRun('gross:0', 1, 'easy')
+  assert.equal(fullClearEconomy.highestClearedWave, 20)
+  assert.equal(fullClearEconomy.grossRiceEarned, 335)
+  assert.equal(fullClearEconomy.recruitBatchesAfterWave5, 12)
+  assert.ok(fullClearEconomy.recruitBatches >= 26 && fullClearEconomy.recruitBatches <= 34)
   const simpleTenPureSoldier = runPureSoldierMonteCarlo(512, 10, 'easy', 'balance-regression')
   const normalTenPureSoldier = runPureSoldierMonteCarlo(512, 10, 'normal', 'balance-regression')
   const hardPureSoldier = runPureSoldierMonteCarlo(512, 1, 'hard', 'balance-regression')

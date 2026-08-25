@@ -2,7 +2,7 @@ import type { TowerBehaviorDefinition, TowerBehaviorKind, TowerFireRate } from '
 import type { PveMatchState } from '../../../shared/contracts/game'
 
 export type PlayerKind = 'human' | 'agent'
-export type ConnectionStatus = 'connected' | 'disconnected'
+export type ConnectionStatus = 'connected' | 'reconnecting' | 'disconnected'
 export type LogLevel = 'info' | 'warn' | 'error'
 export type MatchStatus = 'waiting' | 'running' | 'finished'
 export type MatchOutcome = 'victory' | 'defeat'

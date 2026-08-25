@@ -1,0 +1,128 @@
+- main [ref=f7e3]:
+  - button "退出" [ref=f7e5]
+  - generic:
+    - region [ref=f7e174]:
+      - paragraph [ref=f7e13]: 第三步 · 合法部署
+      - heading "把选择落到可部署格" [level=2] [ref=f7e175]
+      - paragraph [ref=f7e15]: 选择后点击战场的可部署格。路线与核心格不会接受部署，服务器确认后棋盘才会更新。
+      - generic [ref=f7e16]: 方向键移动格游标，Enter 或空格确认，Escape 取消。
+      - generic [ref=f7e17]:
+        - button "跳过此步" [ref=f7e18]
+        - button "稍后" [ref=f7e19]
+        - button "全部跳过" [ref=f7e20]
+    - generic: 首局提示：把选择落到可部署格
+  - generic [ref=f7e21]:
+    - generic "全局战况" [ref=f7e22]:
+      - generic [ref=f7e23]:
+        - generic [ref=f7e24]: DEFENSE GRID
+        - strong [ref=f7e25]: 节点防线
+        - generic [ref=f7e26]: 等待关卡同步
+      - generic [ref=f7e27]:
+        - generic [ref=f7e28]:
+          - generic [ref=f7e34]: 斋饭
+          - strong [ref=f7e35]: "10"
+        - generic [ref=f7e36]:
+          - generic [ref=f7e42]: 人口
+          - strong [ref=f7e43]: 0/10
+        - generic [ref=f7e44]:
+          - generic [ref=f7e50]: 敌军
+          - strong [ref=f7e51]: "10"
+      - generic [ref=f7e52]:
+        - generic [ref=f7e55]: 交战中
+        - strong [ref=f7e56]: 第 1 / 20 波
+        - generic "战斗音量" [ref=f7e59]:
+          - button "静音战斗音效" [ref=f7e60]
+          - slider "战斗音效主音量" [ref=f7e65]: "45"
+      - generic [ref=f7e67]:
+        - generic [ref=f7e68]: BOSS首领尚未现身
+        - strong [ref=f7e69]: 预计第 5 波
+      - generic [ref=f7e179]:
+        - paragraph [ref=f7e180]: 同屏超载
+        - paragraph [ref=f7e181]:
+          - text: "10"
+          - generic [ref=f7e182]: / 10
+        - paragraph [ref=f7e183]: 7s
+    - generic [ref=f7e71]:
+      - complementary [ref=f7e72]:
+        - button "收起 5/5" [expanded] [ref=f7e164]:
+          - generic [ref=f7e74]: 收起
+          - strong [ref=f7e75]: 5/5
+        - generic [ref=f7e76]:
+          - region "队友连接状态" [ref=f7e77]:
+            - generic [ref=f7e78]:
+              - paragraph [ref=f7e79]: 联机路况
+              - generic [ref=f7e80]: 1/1 在线
+            - generic [ref=f7e82]:
+              - generic [ref=f7e83]: P1 · 你
+              - strong [ref=f7e84]: 在线
+          - generic [ref=f7e85]:
+            - paragraph [ref=f7e86]: 召唤托盘
+            - generic [ref=f7e87]:
+              - button "枪1级" [active] [ref=f7e165]:
+                - generic [ref=f7e89]: 枪
+                - generic [ref=f7e166]: "1"
+              - button "雷" [ref=f7e167]
+              - button "弓1级" [ref=f7e168]:
+                - generic [ref=f7e93]: 弓
+                - generic [ref=f7e169]: "1"
+              - button "枪1级" [ref=f7e170]:
+                - generic [ref=f7e95]: 枪
+                - generic [ref=f7e171]: "1"
+              - button "刀1级" [ref=f7e172]:
+                - generic [ref=f7e97]: 刀
+                - generic [ref=f7e173]: "1"
+            - button "召唤 5 斋饭" [ref=f7e98]:
+              - generic [ref=f7e104]: 召唤
+              - strong [ref=f7e105]: 5 斋饭
+            - generic [ref=f7e107]:
+              - button "备战席空位1" [ref=f7e108]:
+                - generic [ref=f7e109]: 空
+              - button "备战席空位2" [ref=f7e110]:
+                - generic [ref=f7e111]: 空
+              - button "备战席空位3" [ref=f7e112]:
+                - generic [ref=f7e113]: 空
+          - generic [ref=f7e114]:
+            - generic [ref=f7e116]:
+              - paragraph [ref=f7e117]: 主动道具
+              - paragraph [ref=f7e118]: 2 槽 · 服务端确认后才扣除次数
+            - generic [ref=f7e119]:
+              - button "点 点将笔 2 次可用" [ref=f7e120]:
+                - generic [ref=f7e121]: 点
+                - generic [ref=f7e122]:
+                  - strong [ref=f7e123]: 点将笔
+                  - generic [ref=f7e124]: 2 次可用
+              - button "修 修为丹 2 次可用" [ref=f7e128]:
+                - generic [ref=f7e129]: 修
+                - generic [ref=f7e130]:
+                  - strong [ref=f7e131]: 修为丹
+                  - generic [ref=f7e132]: 2 次可用
+      - complementary "战场文字摘要" [ref=f7e136]:
+        - heading "战场摘要" [level=2] [ref=f7e137]
+        - paragraph [ref=f7e138]: 第 1 / 20 波，当前敌军 10。
+        - paragraph [ref=f7e139]: 当前没有已现身首领。
+        - paragraph [ref=f7e140]: 战场尚未聚焦。
+        - paragraph [ref=f7e141]: 当前选择：召唤托盘第 1 格「枪」。
+        - paragraph [ref=f7e142]: 可执行动作：方向键选择格位，Enter 或空格部署、移动或合成，Escape 取消。
+      - region "29×29西游汉字战场" [ref=f7e143]:
+        - generic [ref=f7e144]:
+          - application "29×29西游汉字战场，第 1 波。方向键移动格游标，Enter 或空格执行，Escape 取消。" [ref=f7e145]
+          - group "战场视角控制" [ref=f7e147]:
+            - button "全阵" [pressed] [ref=f7e148]
+            - button "聚焦" [ref=f7e149]
+            - button "缩小战场" [ref=f7e150]: −
+            - status "战场缩放比例" [ref=f7e151]: 100%
+            - button "放大战场" [ref=f7e152]: ＋
+          - paragraph: 滚轮缩放 · 双指缩放平移 · Shift+方向键平移
+      - complementary "情境情报抽屉":
+        - group [ref=f7e153]:
+          - generic "已激活羁绊 ＋" [ref=f7e154] [cursor=pointer]:
+            - generic [ref=f7e155]: 已激活羁绊
+            - text: ＋
+        - group [ref=f7e156]:
+          - generic "战斗效果 ＋" [ref=f7e157] [cursor=pointer]:
+            - generic [ref=f7e158]: 战斗效果
+            - text: ＋
+        - group [ref=f7e159]:
+          - generic "操作提示 ＋" [ref=f7e160] [cursor=pointer]:
+            - generic [ref=f7e161]: 操作提示
+            - text: ＋

@@ -17,6 +17,12 @@ export const PVE_BASE_ARMOR_BY_WAVE = Object.freeze(WAVE_MINION_CATALOG.map((wav
 export const PVE_BASE_MAGIC_RESISTANCE_BY_WAVE = Object.freeze(
   WAVE_MINION_CATALOG.map((wave) => wave.magicResistance),
 )
+const EASY_HP_MULTIPLIER_BPS_BY_LEVEL = [
+  12750, 12900, 12900, 12900, 12900, 12900, 12900, 12900, 12900, 12900,
+] as const
+const NORMAL_HP_MULTIPLIER_BPS_BY_LEVEL = [
+  12900, 12920, 12940, 12960, 12980, 13100, 13300, 13500, 13600, 13700,
+] as const
 
 export interface PveBalanceProfile {
   profileId: string
@@ -56,31 +62,31 @@ export function resolvePveBalanceProfile(
 
   if (difficulty === 'easy') {
     return {
-      profileId: `pve-easy-l${levelId}-v1`,
+      profileId: `pve-easy-l${levelId}-v2`,
       levelId,
       difficulty,
-      enemyHpMultiplierBps: 8500 + (levelId - 1) * 500,
+      enemyHpMultiplierBps: EASY_HP_MULTIPLIER_BPS_BY_LEVEL[levelId - 1],
       enemyDefenseAdd: levelId - 1,
     }
   }
 
   if (difficulty === 'normal') {
     return {
-      profileId: `pve-normal-l${levelId}-v1`,
+      profileId: `pve-normal-l${levelId}-v2`,
       levelId,
       difficulty,
-      enemyHpMultiplierBps: 13500 + (levelId - 1) * 700,
-      enemyDefenseAdd: 8 + (levelId - 1),
+      enemyHpMultiplierBps: NORMAL_HP_MULTIPLIER_BPS_BY_LEVEL[levelId - 1],
+      enemyDefenseAdd: 4 + (levelId - 1),
     }
   }
 
   return {
     // 困难模式的 profileId 也故意不带 levelId，便于快照审计。
-    profileId: 'pve-hard-shared-v1',
+    profileId: 'pve-hard-shared-v2',
     levelId,
     difficulty,
-    enemyHpMultiplierBps: 24000,
-    enemyDefenseAdd: 26,
+    enemyHpMultiplierBps: 14800,
+    enemyDefenseAdd: 18,
   }
 }
 

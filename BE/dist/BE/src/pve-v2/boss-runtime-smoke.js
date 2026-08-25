@@ -17,12 +17,14 @@ function enemy(id, laneOwnerPlayerId, laneSlot, kind, hp = 100) {
         laneSlot,
         currentHp: hp,
         maxHp: 100,
+        xMilli: 14500,
+        yMilli: 14500,
         lifecycle: 'alive',
     };
 }
 function eventSink() {
     const events = [];
-    return { events, emit: (type, data) => events.push({ type, data }) };
+    return { events, emit: (type, data, choreography) => events.push({ type, data, choreography }) };
 }
 function runNodeWaveSpawn(seed) {
     const runtime = new runtime_1.PveGameRuntime({
@@ -75,11 +77,11 @@ function runNodeWaveSpawn(seed) {
     strict_1.default.equal(snapshot.wave.lanes[0].cleared, true, 'Boss death is required before its lane can clear');
     strict_1.default.equal(snapshot.status, 'finished');
     strict_1.default.equal(snapshot.result?.outcome, 'victory');
-    // 10初始 + 10只普通怪×1 + W5 Boss×5 + W5路线保底25。
-    strict_1.default.equal(snapshot.players[0].rice, 50);
+    // 10初始 + 10只普通怪×1 + W5 Boss×3 + W5路线奖励4。
+    strict_1.default.equal(snapshot.players[0].rice, 27);
     strict_1.default.equal(snapshot.recentEvents.filter((entry) => entry.type === 'BOSS_DIED' && entry.data.enemyId === boss.id).length, 1);
     strict_1.default.equal(snapshot.recentEvents.filter((entry) => entry.type === 'RICE_GRANTED'
-        && entry.data.enemyId === boss.id && entry.data.amount === 5).length, 1);
+        && entry.data.enemyId === boss.id && entry.data.amount === 3).length, 1);
     return snapshot;
 }
 function runFourPlayerTwentyWaveIntegration(seed) {
@@ -202,6 +204,10 @@ function runBossRuntimeSmokeChecks() {
     guardRuntime.registerBoss(guardBoss, guardEncounter, 0, guardEvents.emit);
     guardRuntime.advance({ tick: 0, enemies: [guardBoss], emit: guardEvents.emit });
     strict_1.default.equal(guardRuntime.snapshot().instances[0].skillStates[0].lifecycle, 'warning');
+    const guardWarning = guardEvents.events.find((entry) => entry.type === 'BOSS_CAST_WARNING');
+    strict_1.default.equal(guardWarning?.choreography?.actionId, `guard-boss:${String(guardWarning?.data.skillId)}:cast-1`);
+    strict_1.default.deepEqual(guardWarning?.choreography?.targetIds, ['guard-boss']);
+    strict_1.default.equal(guardWarning?.choreography?.geometry?.kind, 'circle');
     guardRuntime.advance({ tick: 8, enemies: [guardBoss], emit: guardEvents.emit });
     strict_1.default.equal(guardRuntime.snapshot().instances[0].phase, 2);
     strict_1.default.ok(guardRuntime.damageTakenRatioBps(guardBoss, [guardBoss], 8, guardEvents.emit) < 10000);

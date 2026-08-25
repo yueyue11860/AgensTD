@@ -26,6 +26,7 @@ import ReactMarkdown from 'react-markdown'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useCompetitionData } from '../hooks/use-competition-data'
 import { useGameEngine } from '../hooks/use-game-engine'
+import { useDeadlineCountdown } from '../hooks/use-deadline-countdown'
 import { useRoomLobbyData, type RoomPlayerSlot, type RoomSummary } from '../hooks/use-room-lobby-data'
 import { useAuth } from '../hooks/use-auth'
 import { cx } from '../lib/cx'
@@ -339,14 +340,15 @@ function CreateRoomModal({
 
         {/* 头部 */}
         <div className="term-modal-head">
-          <span className="term-modal-title">&gt;_ INITIALIZE_NEW_NODE</span>
+          <span className="term-modal-title">立下守关战旗</span>
+          <small className="term-modal-subtitle">为同行者建立一支西游守关队伍</small>
         </div>
         <div className="term-divider" />
 
         {/* 表单 */}
         <div className="term-modal-body">
           <div className="term-field">
-            <span className="term-field-label">战区代号 <span className="term-field-meta">(MAX_12_CHAR)</span> :</span>
+            <span className="term-field-label">队伍名 <span className="term-field-meta">最多十二字</span></span>
             <div className="term-input-row">
               <span className="term-block-cursor" aria-hidden>█</span>
               <input
@@ -354,14 +356,14 @@ function CreateRoomModal({
                 value={roomName}
                 onChange={(event) => onChangeRoomName(event.target.value.slice(0, 12))}
                 maxLength={12}
-                placeholder="输入战区名称..."
+                placeholder="例如：水帘洞守关队"
                 className="term-input"
               />
             </div>
           </div>
 
           <div className="term-field">
-            <span className="term-field-label">安全密匙 <span className="term-field-meta">(OPTIONAL_SEC_KEY)</span> :</span>
+            <span className="term-field-label">入队口令 <span className="term-field-meta">可选</span></span>
             <div className="term-input-row">
               <span className="term-block-cursor term-block-cursor-red" aria-hidden>█</span>
               <input
@@ -369,7 +371,7 @@ function CreateRoomModal({
                 autoComplete="new-password"
                 value={password}
                 onChange={(event) => onChangePassword(event.target.value)}
-                placeholder="留空则对全网开放..."
+                placeholder="留空则欢迎所有同道"
                 className="term-input"
               />
             </div>
@@ -380,12 +382,12 @@ function CreateRoomModal({
         <div className="term-divider" />
         <div className="term-modal-foot">
           <span className="term-sys-msg" role={error ? 'alert' : undefined}>
-            &gt; SYS_MSG: {error ?? (isCreating ? '正在部署节点...' : '节点算力已就绪...')}
+            {error ?? (isCreating ? '正在悬挂战旗，请稍候…' : '战旗待命，可召集一至四位守关者。')}
           </span>
           <div className="term-modal-actions">
-            <button type="button" onClick={onClose} className="term-btn term-btn-cancel">[ 终止进程 (ESC) ]</button>
+            <button type="button" onClick={onClose} className="term-btn term-btn-cancel">取消</button>
             <button type="button" onClick={onCreate} disabled={isCreating} className="term-btn term-btn-confirm">
-              {isCreating ? '[ 部署中... ]' : '[ 部署节点 (ENT) ]'}
+              {isCreating ? '立旗中…' : '建立队伍'}
             </button>
           </div>
         </div>
@@ -456,7 +458,7 @@ function PlayerCard({
   const isPve = side === 'PVE'
 
   return (
-    <div
+    <article
       role="button"
       tabIndex={0}
       onClick={onClick}
@@ -464,48 +466,32 @@ function PlayerCard({
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick() }
       }}
       className={cx(
-        'absolute inset-0 overflow-hidden outline-none',
-        isPve ? 'split-side-human' : 'split-side-agent',
+        'celestial-mode-card outline-none',
+        isPve ? 'celestial-mode-pve split-side-human' : 'celestial-mode-pvp split-side-agent',
       )}
     >
-      <div className="split-side-fx" aria-hidden="true">
-        {!isPve && <div className="split-chip-fx" />}
+      <div className="celestial-mode-illustration" aria-hidden="true">
+        <span>{isPve ? '守' : '斗'}</span>
+        <i />
       </div>
-
-      <div
-        className={cx(
-          'relative z-10 flex h-full flex-col justify-center gap-3',
-          isPve
-            ? 'items-start pl-[clamp(2.5rem,7vw,6rem)] pr-[32%] text-left'
-            : 'items-end pr-[clamp(2.5rem,7vw,6rem)] pl-[32%] text-right',
-        )}
-      >
-        <span
-          className={cx(
-            'text-[0.62rem] font-bold uppercase tracking-[0.6em]',
-            isPve ? 'text-cyan-400/65' : 'text-red-400/65',
-          )}
-        >
-          {isPve ? 'CO-OP DEFENSE ///' : '/// REAL-TIME DUEL'}
-        </span>
-
-        <h2 className={cx('split-side-title', isPve ? 'split-title-cyan' : 'split-title-red')}>
-          {isPve ? (<>西游<br />守关</>) : (<>斗法<br />竞技</>)}
-        </h2>
-
-        <p className="mt-2 max-w-[26rem] text-[0.9rem] leading-[1.85] text-slate-300/80">
+      <div className="celestial-mode-content">
+        <span className="celestial-mode-kicker">{isPve ? '西行卷 · 四人同守' : '斗法卷 · 真人对阵'}</span>
+        <h2>{title}</h2>
+        <p>
           {description}
         </p>
-
+        <div className="celestial-mode-tags">
+          {isPve ? <><span>合字成将</span><span>二十波守关</span><span>每五波首领</span></> : <><span>镜像规则</span><span>真经压力</span><span>排位天梯</span></>}
+        </div>
         <button
           type="button"
-          className={cx('split-side-cta', isPve ? 'split-cta-cyan' : 'split-cta-red')}
+          className="celestial-mode-cta split-side-cta"
           onClick={(event) => { event.stopPropagation(); onClick() }}
         >
           {actionLabel}
         </button>
       </div>
-    </div>
+    </article>
   )
 }
 
@@ -538,6 +524,8 @@ function RoomSlotCard({
 }) {
   const occupied = !!slot?.playerName
   const connected = !!slot?.connected
+  const reconnectSeconds = useDeadlineCountdown(slot?.reconnectDeadlineAt ?? null)
+  const reconnecting = slot?.connectionState === 'reconnecting'
   return (
     <div
       className={cx(
@@ -555,15 +543,15 @@ function RoomSlotCard({
             ? 'border-red-500/40 bg-red-500/10'
             : 'border-slate-700/40 bg-slate-700/10',
         )}>
-          👤
+          {slot?.slotId ?? '候'}
         </div>
 
         <div className="room-slot-copy min-h-[3rem] text-center">
           <p className="room-slot-name font-semibold tracking-wider text-white">
-            {slot?.playerName ?? '待接入...'}
+            {slot?.playerName ?? '静候同道'}
           </p>
           {slot?.isHost ? (
-            <span className="room-slot-host text-xs tracking-wider text-orange-300/70">Host</span>
+            <span className="room-slot-host text-xs tracking-wider text-orange-300/70">主将</span>
           ) : null}
         </div>
 
@@ -579,7 +567,13 @@ function RoomSlotCard({
               ? 'bg-red-500 animate-pulse'
               : 'bg-slate-600',
           )} />
-          {occupied ? (connected ? '链路在线' : '链路断开') : '待接入...'}
+          {occupied
+            ? connected
+              ? '已应守关令'
+              : reconnecting
+                ? `重连中 ${reconnectSeconds ?? Math.ceil((slot?.reconnectRemainingMs ?? 0) / 1000)}秒`
+                : '暂离阵中'
+            : '空位待召'}
         </div>
       </div>
     </div>
@@ -593,7 +587,7 @@ export function TowerDefenseFrontendPage() {
   const suppressAutoResumeRef = useRef(false)
   const previousRoomPhaseRef = useRef<ReturnType<typeof useGameEngine>['roomPhase']>(null)
   const currentView = resolveCurrentView(location.pathname)
-  const { user: authUser, logout: oauthLogout } = useAuth()
+  const { user: authUser, logout } = useAuth()
   const playerId = useRef(resolvePlayerId() ?? 'human-dev').current
   const playerName = useRef(resolvePlayerName() ?? playerId).current
   const playerKind = useRef(resolvePlayerKind()).current
@@ -842,9 +836,10 @@ export function TowerDefenseFrontendPage() {
 
   if (currentView === 'HOME') {
     return (
-      <main className="relative h-screen w-screen overflow-hidden bg-[#020408]">
+      <main className="celestial-home-page relative h-screen w-screen overflow-hidden">
+        <div className="celestial-home-wash" aria-hidden />
         {/* 右上角登录区域 */}
-        <div className="absolute right-5 top-5 z-30">
+        <div className="celestial-home-account absolute right-5 top-5 z-30">
           {authUser ? (
             // 已登录：头像 + 右键展开菜单
             <div className="relative">
@@ -903,22 +898,22 @@ export function TowerDefenseFrontendPage() {
                       )}
                       <div className="min-w-0 flex-1">
                         <p className="truncate font-semibold text-sm text-white">{authUser.name || authUser.userId}</p>
-                        <p className="font-mono text-[0.6rem] text-sky-400/50 tracking-wider mt-0.5">IDENTITY VERIFIED</p>
+                        <p className="font-mono text-[0.6rem] text-sky-400/50 tracking-wider mt-0.5">仙籍已验</p>
                       </div>
                     </div>
                     {/* ID 信息行 */}
                     <div className="px-4 py-3" style={{ borderBottom: '1px solid rgba(56,189,248,0.08)' }}>
-                      <p className="font-mono text-[0.6rem] text-sky-400/40 tracking-widest mb-1">PLAYER_ID</p>
+                      <p className="font-mono text-[0.6rem] text-sky-400/40 tracking-widest mb-1">仙籍编号</p>
                       <p className="font-mono text-xs text-sky-300/80 truncate">{authUser.userId}</p>
                     </div>
                     {/* 登出按钮 */}
                     <div className="p-2">
                       <button
                         type="button"
-                        onClick={() => { setUserMenuOpen(false); void oauthLogout() }}
+                        onClick={() => { setUserMenuOpen(false); void logout() }}
                         className="w-full px-3 py-2 text-left font-mono text-xs tracking-wider text-red-400/70 transition-colors hover:bg-red-500/10 hover:text-red-300"
                       >
-                        &gt;_ TERMINATE_SESSION
+                        退出仙籍
                       </button>
                     </div>
                   </div>
@@ -946,13 +941,18 @@ export function TowerDefenseFrontendPage() {
                 e.currentTarget.style.boxShadow = 'none'
               }}
             >
-              [ LOGIN ]
+              登入仙籍
             </button>
           )}
         </div>
 
-        <div className="split-home-logo">
-          <h1 className="split-home-title">Myriad TD</h1>
+        <div className="celestial-home-brand split-home-logo">
+          <p>新国风墨箓塔防 · 天庭机关录</p>
+          <h1>万字天关</h1>
+          <strong>汉字落阵，神将显形；同守西游八十一难</strong>
+          <div className="celestial-glyph-forge" aria-label="孙、悟、空三个汉字组成神将孙悟空">
+            <span>孙</span><span>悟</span><span>空</span><i>合字成将</i><b>孙悟空</b>
+          </div>
         </div>
 
         <nav className="home-meta-entry" aria-label="局外构筑">
@@ -961,18 +961,17 @@ export function TowerDefenseFrontendPage() {
           <button type="button" onClick={() => navigate('/shop')}><ShoppingBag className="h-4 w-4" /><span>金币商店</span></button>
         </nav>
 
-        <section className="absolute inset-0 split-container">
+        <section className="celestial-mode-grid split-container">
           <PlayerCard
             side="PVE"
             title="西游守关"
-            description="四人合作守护循环战场，挑战西游副本的统一二十波关卡。"
-            actionLabel="进入 PVE 大厅 ›"
+            description="邀同道落字布阵，将散落汉字组合为神将，共守花果山至火焰山的西游章回。"
+            actionLabel="前往南天门集结"
             onClick={() => {
-              // TODO: 测试中暂时跳过登录检查，恢复时取消注释下方代码
-              // if (!authUser) {
-              //   navigate('/login', { state: { from: '/room' } })
-              //   return
-              // }
+              if (!authUser) {
+                navigate('/login', { state: { from: '/room' } })
+                return
+              }
               navigateToView('LOBBY')
             }}
           />
@@ -980,8 +979,8 @@ export function TowerDefenseFrontendPage() {
           <PlayerCard
             side="PVP"
             title="斗法竞技"
-            description="真人 1v1 镜像斗法，通过真经制造压力；排位采用标准化竞技构筑。"
-            actionLabel="‹ 进入 PVP 中心"
+            description="真人一对一镜像斗法，以真经制造压力，在相同规则下比拼临阵合字与调度。"
+            actionLabel="进入斗法台"
             onClick={() => navigate('/pvp')}
           />
 
@@ -993,7 +992,7 @@ export function TowerDefenseFrontendPage() {
   }
 
   return (
-    <main className={cx('relative min-h-screen overflow-hidden bg-background text-foreground', currentView === 'ROOM' && 'room-route-page')}>
+    <main className={cx('celestial-hall-page relative min-h-screen overflow-hidden bg-background text-foreground', currentView === 'ROOM' && 'room-route-page')}>
       <div className="cyber-background" />
       <div className="cyber-grid" />
       <div className="cyber-noise" />
@@ -1033,20 +1032,24 @@ export function TowerDefenseFrontendPage() {
               </div>
 
               {currentView === 'LOBBY' ? (
-                <section className="cyber-panel overflow-hidden !p-0">
+                <section className="celestial-lobby-panel cyber-panel overflow-hidden !p-0">
                   <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(45,212,191,0.06),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(251,146,60,0.05),transparent_25%)]" />
                   <div className="relative">
                     {/* Toolbar */}
-                    <div className="cyber-room-toolbar flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.07] px-6 py-4">
-                      <div className="flex flex-1 items-center gap-2 font-mono text-xs text-cyan-200/90">
-                        <span className="shrink-0 text-cyan-300">&gt;</span>
-                        <span className="shrink-0 tracking-wider text-cyan-200/90">检索目标：</span>
+                    <div className="cyber-room-toolbar celestial-lobby-toolbar flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.07] px-6 py-4">
+                      <div className="celestial-lobby-heading">
+                        <span>南天门 · 守关集结处</span>
+                        <h1>寻一队同道，共赴西游章回</h1>
+                        <p>选择已有战旗加入，或自行立旗召集一至四位守关者。</p>
+                      </div>
+                      <div className="celestial-room-search flex flex-1 items-center gap-2 font-mono text-xs text-cyan-200/90">
+                        <Search className="h-3.5 w-3.5 shrink-0" />
+                        <span className="shrink-0 tracking-wider text-cyan-200/90">寻找队伍</span>
                         <div className="relative min-w-0 flex-1">
-                          <Search className="pointer-events-none absolute left-3 top-1/2 h-3 w-3 -translate-y-1/2 text-cyan-300/75" />
                           <input
                             value={searchQuery}
                             onChange={(event) => setSearchQuery(event.target.value)}
-                            placeholder="输入房间名称或节点 ID 进行搜索..."
+                            placeholder="输入队伍名或房号…"
                             className="cyber-grid-search"
                           />
                         </div>
@@ -1054,7 +1057,7 @@ export function TowerDefenseFrontendPage() {
                       <div className="flex shrink-0 items-center gap-3">
                         <button type="button" onClick={refreshRooms} className="cyber-nav-chip">
                           <RefreshCcw className="h-4 w-4" />
-                          <span>刷新房间</span>
+                          <span>刷新队伍</span>
                         </button>
                         <button
                           type="button"
@@ -1065,7 +1068,7 @@ export function TowerDefenseFrontendPage() {
                           className="cyber-primary-button shrink-0"
                         >
                           <Plus className="h-4 w-4" />
-                          <span>新建战区</span>
+                          <span>立下战旗</span>
                         </button>
                       </div>
                     </div>
@@ -1078,13 +1081,13 @@ export function TowerDefenseFrontendPage() {
 
                     {/* Table header */}
                     <div className="cyber-dg-header">
-                      <div>节点ID</div>
-                      <div>战区ID</div>
-                      <div className="text-center">玩家数</div>
-                      <div className="text-center">延迟</div>
-                      <div className="text-center">密匙</div>
-                      <div>当前状态</div>
-                      <div>操作指令</div>
+                      <div>房号</div>
+                      <div>守关队伍</div>
+                      <div className="text-center">同道</div>
+                      <div className="text-center">灵犀</div>
+                      <div className="text-center">口令</div>
+                      <div>军情</div>
+                      <div>入队</div>
                     </div>
 
                     {/* Table body */}
@@ -1130,7 +1133,7 @@ export function TowerDefenseFrontendPage() {
                                   onClick={(event) => { event.stopPropagation(); joinRoom(room.id) }}
                                   className="cyber-action-btn"
                                 >
-                                  接入
+                                  加入
                                 </button>
                               )}
                             </div>
@@ -1140,13 +1143,13 @@ export function TowerDefenseFrontendPage() {
 
                       {isLoadingRooms ? (
                         <div className="py-10 text-center font-mono text-xs tracking-[0.3em] text-slate-600 uppercase">
-                          &gt;_ 正在同步房间列表
+                          正在翻阅守关名册…
                         </div>
                       ) : null}
 
                       {!isLoadingRooms && filteredRooms.length === 0 ? (
                         <div className="py-10 text-center font-mono text-xs tracking-[0.3em] text-slate-600 uppercase">
-                          {searchQuery.trim() ? '>_ 未找到匹配的节点' : '>_ 当前没有可用房间'}
+                          {searchQuery.trim() ? '未找到相符的守关队伍' : '此刻暂无队伍，何不先立一面战旗？'}
                         </div>
                       ) : null}
                     </div>
@@ -1181,7 +1184,7 @@ export function TowerDefenseFrontendPage() {
               ) : null}
 
               {currentView === 'ROOM' && activeRoom ? (
-                <section className="cyber-panel overflow-hidden !p-0 room-route-panel">
+                <section className="celestial-room-panel cyber-panel overflow-hidden !p-0 room-route-panel">
 
                   {/* ── Header ── */}
                   <div className="room-route-header flex flex-wrap items-center justify-between gap-4 border-b border-white/[0.07] px-6 py-4">
@@ -1190,13 +1193,18 @@ export function TowerDefenseFrontendPage() {
                       <span>返回大厅</span>
                     </button>
 
+                    <div className="celestial-room-title">
+                      <span>守关队伍 · 待下军令</span>
+                      <h1>{activeRoom.name}</h1>
+                    </div>
+
                     <button
                       type="button"
                       className="flex items-center gap-2 font-mono text-sm tracking-wider transition hover:text-cyan-200"
                       onClick={() => { navigator.clipboard?.writeText(activeRoom.id) }}
-                      title="点击复制节点 ID"
+                      title="点击复制房号"
                     >
-                      <span className="text-slate-400">节点 ID:</span>
+                      <span className="text-slate-400">房号</span>
                       <span className="text-cyan-300">{activeRoom.id}</span>
                       <span className="text-slate-500">📋</span>
                     </button>
@@ -1209,7 +1217,7 @@ export function TowerDefenseFrontendPage() {
                           : 'bg-red-500 animate-pulse',
                       )} />
                       <span className={cx('tracking-wider', allConnected ? 'text-cyan-300' : 'text-red-400')}>
-                        {allConnected ? '房间链路稳定' : '存在掉线节点'}
+                        {allConnected ? '队伍已集结' : '尚有同道暂离'}
                       </span>
                     </div>
 
@@ -1226,18 +1234,18 @@ export function TowerDefenseFrontendPage() {
 
                     {/* SVG 连接线 */}
                     <svg className="pointer-events-none absolute inset-0 h-full w-full" preserveAspectRatio="none" aria-hidden>
-                      <line x1="26%" y1="30%" x2="50%" y2="50%" stroke="rgba(62,231,210,0.13)" strokeWidth="1" strokeDasharray="5 4" />
-                      <line x1="74%" y1="30%" x2="50%" y2="50%" stroke="rgba(62,231,210,0.13)" strokeWidth="1" strokeDasharray="5 4" />
-                      <line x1="26%" y1="70%" x2="50%" y2="50%" stroke="rgba(62,231,210,0.13)" strokeWidth="1" strokeDasharray="5 4" />
-                      <line x1="74%" y1="70%" x2="50%" y2="50%" stroke="rgba(62,231,210,0.13)" strokeWidth="1" strokeDasharray="5 4" />
+                      <line x1="26%" y1="30%" x2="50%" y2="50%" stroke="rgba(216,173,84,0.22)" strokeWidth="1" strokeDasharray="5 4" />
+                      <line x1="74%" y1="30%" x2="50%" y2="50%" stroke="rgba(216,173,84,0.22)" strokeWidth="1" strokeDasharray="5 4" />
+                      <line x1="26%" y1="70%" x2="50%" y2="50%" stroke="rgba(85,199,173,0.2)" strokeWidth="1" strokeDasharray="5 4" />
+                      <line x1="74%" y1="70%" x2="50%" y2="50%" stroke="rgba(85,199,173,0.2)" strokeWidth="1" strokeDasharray="5 4" />
                     </svg>
 
                     <div className="room-matrix-grid grid grid-cols-[1fr_auto_1fr] items-center gap-x-6 gap-y-3">
 
                       {/* 行 0: 上方标签 */}
-                      <p className="room-matrix-label text-center font-mono text-[0.68rem] uppercase tracking-[0.32em] text-cyan-400/50">P4 | 左上防线</p>
+                      <p className="room-matrix-label text-center font-mono text-[0.68rem] uppercase tracking-[0.32em] text-cyan-400/50">玄武位 · 北境守阵</p>
                       <div />
-                      <p className="room-matrix-label text-center font-mono text-[0.68rem] uppercase tracking-[0.32em] text-cyan-400/50">P3 | 右上防线</p>
+                      <p className="room-matrix-label text-center font-mono text-[0.68rem] uppercase tracking-[0.32em] text-cyan-400/50">青龙位 · 东境守阵</p>
 
                       {/* 行 1: 上方卡片 */}
                       <RoomSlotCard
@@ -1255,7 +1263,7 @@ export function TowerDefenseFrontendPage() {
                         disabled
                         className={cx('room-deploy-btn room-matrix-center-button', mySlot?.connected && 'room-deploy-btn-cancel')}
                       >
-                        {mySlot?.connected ? '[ 链路在线 ]' : '[ 等待接入 ]'}
+                        {mySlot?.connected ? '军令已接' : '等待入列'}
                       </button>
                       <div />
 
@@ -1269,9 +1277,9 @@ export function TowerDefenseFrontendPage() {
                       />
 
                       {/* 行 4: 下方标签 */}
-                      <p className="room-matrix-label text-center font-mono text-[0.68rem] uppercase tracking-[0.32em] text-cyan-400/50">P1 | 左下防线</p>
+                      <p className="room-matrix-label text-center font-mono text-[0.68rem] uppercase tracking-[0.32em] text-cyan-400/50">白虎位 · 西境守阵</p>
                       <div />
-                      <p className="room-matrix-label text-center font-mono text-[0.68rem] uppercase tracking-[0.32em] text-cyan-400/50">P2 | 右下防线</p>
+                      <p className="room-matrix-label text-center font-mono text-[0.68rem] uppercase tracking-[0.32em] text-cyan-400/50">朱雀位 · 南境守阵</p>
 
                     </div>
                   </div>
@@ -1279,9 +1287,9 @@ export function TowerDefenseFrontendPage() {
                   {/* ── Footer ── */}
                   <div className="room-route-footer flex flex-wrap items-center justify-between gap-4 border-t border-white/[0.07] px-6 py-4">
                     <div className="flex flex-wrap items-center gap-6 font-mono text-xs">
-                      <span className="text-slate-500">延迟: <span className="text-cyan-300">{formatPing(activeRoom.pingMs)}</span></span>
-                      <span className="text-slate-500">承载量: <span className="text-cyan-300">{activeRoom.players}/4</span></span>
-                      <span className="text-slate-500">接口: <span className={isConnected ? 'text-green-400' : 'text-orange-300'}>{isConnected ? 'CONNECTED' : connectionState.toUpperCase()}</span></span>
+                      <span className="text-slate-500">灵犀 <span className="text-cyan-300">{formatPing(activeRoom.pingMs)}</span></span>
+                      <span className="text-slate-500">同道 <span className="text-cyan-300">{activeRoom.players}/4</span></span>
+                      <span className="text-slate-500">军令 <span className={isConnected ? 'text-green-400' : 'text-orange-300'}>{isConnected ? '已通' : connectionState.toUpperCase()}</span></span>
                     </div>
 
                     <button
@@ -1294,7 +1302,7 @@ export function TowerDefenseFrontendPage() {
                       )}
                     >
                       <Rocket className="h-4 w-4" />
-                      <span>{isHost ? '启动战局 (START)' : '仅房主可启动'}</span>
+                      <span>{isHost ? '下达守关军令' : '静候主将下令'}</span>
                     </button>
                   </div>
 

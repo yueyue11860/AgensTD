@@ -1,0 +1,25 @@
+- main [ref=e3]:
+  - button "[ LOGIN ]" [ref=e5]
+  - generic:
+    - heading "Myriad TD" [level=1]
+  - navigation "局外构筑" [ref=e6]:
+    - button "道具构筑" [ref=e7]
+    - button "神将武库" [ref=e13]
+    - button "金币商店" [ref=e24]
+  - generic [ref=e29]:
+    - button "CO-OP DEFENSE /// 西游 守关 四人合作守护循环战场，挑战西游副本的统一二十波关卡。 进入 PVE 大厅 ›" [ref=e30] [cursor=pointer]:
+      - generic [ref=e31]:
+        - generic [ref=e32]: CO-OP DEFENSE ///
+        - heading "西游 守关" [level=2] [ref=e33]: 西游守关
+        - paragraph [ref=e34]: 四人合作守护循环战场，挑战西游副本的统一二十波关卡。
+        - button "进入 PVE 大厅 ›" [ref=e35]
+    - button "/// REAL-TIME DUEL 斗法 竞技 真人 1v1 镜像斗法，通过真经制造压力；排位采用标准化竞技构筑。 ‹ 进入 PVP 中心" [ref=e36] [cursor=pointer]:
+      - generic: 01001 10110�01001�11010�00101�10010�01100�11001�01011�10101�01010�10100�00111�11011�01101�10010�00100�11110�01001�10111�00011�11000�01110�10001�00110
+      - generic [ref=e37]:
+        - generic [ref=e38]: /// REAL-TIME DUEL
+        - heading "斗法 竞技" [level=2] [ref=e39]: 斗法竞技
+        - paragraph [ref=e40]: 真人 1v1 镜像斗法，通过真经制造压力；排位采用标准化竞技构筑。
+        - button "‹ 进入 PVP 中心" [ref=e41]
+  - navigation "Primary navigation" [ref=e42]:
+    - button "首页" [ref=e43]
+    - button "排行榜" [ref=e48]

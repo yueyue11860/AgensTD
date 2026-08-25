@@ -1,14 +1,30 @@
-import { StrictMode } from 'react'
+import { lazy, StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
-import { RequireAuth } from './components/require-auth'
-import { AuthCallbackPage } from './pages/auth-callback-page'
-import { GamingPage } from './pages/gaming-page'
+import { RouteErrorBoundary, RouteLoadingFallback } from './components/route-boundary'
 import { LoginPage } from './pages/login-page'
-import { MetaSystemPage } from './pages/meta-system-page'
-import { PvpPage } from './pages/pvp-page'
-import { TowerDefenseFrontendPage } from './pages/tower-defense-frontend-page'
 import './app/globals.css'
+
+const RequireAuth = lazy(async () => {
+  const module = await import('./components/require-auth')
+  return { default: module.RequireAuth }
+})
+const TowerDefenseFrontendPage = lazy(async () => {
+  const module = await import('./pages/tower-defense-frontend-page')
+  return { default: module.TowerDefenseFrontendPage }
+})
+const GamingPage = lazy(async () => {
+  const module = await import('./pages/gaming-page')
+  return { default: module.GamingPage }
+})
+const MetaSystemPage = lazy(async () => {
+  const module = await import('./pages/meta-system-page')
+  return { default: module.MetaSystemPage }
+})
+const PvpPage = lazy(async () => {
+  const module = await import('./pages/pvp-page')
+  return { default: module.PvpPage }
+})
 
 const rootElement = document.getElementById('root')
 
@@ -19,10 +35,11 @@ if (!rootElement) {
 createRoot(rootElement).render(
   <StrictMode>
     <BrowserRouter>
-      <Routes>
+      <RouteErrorBoundary>
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <Routes>
         {/* 公开路由 */}
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/auth/callback" element={<AuthCallbackPage />} />
         <Route path="/" element={<Navigate to="/home" replace />} />
         <Route path="/home" element={<TowerDefenseFrontendPage />} />
         <Route path="/leaderboard" element={<Navigate to="/pvp/leaderboard" replace />} />
@@ -46,7 +63,9 @@ createRoot(rootElement).render(
         <Route path="/pvp/leaderboard" element={<RequireAuth><PvpPage /></RequireAuth>} />
         <Route path="/profile" element={<RequireAuth><PvpPage /></RequireAuth>} />
         <Route path="*" element={<Navigate to="/home" replace />} />
-      </Routes>
+          </Routes>
+        </Suspense>
+      </RouteErrorBoundary>
     </BrowserRouter>
   </StrictMode>,
 )

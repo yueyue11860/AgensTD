@@ -1,0 +1,45 @@
+- main [ref=f2e7]:
+  - generic [ref=f2e12]:
+    - generic [ref=f2e13]:
+      - button "返回主页" [ref=f2e14]
+      - button "排行榜" [ref=f2e19]
+    - generic [ref=f2e29]:
+      - generic [ref=f2e30]:
+        - generic [ref=f2e31]:
+          - generic [ref=f2e32]: 南天门 · 守关集结处
+          - heading "寻一队同道，共赴西游章回" [level=1] [ref=f2e33]
+          - paragraph [ref=f2e34]: 选择已有战旗加入，或自行立旗召集一至四位守关者。
+        - generic [ref=f2e35]:
+          - generic [ref=f2e39]: 寻找队伍
+          - textbox "输入队伍名或房号…" [ref=f2e41]
+        - generic [ref=f2e42]:
+          - button "刷新队伍" [ref=f2e43]
+          - button "立下战旗" [ref=f2e50]
+      - generic [ref=f2e53]:
+        - generic [ref=f2e54]: 房号
+        - generic [ref=f2e55]: 守关队伍
+        - generic [ref=f2e56]: 同道
+        - generic [ref=f2e57]: 灵犀
+        - generic [ref=f2e58]: 口令
+        - generic [ref=f2e59]: 军情
+        - generic [ref=f2e60]: 入队
+      - generic [ref=f2e61]: 此刻暂无队伍，何不先立一面战旗？
+      - generic [ref=f2e64]:
+        - button "上一页" [disabled] [ref=f2e65]
+        - button "下一页" [disabled] [ref=f2e69]
+  - generic [ref=f2e74]:
+    - generic [ref=f2e75]:
+      - generic [ref=f2e76]: 立下守关战旗
+      - generic [ref=f2e77]: 为同行者建立一支西游守关队伍
+    - generic [ref=f2e79]:
+      - generic [ref=f2e80]:
+        - generic [ref=f2e81]: 队伍名 最多十二字
+        - textbox "例如：水帘洞守关队" [active] [ref=f2e83]
+      - generic [ref=f2e84]:
+        - generic [ref=f2e85]: 入队口令 可选
+        - textbox "留空则欢迎所有同道" [ref=f2e87]
+    - generic [ref=f2e89]:
+      - generic [ref=f2e90]: 战旗待命，可召集一至四位守关者。
+      - generic [ref=f2e91]:
+        - button "取消" [ref=f2e92] [cursor=pointer]
+        - button "建立队伍" [ref=f2e93] [cursor=pointer]

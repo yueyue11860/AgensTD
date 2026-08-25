@@ -1,0 +1,54 @@
+- main [ref=f2e7]:
+  - button "退出" [ref=f2e9]
+  - generic [ref=f2e15]: 第 1 回 · 花果山 · 开阵。目标：召唤天兵，落子布防，守住第一轮妖潮。 威胁：当前敌军 0 · 全局共 20 波
+  - generic:
+    - generic:
+      - text: 章回题签
+      - heading [level=2]: 第 1 回 · 花果山 · 开阵
+      - paragraph: 目标召唤天兵，落子布防，守住第一轮妖潮。
+      - paragraph: 威胁当前敌军 0 · 全局共 20 波
+  - button "恢复首局提示" [ref=f2e515]
+  - generic [ref=f2e16]:
+    - generic "全局战况" [ref=f2e17]:
+      - generic [ref=f2e18]:
+        - generic [ref=f2e21]: 交战中
+        - strong [ref=f2e22]: 第 1 / 20 波
+        - generic "战斗音量" [ref=f2e24]:
+          - button "静音战斗音效" [ref=f2e25]
+          - slider "战斗音效主音量" [ref=f2e30]: "45"
+          - generic [ref=f2e31]: 45%
+    - generic [ref=f2e32]:
+      - complementary [ref=f2e33]:
+        - button "布阵" [ref=f2e34]
+      - complementary "战场文字摘要" [ref=f2e36]:
+        - heading "战场摘要" [level=2] [ref=f2e37]
+        - paragraph [ref=f2e38]: 第 1 / 20 波，当前敌军 0。
+        - paragraph [ref=f2e39]: 当前没有已现身首领。
+        - paragraph [ref=f2e40]: 战场尚未聚焦。
+        - paragraph [ref=f2e41]: 当前选择：无。
+        - paragraph [ref=f2e42]: 可执行动作：先选择召唤托盘、备战席或己方棋子；战场聚焦后可用方向键浏览。
+      - region "29×29西游汉字战场" [ref=f2e43]:
+        - generic [ref=f2e44]:
+          - application "29×29西游汉字战场，第 1 波。方向键移动格游标，Enter 或空格执行，Escape 取消。" [ref=f2e517]
+          - group "战场视角控制" [ref=f2e47]:
+            - button "全阵" [pressed] [ref=f2e48]
+            - button "聚焦" [ref=f2e49]
+            - button "缩小战场" [ref=f2e50]: −
+            - button "放大战场" [ref=f2e51]: ＋
+      - complementary "情境情报抽屉":
+        - group [ref=f2e52]:
+          - generic "已激活羁绊 ＋" [ref=f2e53] [cursor=pointer]:
+            - generic [ref=f2e54]: 已激活羁绊
+            - text: ＋
+        - group [ref=f2e55]:
+          - generic "战斗效果 ＋" [ref=f2e56] [cursor=pointer]:
+            - generic [ref=f2e57]: 战斗效果
+            - text: ＋
+        - group [ref=f2e58]:
+          - generic "操作提示 ＋" [ref=f2e59] [cursor=pointer]:
+            - generic [ref=f2e60]: 操作提示
+            - text: ＋
+        - group [ref=f2e519]:
+          - generic "关卡情报 ＋" [ref=f2e520] [cursor=pointer]:
+            - generic [ref=f2e521]: 关卡情报
+            - text: ＋

@@ -1,6 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { ServerConfig } from '../config/server-config'
-import type { SecondMeUser } from '../domain/user'
+import type { AppUser } from '../domain/user'
 import type { UserProgress, PlayerType } from '../domain/progress'
 import type { UserStore } from './user-store'
 
@@ -22,7 +22,7 @@ export class SupabaseUserStore implements UserStore {
   }
 
   /** 写入或更新用户信息 */
-  async upsertUser(user: SecondMeUser): Promise<void> {
+  async upsertUser(user: AppUser): Promise<void> {
     if (!this.client) return
 
     const { error } = await this.client

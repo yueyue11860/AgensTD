@@ -3,11 +3,11 @@ import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../hooks/use-auth'
 
 export function RequireAuth({ children }: { children: ReactNode }) {
-  // TODO: 测试中暂时关闭认证，恢复时删除下面这行
-  return <>{children}</>
-
   const { isLoggedIn, isLoading } = useAuth()
   const location = useLocation()
+  const developmentBypass = import.meta.env.DEV && import.meta.env.VITE_AUTH_BYPASS === 'true'
+
+  if (developmentBypass) return <>{children}</>
 
   if (isLoading) {
     return (
@@ -21,8 +21,7 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   }
 
   if (!isLoggedIn) {
-    // 把来源路径存进 state，登录后可跳回
-    return <Navigate to="/login" state={{ from: location.pathname }} replace />
+    return <Navigate to="/login" state={{ from: `${location.pathname}${location.search}` }} replace />
   }
 
   return <>{children}</>

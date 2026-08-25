@@ -7,6 +7,7 @@ exports.runPveBalanceSmokeChecks = runPveBalanceSmokeChecks;
 const strict_1 = __importDefault(require("node:assert/strict"));
 const balance_catalog_1 = require("./balance-catalog");
 const balance_simulator_1 = require("./balance-simulator");
+const economy_1 = require("./economy");
 const catalogs_1 = require("./catalogs");
 const runtime_1 = require("./runtime");
 function maxAdjacentBudgetRatioBps(levelId, difficulty) {
@@ -23,7 +24,7 @@ function runPveBalanceSmokeChecks() {
     (0, balance_catalog_1.validatePveBalanceCatalog)();
     strict_1.default.deepEqual(balance_catalog_1.PVE_DIFFICULTIES, ['easy', 'normal', 'hard']);
     strict_1.default.deepEqual(balance_catalog_1.PVE_BASE_HP_BY_WAVE, [
-        24, 28, 34, 42, 52, 65, 82, 104, 132, 168, 220, 285, 370, 480, 620, 800, 1020, 1300, 1650, 2100,
+        24, 28, 34, 42, 52, 65, 82, 104, 132, 168, 197, 231, 271, 318, 373, 438, 512, 601, 705, 826,
     ]);
     strict_1.default.deepEqual(balance_catalog_1.PVE_BASE_ARMOR_BY_WAVE, [
         0, 0, 1, 2, 3, 4, 5, 7, 9, 11, 13, 15, 17, 19, 22, 25, 28, 31, 34, 38,
@@ -32,24 +33,24 @@ function runPveBalanceSmokeChecks() {
         0, 0, 1, 1, 2, 3, 4, 6, 8, 10, 12, 14, 16, 18, 21, 24, 27, 30, 33, 36,
     ]);
     strict_1.default.deepEqual((0, balance_catalog_1.resolvePveBalanceProfile)(1, 'easy'), {
-        profileId: 'pve-easy-l1-v1', levelId: 1, difficulty: 'easy',
-        enemyHpMultiplierBps: 8500, enemyDefenseAdd: 0,
+        profileId: 'pve-easy-l1-v2', levelId: 1, difficulty: 'easy',
+        enemyHpMultiplierBps: 12750, enemyDefenseAdd: 0,
     });
     strict_1.default.deepEqual((0, balance_catalog_1.resolvePveBalanceProfile)(10, 'easy'), {
-        profileId: 'pve-easy-l10-v1', levelId: 10, difficulty: 'easy',
-        enemyHpMultiplierBps: 13000, enemyDefenseAdd: 9,
+        profileId: 'pve-easy-l10-v2', levelId: 10, difficulty: 'easy',
+        enemyHpMultiplierBps: 12900, enemyDefenseAdd: 9,
     });
     strict_1.default.deepEqual((0, balance_catalog_1.resolvePveBalanceProfile)(1, 'normal'), {
-        profileId: 'pve-normal-l1-v1', levelId: 1, difficulty: 'normal',
-        enemyHpMultiplierBps: 13500, enemyDefenseAdd: 8,
+        profileId: 'pve-normal-l1-v2', levelId: 1, difficulty: 'normal',
+        enemyHpMultiplierBps: 12900, enemyDefenseAdd: 4,
     });
     strict_1.default.deepEqual((0, balance_catalog_1.resolvePveBalanceProfile)(10, 'normal'), {
-        profileId: 'pve-normal-l10-v1', levelId: 10, difficulty: 'normal',
-        enemyHpMultiplierBps: 19800, enemyDefenseAdd: 17,
+        profileId: 'pve-normal-l10-v2', levelId: 10, difficulty: 'normal',
+        enemyHpMultiplierBps: 13700, enemyDefenseAdd: 13,
     });
     strict_1.default.deepEqual((0, balance_catalog_1.resolvePveBalanceProfile)(1, 'hard'), {
-        profileId: 'pve-hard-shared-v1', levelId: 1, difficulty: 'hard',
-        enemyHpMultiplierBps: 24000, enemyDefenseAdd: 26,
+        profileId: 'pve-hard-shared-v2', levelId: 1, difficulty: 'hard',
+        enemyHpMultiplierBps: 14800, enemyDefenseAdd: 18,
     });
     strict_1.default.throws(() => (0, balance_catalog_1.resolvePveBalanceProfile)(0, 'easy'));
     strict_1.default.throws(() => (0, balance_catalog_1.resolvePveBalanceProfile)(11, 'easy'));
@@ -58,7 +59,8 @@ function runPveBalanceSmokeChecks() {
         for (let levelId = 2; levelId <= balance_catalog_1.PVE_BALANCE_LEVEL_MAX; levelId += 1) {
             const previous = (0, balance_catalog_1.resolvePveWaveCatalog)(levelId - 1, difficulty).waves;
             const current = (0, balance_catalog_1.resolvePveWaveCatalog)(levelId, difficulty).waves;
-            strict_1.default.ok(current.every((wave, index) => wave.maxHp > previous[index].maxHp));
+            // HP 可使用平台预算，但不得倒退；关卡单调性由下方严格增长的双防一并保证。
+            strict_1.default.ok(current.every((wave, index) => wave.maxHp >= previous[index].maxHp));
             strict_1.default.ok(current.every((wave, index) => wave.armor > previous[index].armor));
             strict_1.default.ok(current.every((wave, index) => wave.magicResistance > previous[index].magicResistance));
         }
@@ -98,7 +100,7 @@ function runPveBalanceSmokeChecks() {
     strict_1.default.equal(runtime.start().ok, true);
     const runtimeSnapshot = runtime.tick();
     const expectedWave = (0, balance_catalog_1.resolvePveWaveCatalog)(7, 'normal').waves[0];
-    strict_1.default.equal(runtimeSnapshot.balance.profileId, 'pve-normal-l7-v1');
+    strict_1.default.equal(runtimeSnapshot.balance.profileId, 'pve-normal-l7-v2');
     strict_1.default.equal(runtimeSnapshot.enemies[0]?.maxHp, expectedWave.maxHp);
     strict_1.default.equal(runtimeSnapshot.enemies[0]?.armor, expectedWave.armor);
     strict_1.default.equal(runtimeSnapshot.enemies[0]?.magicResistance, expectedWave.magicResistance);
@@ -109,6 +111,15 @@ function runPveBalanceSmokeChecks() {
     // 真实“新手首局 >=75%”还需几何机器人/真人埋点验证，这里使用 70% 防回归底线。
     strict_1.default.ok(simpleOnePureSoldier.clearRateBps >= 7000);
     strict_1.default.ok(simpleOnePureSoldier.p10HighestClearedWave >= 19);
+    strict_1.default.equal(economy_1.PVE_FULL_MATCH_BASE_GROSS_RICE, 335);
+    strict_1.default.equal(simpleOnePureSoldier.averageRecruitBatchesAfterWave5Milli, 12_000, '前5波应稳定支撑12批付费招募，形成招募/合成闭环');
+    strict_1.default.ok(simpleOnePureSoldier.averageRecruitBatchesMilli >= 26_000
+        && simpleOnePureSoldier.averageRecruitBatchesMilli <= 34_000, '完整简单局付费招募应落在26–34批目标区间');
+    const fullClearEconomy = (0, balance_simulator_1.simulatePureSoldierEconomyRun)('gross:0', 1, 'easy');
+    strict_1.default.equal(fullClearEconomy.highestClearedWave, 20);
+    strict_1.default.equal(fullClearEconomy.grossRiceEarned, 335);
+    strict_1.default.equal(fullClearEconomy.recruitBatchesAfterWave5, 12);
+    strict_1.default.ok(fullClearEconomy.recruitBatches >= 26 && fullClearEconomy.recruitBatches <= 34);
     const simpleTenPureSoldier = (0, balance_simulator_1.runPureSoldierMonteCarlo)(512, 10, 'easy', 'balance-regression');
     const normalTenPureSoldier = (0, balance_simulator_1.runPureSoldierMonteCarlo)(512, 10, 'normal', 'balance-regression');
     const hardPureSoldier = (0, balance_simulator_1.runPureSoldierMonteCarlo)(512, 1, 'hard', 'balance-regression');

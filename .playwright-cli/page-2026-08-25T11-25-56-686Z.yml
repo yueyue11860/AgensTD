@@ -1,0 +1,35 @@
+- main [ref=f2e94]:
+  - generic [ref=f2e99]:
+    - generic [ref=f2e100]:
+      - button "返回主页" [ref=f2e101]
+      - button "排行榜" [ref=f2e106]
+    - generic [ref=f2e116]:
+      - generic [ref=f2e117]:
+        - generic [ref=f2e118]:
+          - generic [ref=f2e119]: 南天门 · 守关集结处
+          - heading "寻一队同道，共赴西游章回" [level=1] [ref=f2e120]
+          - paragraph [ref=f2e121]: 选择已有战旗加入，或自行立旗召集一至四位守关者。
+        - generic [ref=f2e122]:
+          - generic [ref=f2e126]: 寻找队伍
+          - textbox "输入队伍名或房号…" [ref=f2e128]
+        - generic [ref=f2e129]:
+          - button "刷新队伍" [ref=f2e130]
+          - button "立下战旗" [ref=f2e137]
+      - generic [ref=f2e140]:
+        - generic [ref=f2e141]: 房号
+        - generic [ref=f2e142]: 守关队伍
+        - generic [ref=f2e143]: 同道
+        - generic [ref=f2e144]: 灵犀
+        - generic [ref=f2e145]: 口令
+        - generic [ref=f2e146]: 军情
+        - generic [ref=f2e147]: 入队
+      - generic [ref=f2e149] [cursor=pointer]:
+        - generic [ref=f2e150]: RM-8243
+        - generic [ref=f2e151]: 显圣验收队
+        - generic [ref=f2e152]: 1 / 4
+        - generic [ref=f2e153]: "--"
+        - generic [ref=f2e154]: 部署中
+        - button "加入" [ref=f2e157]
+      - generic [ref=f2e159]:
+        - button "上一页" [disabled] [ref=f2e160]
+        - button "下一页" [disabled] [ref=f2e164]

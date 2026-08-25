@@ -1,0 +1,17 @@
+[   39738ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5189/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[  180226ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3999/api/pvp/profile:0
+[  180226ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3999/api/pvp/seasons/current:0
+[  180226ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3999/api/pvp/leaderboard?scope=global&limit=50:0
+[  180226ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3999/api/pvp/matches?limit=20:0
+[  180226ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3999/api/pvp/rooms:0
+[  180226ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3999/api/pvp/matches/dual-load-demo/state:0
+[  180226ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3999/api/pvp/profile:0
+[  180230ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3999/api/pvp/seasons/current:0
+[  180230ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3999/api/pvp/leaderboard?scope=global&limit=50:0
+[  180230ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3999/api/pvp/matches?limit=20:0
+[  180230ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3999/api/pvp/rooms:0
+[  180230ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3999/api/pvp/matches/dual-load-demo:0
+[  180231ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3999/api/pvp/matches/dual-load-demo/state:0
+[  180231ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:3999/api/pvp/matches/dual-load-demo/events:0
+[  180319ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5189/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[  194292ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5189/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102

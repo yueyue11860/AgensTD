@@ -1,0 +1,50 @@
+- main [ref=f17e830]:
+  - generic [ref=f17e835]:
+    - generic [ref=f17e836]:
+      - button "返回主页" [ref=f17e837]
+      - button "排行榜" [ref=f17e842]
+    - generic [ref=f17e850]:
+      - generic [ref=f17e851]:
+        - button "返回大厅" [ref=f17e852]
+        - generic [ref=f17e856]:
+          - generic [ref=f17e857]: 守关队伍 · 待下军令
+          - heading "可访问验收队" [level=1] [ref=f17e858]
+        - button "房号 RM-9807 📋" [ref=f17e859]:
+          - generic [ref=f17e860]: 房号
+          - generic [ref=f17e861]: RM-9807
+          - generic [ref=f17e862]: 📋
+        - generic [ref=f17e863]: 队伍已集结
+      - generic [ref=f17e866]:
+        - generic: "3"
+        - generic [ref=f17e867]:
+          - paragraph [ref=f17e868]: 玄武位 · 北境守阵
+          - paragraph [ref=f17e869]: 青龙位 · 东境守阵
+          - generic [ref=f17e871]:
+            - generic [ref=f17e872]: P4
+            - paragraph [ref=f17e874]: 静候同道
+            - generic [ref=f17e875]: 空位待召
+          - generic [ref=f17e878]:
+            - generic [ref=f17e879]: P3
+            - paragraph [ref=f17e881]: 静候同道
+            - generic [ref=f17e882]: 空位待召
+          - button "军令已接" [disabled] [ref=f17e884]
+          - generic [ref=f17e886]:
+            - generic [ref=f17e887]: P1
+            - generic [ref=f17e888]:
+              - paragraph [ref=f17e889]: human-dev
+              - text: 主将
+            - generic [ref=f17e890]: 已应守关令
+          - generic [ref=f17e893]:
+            - generic [ref=f17e894]: P2
+            - paragraph [ref=f17e896]: 静候同道
+            - generic [ref=f17e897]: 空位待召
+          - paragraph [ref=f17e899]: 白虎位 · 西境守阵
+          - paragraph [ref=f17e900]: 朱雀位 · 南境守阵
+      - generic [ref=f17e901]:
+        - generic [ref=f17e902]:
+          - generic [ref=f17e903]: 灵犀 --
+          - generic [ref=f17e904]:
+            - text: 同道
+            - generic [ref=f17e905]: 1/4
+          - generic [ref=f17e906]: 军令 已通
+        - button "下达守关军令" [disabled]

@@ -60,7 +60,8 @@ export interface BossRuntimeEncounter {
 }
 
 export interface BossRuntimeEnemyView extends Pick<PveEnemySnapshot,
-  'id' | 'entityKind' | 'waveNumber' | 'laneOwnerPlayerId' | 'laneSlot' | 'currentHp' | 'maxHp'> {
+  'id' | 'entityKind' | 'waveNumber' | 'laneOwnerPlayerId' | 'laneSlot' | 'currentHp' | 'maxHp'
+  | 'xMilli' | 'yMilli'> {
   lifecycle: 'alive' | 'dead'
 }
 
@@ -92,8 +93,14 @@ interface BossPluginContext {
   boss: BossRuntimeEnemyView
   instance: BossInstance
   state: BossSkillState
-  emit: (type: PveRuntimeEvent['type'], data: PveRuntimeEvent['data']) => void
+  emit: BossRuntimeEventEmitter
 }
+
+type BossRuntimeEventEmitter = (
+  type: PveRuntimeEvent['type'],
+  data: PveRuntimeEvent['data'],
+  choreography?: Pick<PveRuntimeEvent, 'actionId' | 'targetIds' | 'geometry'>,
+) => void
 
 interface BossSkillPlugin {
   readonly pluginId: string
@@ -121,6 +128,11 @@ function intensityValue(context: BossPluginContext, value: number, max: number):
 
 function warning(context: BossPluginContext, telegraphMs: number): void {
   const executeAtTick = context.tick + ticks(telegraphMs, context.tickRateMs)
+  const actionId = `${context.boss.id}:${context.state.binding.bindingId}:cast-${context.state.castCount + 1}`
+  const targetIds = context.state.binding.pluginId === 'phase_guard_v1' ? [context.boss.id] : []
+  const geometry: NonNullable<PveRuntimeEvent['geometry']> = context.state.binding.pluginId === 'phase_guard_v1'
+    ? { kind: 'circle', xMilli: context.boss.xMilli, yMilli: context.boss.yMilli, radiusMilliCells: 1200 }
+    : { kind: 'point', xMilli: context.boss.xMilli, yMilli: context.boss.yMilli }
   context.state.lifecycle = 'warning'
   context.state.nextTransitionTick = executeAtTick
   context.instance.activeCast = {
@@ -129,6 +141,9 @@ function warning(context: BossPluginContext, telegraphMs: number): void {
     startedAtTick: context.tick,
     executeAtTick,
     targetPlayerIds: [context.instance.laneOwnerPlayerId],
+    actionId,
+    targetIds,
+    geometry,
   }
   context.emit('BOSS_CAST_WARNING', {
     bossEnemyId: context.boss.id,
@@ -139,13 +154,20 @@ function warning(context: BossPluginContext, telegraphMs: number): void {
     pluginId: context.state.binding.pluginId,
     executeAtTick,
     targetPlayerIds: [context.instance.laneOwnerPlayerId],
-  })
+    actionId,
+    targetIds,
+  }, { actionId, targetIds, geometry })
 }
 
 function activate(context: BossPluginContext, durationMs: number): void {
   context.state.lifecycle = 'active'
   context.state.castCount += 1
   context.state.nextTransitionTick = context.tick + ticks(durationMs, context.tickRateMs)
+  const actionId = `${context.boss.id}:${context.state.binding.bindingId}:cast-${context.state.castCount}`
+  const targetIds = context.state.binding.pluginId === 'phase_guard_v1' ? [context.boss.id] : []
+  const geometry: NonNullable<PveRuntimeEvent['geometry']> = context.state.binding.pluginId === 'phase_guard_v1'
+    ? { kind: 'circle', xMilli: context.boss.xMilli, yMilli: context.boss.yMilli, radiusMilliCells: 1200 }
+    : { kind: 'point', xMilli: context.boss.xMilli, yMilli: context.boss.yMilli }
   context.instance.activeCast = null
   context.emit('BOSS_SKILL_CAST', {
     bossEnemyId: context.boss.id,
@@ -156,7 +178,9 @@ function activate(context: BossPluginContext, durationMs: number): void {
     pluginId: context.state.binding.pluginId,
     activeUntilTick: context.state.nextTransitionTick,
     targetPlayerIds: [context.instance.laneOwnerPlayerId],
-  })
+    actionId,
+    targetIds,
+  }, { actionId, targetIds, geometry })
 }
 
 function endActive(context: BossPluginContext, lifecycle: BossSkillLifecycle, nextTransitionTick: number): void {
@@ -263,7 +287,7 @@ const PLUGINS: ReadonlyMap<string, BossSkillPlugin> = new Map([
 export interface BossRuntimeAdvanceContext {
   tick: number
   enemies: readonly BossRuntimeEnemyView[]
-  emit: (type: PveRuntimeEvent['type'], data: PveRuntimeEvent['data']) => void
+  emit: BossRuntimeEventEmitter
 }
 
 /**
@@ -371,6 +395,32 @@ export class BossCombatRuntimeV1 {
           nextTransitionTick: state.nextTransitionTick,
         })),
       })),
+    }
+  }
+
+  exportCheckpoint(): Record<string, unknown> {
+    return {
+      schemaVersion: BOSS_RUNTIME_SCHEMA_VERSION,
+      instances: [...this.instances.values()]
+        .sort((left, right) => left.bossEnemyId.localeCompare(right.bossEnemyId))
+        .map((instance) => structuredClone(instance)),
+    }
+  }
+
+  restoreCheckpoint(checkpoint: Record<string, unknown>): void {
+    if (checkpoint.schemaVersion !== BOSS_RUNTIME_SCHEMA_VERSION || !Array.isArray(checkpoint.instances)) {
+      throw new Error('Unsupported boss runtime checkpoint')
+    }
+    this.instances.clear()
+    for (const raw of checkpoint.instances) {
+      const instance = raw as BossInstance
+      if (!instance?.bossEnemyId || !Array.isArray(instance.skills)) throw new Error('Invalid boss runtime checkpoint')
+      for (const state of instance.skills) {
+        if (!PLUGINS.has(state.binding.pluginId) || state.binding.pluginVersion !== 1) {
+          throw new Error(`Unsupported checkpoint boss plugin: ${state.binding.pluginId}`)
+        }
+      }
+      this.instances.set(instance.bossEnemyId, structuredClone(instance))
     }
   }
 

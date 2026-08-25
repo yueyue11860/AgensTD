@@ -7,6 +7,7 @@ import {
   getResolvedPveWave,
   resolvePveBalanceProfile,
 } from './balance-catalog'
+import { resolvePveBossRiceReward } from './economy'
 
 export const BOSS_CATALOG_VERSION = 'boss-catalog-v1' as const
 export const BOSS_SCHEMA_VERSION = 1 as const
@@ -90,7 +91,7 @@ const BOSS_NODE_BUDGETS: Readonly<Record<BossWaveNumber, BossNodeBudgetV1>> = Ob
     moveSpeedMilliCellsPerSecond: 800,
     controlResistanceBps: 1000,
     maxSingleControlDurationMs: 3000,
-    rice: 5,
+    rice: resolvePveBossRiceReward(5),
     experienceMilli: 5000,
   },
   10: {
@@ -100,7 +101,7 @@ const BOSS_NODE_BUDGETS: Readonly<Record<BossWaveNumber, BossNodeBudgetV1>> = Ob
     moveSpeedMilliCellsPerSecond: 775,
     controlResistanceBps: 2000,
     maxSingleControlDurationMs: 2500,
-    rice: 10,
+    rice: resolvePveBossRiceReward(10),
     experienceMilli: 10000,
   },
   15: {
@@ -110,7 +111,7 @@ const BOSS_NODE_BUDGETS: Readonly<Record<BossWaveNumber, BossNodeBudgetV1>> = Ob
     moveSpeedMilliCellsPerSecond: 750,
     controlResistanceBps: 3000,
     maxSingleControlDurationMs: 2000,
-    rice: 15,
+    rice: resolvePveBossRiceReward(15),
     experienceMilli: 15000,
   },
   20: {
@@ -120,7 +121,7 @@ const BOSS_NODE_BUDGETS: Readonly<Record<BossWaveNumber, BossNodeBudgetV1>> = Ob
     moveSpeedMilliCellsPerSecond: 725,
     controlResistanceBps: 4000,
     maxSingleControlDurationMs: 1500,
-    rice: 20,
+    rice: resolvePveBossRiceReward(20),
     experienceMilli: 20000,
   },
 })

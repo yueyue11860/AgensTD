@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 18 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: pnpm
+          cache-dependency-path: FE/pnpm-lock.yaml
+      - name: Install frontend dependencies
+        working-directory: FE
+        run: pnpm install --frozen-lockfile
+      - name: Test frontend
+        working-directory: FE
+        run: pnpm test:ci
+
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: pnpm
+          cache-dependency-path: BE/pnpm-lock.yaml
+      - name: Install backend dependencies
+        working-directory: BE
+        run: pnpm install --frozen-lockfile
+      - name: Test backend
+        working-directory: BE
+        run: pnpm test:ci
+
+  pvp-e2e:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: pnpm
+          cache-dependency-path: |
+            FE/pnpm-lock.yaml
+            BE/pnpm-lock.yaml
+      - name: Install backend dependencies
+        working-directory: BE
+        run: pnpm install --frozen-lockfile
+      - name: Install frontend and browser dependencies
+        working-directory: FE
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+      - name: Run 20-match PVP release gate
+        working-directory: FE
+        run: pnpm test:e2e:pvp
+      - name: Upload PVP E2E report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pvp-e2e-report
+          path: |
+            output/playwright/pvp-e2e-report.json
+            output/playwright/pvp-e2e-report-failed-*.json
+            output/playwright/pvp-e2e-failure-*.png
+            output/playwright/pvp-e2e-failure-*.zip
+          if-no-files-found: error

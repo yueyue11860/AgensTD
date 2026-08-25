@@ -78,14 +78,14 @@ export function runBossBalanceSmokeChecks(): BossBalanceSmokeReport {
   }
   assert.equal(resolvedVariantCount, 120)
 
-  // 简单、普通在同一节点随关卡严格递增。
+  // 简单、普通在同一节点随关卡不倒退；低血量节点受 floor 影响可短暂持平。
   for (const difficulty of ['easy', 'normal'] as const) {
     for (const waveNumber of BOSS_WAVE_NUMBERS) {
       for (let levelId = 2; levelId <= 10; levelId += 1) {
         const previous = resolveBossEncounter(levelId - 1, difficulty, waveNumber)
         const current = resolveBossEncounter(levelId, difficulty, waveNumber)
         assert.ok(previous && current)
-        assert.ok(current.stats.maxHp > previous.stats.maxHp)
+        assert.ok(current.stats.maxHp >= previous.stats.maxHp)
         assert.ok(current.stats.armor > previous.stats.armor)
         assert.ok(current.stats.magicResistance > previous.stats.magicResistance)
         assert.ok(current.stats.skillIntensityBps > previous.stats.skillIntensityBps)

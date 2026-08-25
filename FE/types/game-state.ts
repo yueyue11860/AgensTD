@@ -1,4 +1,4 @@
-export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error'
+export type ConnectionState = 'idle' | 'connecting' | 'synchronizing' | 'connected' | 'reconnecting' | 'disconnected' | 'error'
 
 export type {
   ActionDescriptor,

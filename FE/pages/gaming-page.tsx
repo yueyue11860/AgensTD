@@ -1,18 +1,58 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { Coins, Crosshair, OctagonX, RefreshCw, ShieldAlert, Skull, Sparkles, Timer, Users } from 'lucide-react'
+import { Coins, Crosshair, OctagonX, RefreshCw, ShieldAlert, Skull, Sparkles, Timer, Users, Volume2, VolumeX } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { io, type Socket } from 'socket.io-client'
 import { GameOverOverlay } from '../components/game-over-overlay'
 import { MissionBriefingModal, type PveStageChoice } from '../components/mission-briefing-modal'
+import { PveOnboardingCoach } from '../components/pve-onboarding-coach'
+import { BattleChapterDirector, BattlefieldDomSummary } from '../components/battlefield-accessibility-layer'
 import { usePlayerAccount, type PveDifficulty } from '../hooks/use-player-account'
+import { useModalFocus } from '../hooks/use-modal-focus'
 import { cx } from '../lib/cx'
 import { LEVEL_DEFS } from '../lib/level-defs'
 import { resolveGatewayToken, resolvePlayerId, resolvePlayerKind, resolvePlayerName, resolveSocketUrl } from '../lib/runtime-config'
-import type { EntityDelta, GameState as NetworkGameState, GameStatePatch, TickEnvelope } from '../../shared/contracts/game'
+import type { CombatTargetGeometry, EntityDelta, GameState as NetworkGameState, GameStatePatch, TickEnvelope } from '../../shared/contracts/game'
+import { applyPveDeltaToGameState } from '../../shared/contracts/pve-state-delta'
 import type { PveSceneTheme } from '../../shared/contracts/pve-stage-config'
+import {
+  createConnectionRecoveryState,
+  isAuthenticationFailure,
+  isAuthoritativeFullTick,
+  parsePlayerConnectionState,
+  reduceConnectionRecovery,
+  type ConnectionRecoveryState,
+} from '../game/network/connection-recovery'
+import { useDeadlineCountdown } from '../hooks/use-deadline-countdown'
+import { usePveOnboarding } from '../game/onboarding/use-pve-onboarding'
+import {
+  baselineCombatEventStream,
+  CLIENT_COMBAT_PRESENTATION_VERSION,
+  classifyStateEnvelope,
+  createCombatEventStreamState,
+  isCombatEventBatch,
+  mergeCombatEventBatch,
+  mergeCombatEventsIntoGameState,
+} from '../game/network/combat-event-stream'
+import { parseCombatTargetGeometry } from '../game/presentation/combat-presentation-adapter'
 
 const BOARD_DIMENSION = 29
 const DEFAULT_ROOM_ID = 'public-1'
+const AUDIO_PREFS_STORAGE_KEY = 'agenstd.combat-audio.v1'
+
+function readCombatAudioPreferences(): { muted: boolean, masterVolume: number } {
+  if (typeof window === 'undefined') return { muted: false, masterVolume: 0.45 }
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(AUDIO_PREFS_STORAGE_KEY) ?? 'null') as unknown
+    if (!isObject(stored)) return { muted: false, masterVolume: 0.45 }
+    return {
+      muted: stored.muted === true,
+      masterVolume: Math.min(1, Math.max(0, typeof stored.masterVolume === 'number' ? stored.masterVolume : 0.45)),
+    }
+  }
+  catch {
+    return { muted: false, masterVolume: 0.45 }
+  }
+}
 
 const PhaserBattlefield = lazy(async () => {
   const module = await import('../components/phaser-battlefield')
@@ -97,6 +137,9 @@ interface ServerEnemyState {
     startedAtTick: number
     executeAtTick: number
     targetPlayerIds: string[]
+    actionId?: string
+    targetIds?: string[]
+    geometry?: CombatTargetGeometry | null
   } | null
   glyph: string
   x: number
@@ -147,6 +190,9 @@ interface ServerCombatEventState {
   tick: number
   type: string
   data: Record<string, string | number | boolean | string[] | number[] | null>
+  actionId?: string
+  targetIds?: string[]
+  geometry?: CombatTargetGeometry | null
 }
 
 interface ServerWaveState {
@@ -183,6 +229,7 @@ interface SelectedLevelInfo {
 }
 
 interface ServerDrivenGameState {
+  matchId: string | null
   roomId: string
   phase: RoomPhase
   tick: number
@@ -327,12 +374,23 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function isRoomSnapshotPayload(value: unknown): value is {
   id: string
-  slots: Array<{ slotId: string; playerId: string | null; isHost: boolean }>
+  slots: RoomConnectionSlot[]
 } {
   return isObject(value)
     && typeof value.id === 'string'
     && Array.isArray(value.slots)
     && value.slots.every((slot) => isObject(slot) && typeof slot.slotId === 'string' && typeof slot.isHost === 'boolean')
+}
+
+interface RoomConnectionSlot {
+  slotId: string
+  playerId: string | null
+  playerName?: string | null
+  connected?: boolean
+  connectionState?: 'connected' | 'reconnecting' | 'disconnected'
+  reconnectDeadlineAt?: number
+  reconnectRemainingMs?: number
+  isHost: boolean
 }
 
 function isReferenceCoreCell(x: number, y: number) {
@@ -439,9 +497,16 @@ function normalizeEnemy(rawEnemy: unknown): ServerEnemyState | null {
         skillName: typeof rawActiveCast.skillName === 'string' ? rawActiveCast.skillName : rawActiveCast.skillId,
         startedAtTick: readNumber(rawActiveCast, 'startedAtTick', rawActiveCast.executeAtTick),
         executeAtTick: rawActiveCast.executeAtTick,
-        targetPlayerIds: Array.isArray(rawActiveCast.targetPlayerIds)
+      targetPlayerIds: Array.isArray(rawActiveCast.targetPlayerIds)
           ? rawActiveCast.targetPlayerIds.filter((id): id is string => typeof id === 'string')
           : [],
+        ...(typeof rawActiveCast.actionId === 'string' ? { actionId: rawActiveCast.actionId } : {}),
+        ...(Array.isArray(rawActiveCast.targetIds)
+          ? { targetIds: rawActiveCast.targetIds.filter((id): id is string => typeof id === 'string') }
+          : {}),
+        ...(rawActiveCast.geometry !== undefined
+          ? { geometry: parseCombatTargetGeometry(rawActiveCast.geometry) }
+          : {}),
       }
     : null
   return {
@@ -542,7 +607,17 @@ function normalizeCombatEvent(rawEvent: unknown): ServerCombatEventState | null 
       else if (Array.isArray(value) && value.every((item) => typeof item === 'number')) data[key] = value
     }
   }
-  return { id: rawEvent.id, tick: rawEvent.tick, type: rawEvent.type, data }
+  return {
+    id: rawEvent.id,
+    tick: rawEvent.tick,
+    type: rawEvent.type,
+    data,
+    ...(typeof rawEvent.actionId === 'string' ? { actionId: rawEvent.actionId } : {}),
+    ...(Array.isArray(rawEvent.targetIds)
+      ? { targetIds: rawEvent.targetIds.filter((id): id is string => typeof id === 'string') }
+      : {}),
+    ...(rawEvent.geometry !== undefined ? { geometry: parseCombatTargetGeometry(rawEvent.geometry) } : {}),
+  }
 }
 
 function normalizeSyncState(payload: unknown, playerId: string): ServerDrivenGameState | null {
@@ -705,6 +780,7 @@ function normalizeSyncState(payload: unknown, playerId: string): ServerDrivenGam
     : null
 
   return {
+    matchId: typeof candidate.matchId === 'string' ? candidate.matchId : null,
     roomId: typeof candidate.roomId === 'string' ? candidate.roomId : DEFAULT_ROOM_ID,
     phase: candidate.phase === 'countdown' || candidate.phase === 'waiting_for_level' || candidate.phase === 'playing' ? candidate.phase : 'lobby',
     tick: candidate.tick,
@@ -790,7 +866,7 @@ function mergeNetworkTickPayload(payload: unknown, previous: NetworkGameState | 
     towers: envelope.patch.towers ?? applyNetworkEntityDelta(previous.towers, envelope.patch.towerDelta),
     enemies: envelope.patch.enemies ?? applyNetworkEntityDelta(previous.enemies, envelope.patch.enemyDelta),
     map: envelope.patch.map ?? previous.map,
-    pve: envelope.patch.pve ?? previous.pve,
+    pve: applyPveDeltaToGameState(previous, envelope.patch),
   }
 }
 
@@ -841,17 +917,73 @@ function CrisisWarning({ overloadTicks, overloadCountdownSec, enemyCount, maxCap
   )
 }
 
-function GamingBoard({ gameState, sceneTheme, selectedPieceId, placementMode, allowAnyTargetCell, hoveredCell, onCellClick, onCellHover, onCellLeave }: {
+function LeaveConfirmDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+  const dialogRef = useModalFocus(onCancel)
+  return (
+    <div className="cyber-modal-backdrop" onClick={onCancel}>
+      <div
+        ref={dialogRef}
+        className="gaming-confirm-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="leave-match-dialog-title"
+        tabIndex={-1}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <p className="gaming-confirm-eyebrow">Exit Match</p>
+        <h2 id="leave-match-dialog-title" className="mt-3 text-2xl font-semibold tracking-[0.08em] text-white">确认退出游戏？</h2>
+        <p className="mt-3 text-sm leading-7 text-slate-300">确认后将离开当前对局，并返回等待房间页面。</p>
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onCancel} className="gaming-confirm-button gaming-confirm-button-muted">取消</button>
+          <button type="button" onClick={onConfirm} className="gaming-confirm-button gaming-confirm-button-danger">确认退出</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function TeammateConnectionRow({ slot, selfPlayerId }: { slot: RoomConnectionSlot, selfPlayerId: string }) {
+  const remainingSeconds = useDeadlineCountdown(slot.reconnectDeadlineAt ?? null)
+  const reconnecting = slot.connectionState === 'reconnecting'
+  const label = slot.playerId === selfPlayerId ? '你' : slot.playerName ?? slot.playerId ?? '空位'
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-white/5 bg-slate-950/35 px-3 py-2 text-xs">
+      <span className="truncate text-slate-300">{slot.slotId} · {label}</span>
+      <strong className={cx(
+        'shrink-0 font-mono',
+        slot.connected ? 'text-emerald-300' : reconnecting ? 'text-amber-300' : 'text-slate-500',
+      )}>
+        {slot.connected
+          ? '在线'
+          : reconnecting
+            ? `重连中 ${remainingSeconds ?? Math.ceil((slot.reconnectRemainingMs ?? 0) / 1000)}秒`
+            : slot.playerId ? '已离线' : '待加入'}
+      </strong>
+    </div>
+  )
+}
+
+function GamingBoard({ gameState, sceneTheme, selectedPieceId, selectedObjectLabel, executableActions, placementMode, allowAnyTargetCell, hoveredCell, audioMuted, audioMasterVolume, presentationSyncRevision, onCellClick, onCellHover, onCellLeave, onCancelInteraction }: {
   gameState: ServerDrivenGameState | null
   sceneTheme?: PveSceneTheme | null
   selectedPieceId: string | null
+  selectedObjectLabel: string
+  executableActions: string
   placementMode: boolean
   allowAnyTargetCell?: boolean
   hoveredCell: { x: number; y: number } | null
+  audioMuted: boolean
+  audioMasterVolume: number
+  presentationSyncRevision: number
   onCellClick: (x: number, y: number) => void
   onCellHover: (x: number, y: number) => void
   onCellLeave: () => void
+  onCancelInteraction: () => void
 }) {
+  const summaryId = 'pve-battlefield-dom-summary'
+  const bossNames = gameState?.enemies
+    .filter(enemy => enemy.entityKind === 'boss')
+    .map(enemy => enemy.bossName ?? enemy.glyph) ?? []
   const canPreviewAtHoveredCell = Boolean(
     hoveredCell
     && placementMode
@@ -859,21 +991,40 @@ function GamingBoard({ gameState, sceneTheme, selectedPieceId, placementMode, al
   )
   return (
     <Suspense fallback={<section className="gaming-board-frame" aria-busy="true"><div className="gaming-board-viewport">正在加载战场引擎…</div></section>}>
+      <BattlefieldDomSummary
+        id={summaryId}
+        wave={gameState?.currentWave.index ?? 0}
+        maxWaves={gameState?.maxWaves ?? 0}
+        enemyCount={gameState?.enemies.length ?? 0}
+        bossNames={bossNames}
+        cursor={hoveredCell}
+        selectedObject={selectedObjectLabel}
+        executableActions={executableActions}
+      />
       <PhaserBattlefield
         snapshot={gameState ? {
           tick: gameState.tick,
+          tickRateMs: gameState.tickRateMs,
           pieces: gameState.boardPieces,
           enemies: gameState.enemies,
           statuses: gameState.statuses,
           summonedUnits: gameState.summonedUnits,
           zones: gameState.zones,
+          recentEvents: gameState.recentEvents,
         } : null}
         terrainMatrix={ARENA_TERRAIN_MATRIX}
         sceneTheme={sceneTheme}
         hoveredCell={hoveredCell}
         selectedPieceId={selectedPieceId}
+        selectedPieceCell={gameState?.boardPieces.find(piece => piece.entityId === selectedPieceId) ?? null}
         placementMode={placementMode}
         canPreviewAtHoveredCell={canPreviewAtHoveredCell}
+        muted={audioMuted}
+        masterVolume={audioMasterVolume}
+        presentationSyncRevision={presentationSyncRevision}
+        accessibilitySummaryId={summaryId}
+        accessibilityLabel={`29×29西游汉字战场，第 ${gameState?.currentWave.index ?? 0} 波。方向键移动格游标，Enter 或空格执行，Escape 取消。`}
+        onCancelInteraction={onCancelInteraction}
         onCellClick={onCellClick}
         onCellHover={onCellHover}
         onCellLeave={onCellLeave}
@@ -892,9 +1043,15 @@ export function GamingPage() {
   const playerName = useMemo(() => resolvePlayerName() ?? playerId, [playerId])
   const playerKind = resolvePlayerKind()
   const socketRef = useRef<Socket | null>(null)
+  const awaitingCheckpointRef = useRef(true)
+  const terminalDisconnectRef = useRef(false)
+  const connectionGraceMsRef = useRef(45_000)
+  const stateRevisionRef = useRef(0)
+  const combatEventStreamRef = useRef(createCombatEventStreamState())
   const playerAccount = usePlayerAccount()
   const lastItemRejectionRef = useRef<string | null>(null)
   const [gameState, setGameState] = useState<ServerDrivenGameState | null>(null)
+  const [combatAudioPreferences, setCombatAudioPreferences] = useState(readCombatAudioPreferences)
   const [roomPhase, setRoomPhase] = useState<RoomPhase>('lobby')
   const [selectedTrayIndex, setSelectedTrayIndex] = useState<number | null>(null)
   const [selectedReserveIndex, setSelectedReserveIndex] = useState<number | null>(null)
@@ -903,14 +1060,19 @@ export function GamingPage() {
   const [selectedDiscardedTokenId, setSelectedDiscardedTokenId] = useState<string | null>(null)
   const [hoveredCell, setHoveredCell] = useState<{ x: number; y: number } | null>(null)
   const [isLeaveConfirmOpen, setIsLeaveConfirmOpen] = useState(false)
+  const [isBuildDockExpanded, setIsBuildDockExpanded] = useState(() => typeof window === 'undefined' || window.innerWidth >= 1080)
   const [error, setError] = useState<string | null>(null)
   const [selectedLevelInfo, setSelectedLevelInfo] = useState<SelectedLevelInfo | null>(null)
   const [pendingStageSelection, setPendingStageSelection] = useState<PveStageChoice | null>(null)
   const [missionBriefingDismissed, setMissionBriefingDismissed] = useState(false)
   const [mySlot, setMySlot] = useState<string | null>(null)
   const [hostPlayerId, setHostPlayerId] = useState<string | null>(null)
+  const [roomSlots, setRoomSlots] = useState<RoomConnectionSlot[]>([])
+  const [connectionRecovery, setConnectionRecovery] = useState<ConnectionRecoveryState>(() => createConnectionRecoveryState())
+  const reconnectRemainingSeconds = useDeadlineCountdown(connectionRecovery.deadlineAt)
 
   const isHost = hostPlayerId ? hostPlayerId === playerId : mySlot === 'P1'
+  const interactionLocked = connectionRecovery.phase !== 'ready'
   const isAwaitingLevelSelection = roomPhase === 'waiting_for_level' || ((roomPhase === 'lobby' || roomPhase === 'countdown') && gameState?.status === 'waiting')
   const shouldShowMissionBriefing = !missionBriefingDismissed && pendingStageSelection === null && !selectedLevelInfo && !gameState?.result?.outcome && isAwaitingLevelSelection
   const selectedLevelPreview = selectedLevelInfo ?? (pendingStageSelection !== null ? (() => {
@@ -941,7 +1103,36 @@ export function GamingPage() {
     ?? gameState?.generalFormations.find((formation) => formation.generalId === generalId)?.name
     ?? generalId
   const selectedReservePiece = selectedReserveIndex === null ? null : gameState?.reserve[selectedReserveIndex] ?? null
-  const recruitDisabled = !gameState || gameState.status !== 'running' || gameState.rice < gameState.nextRecruitCost
+  const recruitDisabled = interactionLocked || !gameState || gameState.status !== 'running' || gameState.rice < gameState.nextRecruitCost
+  const selectedBattlefieldObject = targetingItemSlot !== null
+    ? `主动道具「${gameState?.activeItems[targetingItemSlot]?.name ?? '未知道具'}」`
+    : selectedTrayIndex !== null
+      ? `召唤托盘第 ${selectedTrayIndex + 1} 格「${gameState?.tray[selectedTrayIndex]?.glyph ?? '空'}」`
+      : selectedReserveIndex !== null
+        ? `备战席第 ${selectedReserveIndex + 1} 格「${gameState?.reserve[selectedReserveIndex]?.glyph ?? '空'}」`
+        : selectedPiece
+          ? `棋盘单位「${selectedFormation?.name ?? selectedPiece.glyph}」`
+          : '无'
+  const battlefieldExecutableActions = targetingItemSlot !== null
+    ? '方向键选择格位，Enter 或空格确认道具目标，Escape 取消。'
+    : selectedTrayIndex !== null || selectedReserveIndex !== null || selectedPiece !== null
+      ? '方向键选择格位，Enter 或空格部署、移动或合成，Escape 取消。'
+      : '先选择召唤托盘、备战席或己方棋子；战场聚焦后可用方向键浏览。'
+  const onboardingObservation = useMemo(() => gameState ? {
+    status: gameState.status,
+    currentWave: gameState.currentWave.index,
+    nextRecruitCost: gameState.nextRecruitCost,
+    trayRevision: gameState.trayRevision,
+    boardRevision: gameState.boardRevision,
+    tray: gameState.tray,
+    reserve: gameState.reserve,
+    boardPieces: gameState.boardPieces,
+    generalFormations: gameState.generalFormations,
+    enemies: gameState.enemies,
+    recentEvents: gameState.recentEvents,
+    selectedTrayIndex,
+  } : null, [gameState, selectedTrayIndex])
+  const onboarding = usePveOnboarding(playerId, onboardingObservation)
 
   useEffect(() => {
     const root = document.getElementById('root')
@@ -956,10 +1147,32 @@ export function GamingPage() {
   }, [])
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(AUDIO_PREFS_STORAGE_KEY, JSON.stringify(combatAudioPreferences))
+    }
+    catch {
+      // 隐私模式或禁用存储时仅保留本次页面设置。
+    }
+  }, [combatAudioPreferences])
+
+  useEffect(() => {
+    if (reconnectRemainingSeconds !== 0 || connectionRecovery.deadlineAt === null || connectionRecovery.phase === 'ready') return
+    setConnectionRecovery((current) => reduceConnectionRecovery(current, { type: 'deadline_tick', now: Date.now() }))
+  }, [connectionRecovery.deadlineAt, connectionRecovery.phase, reconnectRemainingSeconds])
+
+  useEffect(() => {
+    if (connectionRecovery.phase !== 'expired') return
+    setError('重连期限已过，本局席位已释放。你可以返回房间重新加入。')
+  }, [connectionRecovery.phase])
+
+  useEffect(() => {
     if (!socketUrl || typeof window === 'undefined') {
       setError('未解析到 WebSocket 地址。')
       return
     }
+
+    stateRevisionRef.current = 0
+    combatEventStreamRef.current = createCombatEventStreamState()
 
     const socket = io(socketUrl, {
       autoConnect: true,
@@ -978,17 +1191,75 @@ export function GamingPage() {
     let latestNetworkState: NetworkGameState | null = null
 
     const handleTickUpdate = (payload: unknown) => {
+      const envelope = isObject(payload)
+        && (payload.mode === 'full' || payload.mode === 'patch' || payload.mode === 'checkpoint')
+        ? payload as unknown as TickEnvelope
+        : null
+      if (envelope) {
+        const decision = classifyStateEnvelope(envelope, stateRevisionRef.current)
+        if (decision === 'stale') return
+        if (decision === 'gap') {
+          awaitingCheckpointRef.current = true
+          socket.emit('REQUEST_FULL_STATE')
+          return
+        }
+      }
+      const isFull = isAuthoritativeFullTick(payload)
+      if (awaitingCheckpointRef.current && !isFull) {
+        socket.emit('REQUEST_FULL_STATE')
+        return
+      }
       const networkState = mergeNetworkTickPayload(payload, latestNetworkState)
       if (!networkState) {
         if (isObject(payload) && (payload.mode === 'patch' || payload.mode === 'checkpoint')) socket.emit('REQUEST_FULL_STATE')
         return
       }
       latestNetworkState = networkState
+      stateRevisionRef.current = envelope?.revision ?? networkState.tick
+      if (envelope?.mode === 'full' && envelope.presentationVersion === CLIENT_COMBAT_PRESENTATION_VERSION) {
+        combatEventStreamRef.current = baselineCombatEventStream(networkState.matchId, envelope.eventSeq)
+      }
+      else if (envelope?.mode === 'full') {
+        combatEventStreamRef.current = createCombatEventStreamState()
+      }
       const nextState = normalizeSyncState(networkState, playerId)
       if (nextState) {
         setGameState(nextState)
+        if (isFull) {
+          awaitingCheckpointRef.current = false
+          setConnectionRecovery((current) => reduceConnectionRecovery(current, { type: 'full_snapshot' }))
+        }
         setError(null)
       }
+    }
+
+    const handleCombatEventBatch = (payload: unknown) => {
+      if (!isCombatEventBatch(payload)) return
+      const result = mergeCombatEventBatch(combatEventStreamRef.current, payload)
+      combatEventStreamRef.current = result.state
+      if (result.accepted.length > 0) {
+        latestNetworkState = mergeCombatEventsIntoGameState(latestNetworkState, result.accepted)
+        const nextState = latestNetworkState ? normalizeSyncState(latestNetworkState, playerId) : null
+        if (nextState) setGameState(nextState)
+      }
+      if (result.ackSeq !== null) {
+        socket.emit('COMBAT_EVENT_ACK', {
+          matchId: payload.matchId,
+          presentationVersion: CLIENT_COMBAT_PRESENTATION_VERSION,
+          ackSeq: result.ackSeq,
+        })
+      }
+      if (result.gapFromSeq !== null) {
+        socket.emit('REQUEST_COMBAT_EVENTS', {
+          matchId: payload.matchId,
+          presentationVersion: CLIENT_COMBAT_PRESENTATION_VERSION,
+          fromSeq: result.gapFromSeq,
+        })
+      }
+    }
+    const handleCombatEventReset = () => {
+      awaitingCheckpointRef.current = true
+      socket.emit('REQUEST_FULL_STATE')
     }
 
     const handleRoomJoined = (payload: unknown) => {
@@ -1011,34 +1282,109 @@ export function GamingPage() {
     }
     const handleRoomSnapshot = (payload: unknown) => {
       if (!isRoomSnapshotPayload(payload)) return
+      setRoomSlots(payload.slots)
       setMySlot(payload.slots.find((slot) => slot.playerId === playerId)?.slotId ?? null)
       setHostPlayerId(payload.slots.find((slot) => slot.isHost && typeof slot.playerId === 'string')?.playerId ?? null)
+    }
+    const handlePlayerConnectionState = (payload: unknown) => {
+      const update = parsePlayerConnectionState(payload)
+      if (!update) return
+      if (update.playerId === playerId) connectionGraceMsRef.current = update.graceMs
+      setRoomSlots((current) => current.map((slot) => slot.playerId === update.playerId
+        ? {
+            ...slot,
+            connected: update.status === 'connected',
+            connectionState: update.status,
+            reconnectDeadlineAt: update.reconnectDeadlineAt ?? undefined,
+            reconnectRemainingMs: update.reconnectRemainingMs,
+          }
+        : slot))
+      if (update.playerId === playerId && update.status === 'reconnecting' && update.reconnectDeadlineAt !== null) {
+        const deadlineAt = update.reconnectDeadlineAt
+        setConnectionRecovery((current) => reduceConnectionRecovery(current, {
+          type: 'server_reconnecting', deadlineAt, graceMs: update.graceMs,
+        }))
+      }
     }
     const handleEngineError = (engineError: unknown) => {
       setPendingStageSelection(null)
       setMissionBriefingDismissed(false)
       if (typeof engineError === 'string') setError(engineError)
-      else if (isObject(engineError) && typeof engineError.message === 'string') setError(engineError.message)
+      else if (isObject(engineError) && typeof engineError.message === 'string') {
+        if (engineError.code === 'RECONNECT_WINDOW_EXPIRED') {
+          setConnectionRecovery((current) => ({ ...current, phase: 'expired', deadlineAt: null, message: engineError.message as string }))
+        }
+        setError(engineError.message)
+      }
     }
 
-    socket.on('connect', () => {
+    const handleConnect = () => {
+      terminalDisconnectRef.current = false
+      awaitingCheckpointRef.current = true
+      setConnectionRecovery((current) => reduceConnectionRecovery(current, { type: 'transport_connected' }))
       setError(null)
-      socket.emit('JOIN_ROOM', { roomId, playerId, playerName, playerKind })
-    })
-    socket.on('connect_error', (connectError) => setError(connectError.message))
+      socket.emit('JOIN_ROOM', { roomId, playerId, playerName, playerKind, capabilities: { combatEventBatch: CLIENT_COMBAT_PRESENTATION_VERSION } })
+    }
+    const handleDisconnect = (reason: Socket.DisconnectReason) => {
+      if (terminalDisconnectRef.current || reason === 'io client disconnect') return
+      awaitingCheckpointRef.current = true
+      const deadlineAt = Date.now() + connectionGraceMsRef.current
+      setConnectionRecovery((current) => reduceConnectionRecovery(current, {
+        type: 'server_reconnecting', deadlineAt, graceMs: connectionGraceMsRef.current,
+      }))
+      setRoomSlots((current) => current.map((slot) => slot.playerId === playerId
+        ? { ...slot, connected: false, connectionState: 'reconnecting', reconnectDeadlineAt: deadlineAt, reconnectRemainingMs: connectionGraceMsRef.current }
+        : slot))
+    }
+    const handleConnectError = (connectError: Error) => {
+      if (isAuthenticationFailure(connectError.message)) {
+        socket.io.opts.reconnection = false
+        setConnectionRecovery((current) => reduceConnectionRecovery(current, { type: 'auth_failed', message: '登录凭证已失效，请重新登录。' }))
+        setError('登录凭证已失效，请重新登录。')
+        return
+      }
+      setError(`暂时无法连接服务器：${connectError.message}`)
+    }
+    const handleConnectionReplaced = () => {
+      socket.io.opts.reconnection = false
+      terminalDisconnectRef.current = true
+      awaitingCheckpointRef.current = true
+      setConnectionRecovery((current) => reduceConnectionRecovery(current, { type: 'replaced' }))
+      setError('此账号已在另一个窗口接管本局。')
+      socket.disconnect()
+    }
+    const handleReconnectFailed = () => {
+      setError('自动重连未成功。请手动重试，或返回房间重新加入。')
+    }
+    socket.on('connect', handleConnect)
+    socket.on('disconnect', handleDisconnect)
+    socket.on('connect_error', handleConnectError)
     socket.on('engine_error', handleEngineError)
     socket.on('TICK_UPDATE', handleTickUpdate)
+    socket.on('COMBAT_EVENT_BATCH', handleCombatEventBatch)
+    socket.on('COMBAT_EVENT_RESET', handleCombatEventReset)
     socket.on('ROOM_JOINED', handleRoomJoined)
     socket.on('ROOM_SNAPSHOT', handleRoomSnapshot)
+    socket.on('PLAYER_CONNECTION_STATE', handlePlayerConnectionState)
+    socket.on('PLAYER_CONNECTION_REPLACED', handleConnectionReplaced)
     socket.on('ROOM_PHASE_CHANGED', handleRoomPhaseChanged)
     socket.on('LEVEL_SELECTED', handleLevelSelected)
+    socket.io.on('reconnect_failed', handleReconnectFailed)
 
     return () => {
+      socket.off('connect', handleConnect)
+      socket.off('disconnect', handleDisconnect)
+      socket.off('connect_error', handleConnectError)
       socket.off('TICK_UPDATE', handleTickUpdate)
+      socket.off('COMBAT_EVENT_BATCH', handleCombatEventBatch)
+      socket.off('COMBAT_EVENT_RESET', handleCombatEventReset)
       socket.off('ROOM_JOINED', handleRoomJoined)
       socket.off('ROOM_SNAPSHOT', handleRoomSnapshot)
+      socket.off('PLAYER_CONNECTION_STATE', handlePlayerConnectionState)
+      socket.off('PLAYER_CONNECTION_REPLACED', handleConnectionReplaced)
       socket.off('ROOM_PHASE_CHANGED', handleRoomPhaseChanged)
       socket.off('LEVEL_SELECTED', handleLevelSelected)
+      socket.io.off('reconnect_failed', handleReconnectFailed)
       socket.disconnect()
       socketRef.current = null
     }
@@ -1068,8 +1414,8 @@ export function GamingPage() {
 
   function emitAction(payload: Record<string, unknown>) {
     const socket = socketRef.current
-    if (!socket?.connected) {
-      setError('WebSocket 尚未连接。')
+    if (!socket?.connected || interactionLocked || awaitingCheckpointRef.current) {
+      setError('权威战局尚未恢复，操作已锁定且不会发送。')
       return false
     }
     socket.emit('SEND_ACTION', {
@@ -1123,6 +1469,14 @@ export function GamingPage() {
     setSelectedTrayIndex(null)
     setSelectedReserveIndex(null)
     setSelectedPieceId(null)
+  }
+
+  function cancelBattlefieldInteraction() {
+    clearPieceSelection()
+    setTargetingItemSlot(null)
+    setSelectedDiscardedTokenId(null)
+    setHoveredCell(null)
+    setError(null)
   }
 
   function useItemOnStoragePiece(zone: StorageZone, index: number) {
@@ -1459,41 +1813,223 @@ export function GamingPage() {
     navigate(`/room/${encodeURIComponent(roomId)}`, { state: { suppressAutoResume: true } })
   }
 
+  function returnHome() {
+    document.body.classList.remove('crisis-overload-active')
+    navigate('/home')
+  }
+
+  function retryConnection() {
+    const socket = socketRef.current
+    if (!socket) return
+    terminalDisconnectRef.current = false
+    awaitingCheckpointRef.current = true
+    socket.io.opts.reconnection = true
+    setConnectionRecovery((current) => reduceConnectionRecovery(current, { type: 'retry', now: Date.now() }))
+    setError(null)
+    if (socket.connected) {
+      socket.emit('JOIN_ROOM', { roomId, playerId, playerName, playerKind, capabilities: { combatEventBatch: CLIENT_COMBAT_PRESENTATION_VERSION } })
+      socket.emit('REQUEST_FULL_STATE')
+    }
+    else socket.connect()
+  }
+
   function handleSelectLevel(selection: PveStageChoice) {
     setError(null)
     setPendingStageSelection(selection)
     setMissionBriefingDismissed(true)
     const socket = socketRef.current
-    if (!socket?.connected) {
+    if (!socket?.connected || interactionLocked || awaitingCheckpointRef.current) {
       setPendingStageSelection(null)
       setMissionBriefingDismissed(false)
-      setError('WebSocket 尚未连接。')
+      setError('权威战局尚未恢复，请等待重连完成。')
       return
     }
     socket.emit('SELECT_LEVEL', selection)
   }
 
   return (
-    <main className="gaming-page">
+    <main
+      className="gaming-page"
+      data-authoritative-tick={gameState?.tick ?? 0}
+      data-wave={gameState?.currentWave.index ?? 0}
+      data-enemy-count={gameState?.enemies.length ?? 0}
+      data-overload-ticks={gameState?.overloadTicks ?? 0}
+      data-overload-countdown-sec={gameState?.overloadCountdownSec ?? 0}
+      data-enemy-capacity={gameState?.maxCapacity ?? 0}
+      data-rice={gameState?.rice ?? 0}
+      data-next-recruit-cost={gameState?.nextRecruitCost ?? 0}
+      data-board-piece-count={gameState?.boardPieces.length ?? 0}
+      data-tray-piece-count={gameState?.tray.filter(Boolean).length ?? 0}
+      data-match-outcome={gameState?.result?.outcome ?? ''}
+    >
       <div className="cyber-background" />
       <div className="cyber-noise" />
       <button type="button" onClick={() => setIsLeaveConfirmOpen(true)} className="gaming-exit-fab"><OctagonX className="h-3.5 w-3.5" /><span>退出</span></button>
-      <CrisisWarning
-        overloadTicks={gameState?.overloadTicks ?? 0}
-        overloadCountdownSec={gameState?.overloadCountdownSec ?? 0}
-        enemyCount={gameState?.enemies.filter((enemy) => enemy.entityKind === 'ordinary_minion').length ?? 0}
-        maxCapacity={gameState?.maxCapacity ?? 10}
+
+      {connectionRecovery.phase !== 'ready' ? (
+        <div className="pointer-events-none fixed inset-0 z-[160] flex items-start justify-center bg-slate-950/20 px-4 pt-16" aria-live="assertive">
+          <section
+            role={connectionRecovery.phase === 'reconnecting' || connectionRecovery.phase === 'awaiting_snapshot' ? 'status' : 'alert'}
+            className={cx(
+              'pointer-events-auto w-full max-w-xl rounded-2xl border px-5 py-4 shadow-2xl backdrop-blur-xl',
+              connectionRecovery.phase === 'reconnecting' || connectionRecovery.phase === 'awaiting_snapshot'
+                ? 'border-amber-300/35 bg-slate-950/90 shadow-amber-950/50'
+                : 'border-red-300/35 bg-slate-950/95 shadow-red-950/50',
+            )}
+          >
+            <div className="flex items-start justify-between gap-5">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-amber-300">Connection recovery</p>
+                <h2 className="mt-1 text-lg font-semibold text-white">
+                  {connectionRecovery.phase === 'reconnecting'
+                    ? `正在重连 · 席位保留 ${reconnectRemainingSeconds ?? '—'} 秒`
+                    : connectionRecovery.phase === 'awaiting_snapshot'
+                      ? '连接已恢复 · 正在校准战局'
+                      : connectionRecovery.phase === 'replaced'
+                        ? '本局已被其他窗口接管'
+                        : connectionRecovery.phase === 'auth_failed'
+                          ? '登录状态已失效'
+                          : '重连期限已过'}
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-slate-300">{connectionRecovery.message ?? '等待服务器返回完整权威快照；期间所有操作均不会发送。'}</p>
+              </div>
+              {(connectionRecovery.phase === 'reconnecting' || connectionRecovery.phase === 'awaiting_snapshot') ? <RefreshCw className="mt-1 h-5 w-5 shrink-0 animate-spin text-amber-300" /> : <ShieldAlert className="mt-1 h-5 w-5 shrink-0 text-red-300" />}
+            </div>
+            {(connectionRecovery.phase === 'expired' || connectionRecovery.phase === 'replaced' || connectionRecovery.phase === 'auth_failed') ? (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {connectionRecovery.phase !== 'auth_failed' ? <button type="button" onClick={retryConnection} className="rounded-lg border border-cyan-300/35 px-4 py-2 text-sm text-cyan-100 hover:bg-cyan-300/10">手动重试</button> : null}
+                <button type="button" onClick={() => navigate(connectionRecovery.phase === 'auth_failed' ? '/login' : `/room/${encodeURIComponent(roomId)}`)} className="rounded-lg border border-white/15 px-4 py-2 text-sm text-slate-200 hover:bg-white/5">
+                  {connectionRecovery.phase === 'auth_failed' ? '重新登录' : '返回房间'}
+                </button>
+              </div>
+            ) : null}
+          </section>
+        </div>
+      ) : null}
+
+      <BattleChapterDirector
+        matchId={gameState?.matchId ?? null}
+        chapterLabel={selectedLevelPreview ? `第 ${selectedLevelPreview.levelId} 回 · ${selectedLevelPreview.label}` : '西游守关'}
+        currentWave={gameState?.currentWave.index ?? 0}
+        maxWaves={gameState?.maxWaves ?? 0}
+        prepCountdownSec={gameState?.currentWave.prepCountdownSec ?? 0}
+        enemyCount={gameState?.enemies.length ?? 0}
+        recentEvents={gameState?.recentEvents ?? []}
+        bosses={gameState?.enemies.filter(enemy => enemy.entityKind === 'boss') ?? []}
       />
 
-      <section className="gaming-shell">
-        <div className="gaming-stage">
-          <aside className="gaming-side-rail gaming-side-rail-build">
-            <div className="gaming-side-rail-scroll">
+      <PveOnboardingCoach
+        step={onboarding.currentStep}
+        facts={onboarding.facts}
+        visible={onboarding.visible && !interactionLocked && !shouldShowMissionBriefing && !gameState?.result}
+        paused={onboarding.paused && Boolean(onboarding.facts?.running) && !gameState?.result}
+        onSkipStep={onboarding.skipStep}
+        onSkipAll={onboarding.skipAll}
+        onPause={onboarding.pause}
+        onResume={onboarding.resume}
+      />
+
+      <section className="gaming-shell" aria-busy={interactionLocked} style={interactionLocked ? { pointerEvents: 'none' } : undefined}>
+        <header className="gaming-command-bar" aria-label="全局战况">
+          <div className="gaming-command-mission">
+            <span>DEFENSE GRID</span>
+            <strong>{selectedLevelPreview?.label ?? '节点防线'}</strong>
+            <small>{selectedLevelPreview ? ({ easy: '简单', normal: '普通', hard: '困难' } as const)[selectedLevelPreview.difficulty] : '等待关卡同步'}</small>
+          </div>
+          <div className="gaming-command-metrics">
+            <div data-onboarding-anchor="rice"><Coins className="h-4 w-4" /><span>斋饭</span><strong>{gameState?.rice ?? 0}</strong></div>
+            <div><Users className="h-4 w-4" /><span>人口</span><strong>{gameState?.populationUsed ?? 0}/{gameState?.populationCap ?? 10}</strong></div>
+            <div><Skull className="h-4 w-4" /><span>敌军</span><strong>{gameState?.enemies.length ?? 0}</strong></div>
+          </div>
+          <div className="gaming-wave-command">
+            <ShieldAlert className="h-5 w-5" />
+            <span>{(gameState?.currentWave.prepCountdownSec ?? 0) > 0 ? `备战 ${gameState?.currentWave.prepCountdownSec}s` : '交战中'}</span>
+            <strong>第 {gameState?.currentWave.index ?? 0} / {gameState?.maxWaves ?? '—'} 波</strong>
+            <i><b style={{ width: `${Math.max(0, Math.min(100, ((gameState?.currentWave.index ?? 0) / Math.max(1, gameState?.maxWaves ?? 1)) * 100))}%` }} /></i>
+            <div className="col-span-2 flex min-w-0 items-center gap-2 pt-1" aria-label="战斗音量">
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-200/20 bg-slate-950/60 text-amber-100 transition hover:border-amber-200/45 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300"
+                aria-label={combatAudioPreferences.muted ? '开启战斗音效' : '静音战斗音效'}
+                aria-pressed={combatAudioPreferences.muted}
+                title={combatAudioPreferences.muted ? '开启战斗音效' : '静音战斗音效'}
+                onClick={() => setCombatAudioPreferences((previous) => ({ ...previous, muted: !previous.muted }))}
+              >
+                {combatAudioPreferences.muted || combatAudioPreferences.masterVolume <= 0
+                  ? <VolumeX className="h-4 w-4" />
+                  : <Volume2 className="h-4 w-4" />}
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={Math.round(combatAudioPreferences.masterVolume * 100)}
+                aria-label="战斗音效主音量"
+                aria-valuetext={`${Math.round(combatAudioPreferences.masterVolume * 100)}%`}
+                className="min-w-16 flex-1 accent-amber-400"
+                onChange={(event) => {
+                  const masterVolume = Number(event.currentTarget.value) / 100
+                  setCombatAudioPreferences({ muted: masterVolume <= 0, masterVolume })
+                }}
+              />
+              <span className="w-8 shrink-0 text-right text-[10px] tabular-nums text-slate-300">{Math.round(combatAudioPreferences.masterVolume * 100)}%</span>
+            </div>
+          </div>
+          {(gameState?.enemies.some((enemy) => enemy.entityKind === 'boss') ?? false) ? (
+            <div className="gaming-command-boss" aria-live="polite" data-onboarding-anchor="boss">
+              {gameState!.enemies.filter((enemy) => enemy.entityKind === 'boss').slice(0, 1).map((boss) => (
+                <div key={boss.entityId}>
+                  <span><b>BOSS</b>{boss.bossName ?? boss.glyph} · 阶段 {Math.max(1, boss.bossPhase)}</span>
+                  <strong>{Math.max(0, Math.ceil(boss.hp)).toLocaleString()} / {Math.max(1, Math.ceil(boss.maxHp)).toLocaleString()}</strong>
+                  <i><b style={{ width: `${boss.maxHp > 0 ? Math.max(0, Math.min(100, boss.hp / boss.maxHp * 100)) : 0}%` }} /></i>
+                  {boss.activeCast ? <small><Timer className="h-3.5 w-3.5" />{boss.activeCast.skillName} · {Math.max(0, Math.ceil((boss.activeCast.executeAtTick - gameState!.tick) * gameState!.tickRateMs / 1000))}s</small> : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="gaming-command-boss gaming-command-boss-dormant" data-onboarding-anchor="boss">
+              <div>
+                <span><b>BOSS</b>首领尚未现身</span>
+                <strong>预计第 {Math.min(gameState?.maxWaves ?? 20, Math.max(5, (Math.floor((gameState?.currentWave.index ?? 0) / 5) + 1) * 5))} 波</strong>
+                <i><b style={{ width: '0%' }} /></i>
+                <small>留意朱砂预警，提前调整阵型</small>
+              </div>
+            </div>
+          )}
+          <CrisisWarning
+            overloadTicks={gameState?.overloadTicks ?? 0}
+            overloadCountdownSec={gameState?.overloadCountdownSec ?? 0}
+            enemyCount={gameState?.enemies.filter((enemy) => enemy.entityKind === 'ordinary_minion').length ?? 0}
+            maxCapacity={gameState?.maxCapacity ?? 10}
+          />
+        </header>
+        <div className={cx('gaming-stage', isBuildDockExpanded && 'gaming-stage-dock-open')}>
+          <aside className={cx('gaming-side-rail gaming-side-rail-build', isBuildDockExpanded && 'gaming-side-rail-build-expanded')}>
+            <button
+              type="button"
+              className="gaming-dock-toggle"
+              data-onboarding-anchor="recruit tray"
+              aria-expanded={isBuildDockExpanded}
+              aria-controls="gaming-build-dock-content"
+              onClick={() => setIsBuildDockExpanded(value => !value)}
+            >
+              <span>{isBuildDockExpanded ? '收起' : '布阵'}</span>
+              <strong>{gameState?.tray.filter(Boolean).length ?? 0}/5</strong>
+            </button>
+            <div id="gaming-build-dock-content" className="gaming-side-rail-scroll" aria-hidden={!isBuildDockExpanded}>
               {error ? <section className="gaming-panel-card"><p className="gaming-error-text">{error}</p></section> : null}
+              <section className="gaming-panel-card gaming-connection-panel" aria-label="队友连接状态">
+                <div className="mb-2 flex items-center justify-between"><p className="gaming-section-label">联机路况</p><small className="text-slate-500">{roomSlots.filter((slot) => slot.connected).length}/{roomSlots.filter((slot) => slot.playerId).length || 1} 在线</small></div>
+                <div className="space-y-2">
+                  {roomSlots.filter((slot) => slot.playerId).map((slot) => <TeammateConnectionRow key={slot.slotId} slot={slot} selfPlayerId={playerId} />)}
+                  {roomSlots.every((slot) => !slot.playerId) ? <p className="text-xs text-slate-500">等待房间成员同步…</p> : null}
+                </div>
+              </section>
               <section className="gaming-panel-card gaming-recruit-panel">
                 <p className="gaming-section-label">召唤托盘</p>
                 <p className="gaming-recruit-help">可与备战席、棋盘互换；同类同级直接升级</p>
-                <div className="gaming-summon-tray">
+                <div className="gaming-summon-tray" data-onboarding-anchor="tray">
                   {Array.from({ length: 5 }, (_, index) => {
                     const piece = gameState?.tray[index] ?? null
                     return (
@@ -1543,7 +2079,7 @@ export function GamingPage() {
                     )
                   })}
                 </div>
-                <button type="button" className="gaming-recruit-button" disabled={recruitDisabled} onClick={handleRecruit}>
+                <button type="button" className="gaming-recruit-button" data-onboarding-anchor="recruit-button" disabled={recruitDisabled} onClick={handleRecruit}>
                   <RefreshCw className="h-4 w-4" />
                   <span>召唤</span>
                   <strong>{gameState?.nextRecruitCost ?? 5} 斋饭</strong>
@@ -1734,55 +2270,23 @@ export function GamingPage() {
             gameState={gameState}
             sceneTheme={LEVEL_DEFS.find(({ levelId }) => levelId === selectedLevelPreview?.levelId)?.sceneTheme}
             selectedPieceId={selectedPieceId}
+            selectedObjectLabel={selectedBattlefieldObject}
+            executableActions={battlefieldExecutableActions}
             placementMode={selectedTrayIndex !== null || selectedReserveIndex !== null || selectedPieceId !== null || targetingItemSlot !== null}
             allowAnyTargetCell={targetingItemSlot !== null}
             hoveredCell={hoveredCell}
+            audioMuted={combatAudioPreferences.muted}
+            audioMasterVolume={combatAudioPreferences.masterVolume}
+            presentationSyncRevision={connectionRecovery.syncRevision}
             onCellClick={handleCellClick}
             onCellHover={(x, y) => setHoveredCell({ x, y })}
             onCellLeave={() => setHoveredCell(null)}
+            onCancelInteraction={cancelBattlefieldInteraction}
           />
 
-          <aside className="gaming-side-rail gaming-side-rail-right">
-            <section className="gaming-panel-card">
-              <p className="gaming-section-label">战场状态</p>
-              <div className="gaming-status-stack">
-                <div className="gaming-status-row"><Coins className="h-4 w-4 text-amber-300" /><span>斋饭</span><strong>{gameState?.rice ?? 0}</strong></div>
-                <div className="gaming-status-row"><Users className="h-4 w-4 text-cyan-300" /><span>人口</span><strong>{gameState?.populationUsed ?? 0}/{gameState?.populationCap ?? 10}</strong></div>
-                <div className="gaming-status-row"><Skull className="h-4 w-4 text-red-300" /><span>活跃敌人</span><strong>{gameState?.enemies.length ?? 0}</strong></div>
-                <div className="gaming-status-row"><ShieldAlert className="h-4 w-4 text-orange-300" /><span>当前波次</span><strong>{gameState?.currentWave.index ?? 0}{gameState?.maxWaves ? `/${gameState.maxWaves}` : ''}</strong></div>
-                {(gameState?.currentWave.prepCountdownSec ?? 0) > 0 ? (
-                  <div className="gaming-status-row"><Timer className="h-4 w-4 text-violet-300" /><span>出怪倒计时</span><strong>{gameState?.currentWave.prepCountdownSec}s</strong></div>
-                ) : null}
-              </div>
-            </section>
-            {(gameState?.enemies.some((enemy) => enemy.entityKind === 'boss') ?? false) ? (
-              <section className="gaming-panel-card gaming-boss-panel" aria-live="polite">
-                <p className="gaming-section-label">当前 Boss</p>
-                <div className="gaming-boss-list">
-                  {gameState?.enemies.filter((enemy) => enemy.entityKind === 'boss').map((boss) => {
-                    const hpRatio = boss.maxHp > 0 ? Math.max(0, Math.min(1, boss.hp / boss.maxHp)) : 0
-                    const castSeconds = boss.activeCast
-                      ? Math.max(0, Math.ceil((boss.activeCast.executeAtTick - gameState.tick) * gameState.tickRateMs / 1000))
-                      : null
-                    return (
-                      <article className="gaming-boss-entry" key={boss.entityId}>
-                        <header><span className="gaming-boss-seal">BOSS</span><strong>{boss.bossName ?? boss.glyph}</strong><small>阶段 {Math.max(1, boss.bossPhase)}</small></header>
-                        <div className="gaming-boss-hp-copy"><span>{Math.max(0, Math.ceil(boss.hp)).toLocaleString()} / {Math.max(1, Math.ceil(boss.maxHp)).toLocaleString()}</span><small>控制抗性 {(boss.controlResistanceBps / 100).toFixed(0)}%</small></div>
-                        <div className="gaming-boss-hpbar" role="progressbar" aria-label={`${boss.bossName ?? 'Boss'}生命值`} aria-valuemin={0} aria-valuemax={boss.maxHp} aria-valuenow={Math.max(0, boss.hp)}><span style={{ width: `${hpRatio * 100}%` }} /></div>
-                        {boss.activeCast ? (
-                          <div className="gaming-boss-cast-warning">
-                            <ShieldAlert className="h-4 w-4" />
-                            <span><strong>{boss.activeCast.skillName}</strong><small>{castSeconds === 0 ? '立即释放' : `${castSeconds}s 后释放`}</small></span>
-                          </div>
-                        ) : null}
-                      </article>
-                    )
-                  })}
-                </div>
-              </section>
-            ) : null}
-            <section className="gaming-panel-card">
-              <p className="gaming-section-label">已激活羁绊</p>
+          <aside className="gaming-side-rail gaming-side-rail-right" aria-label="情境情报抽屉">
+            <details className="gaming-panel-card gaming-info-fold" data-onboarding-anchor="synergy">
+              <summary><span>已激活羁绊</span><small>{gameState?.activeSynergies.length ?? 0}</small></summary>
               <div className="gaming-synergy-list">
                 {(gameState?.activeSynergies.length ?? 0) > 0 ? gameState?.activeSynergies.map((synergy) => (
                   <div className="gaming-synergy-entry" key={synergy.synergyId}>
@@ -1791,9 +2295,9 @@ export function GamingPage() {
                   </div>
                 )) : <p className="gaming-synergy-empty">当前阵容暂无已激活羁绊</p>}
               </div>
-            </section>
-            <section className="gaming-panel-card">
-              <p className="gaming-section-label">战斗效果</p>
+            </details>
+            <details className="gaming-panel-card gaming-info-fold">
+              <summary><span>战斗效果</span><small>{(gameState?.summonedUnits.length ?? 0) + (gameState?.zones.length ?? 0) + (gameState?.statuses.length ?? 0)}</small></summary>
               <div className="gaming-effect-summary" aria-label="召唤物、效果区域和敌人状态">
                 <span><strong>{gameState?.summonedUnits.length ?? 0}</strong><small>召唤物</small></span>
                 <span><strong>{gameState?.zones.length ?? 0}</strong><small>效果区域</small></span>
@@ -1817,9 +2321,9 @@ export function GamingPage() {
                   ))}
                 </div>
               ) : null}
-            </section>
-            <section className="gaming-panel-card">
-              <p className="gaming-section-label">操作提示</p>
+            </details>
+            <details className="gaming-panel-card gaming-info-fold">
+              <summary><span>操作提示</span><small>点击展开</small></summary>
               <div className="gaming-operation-guide">
                 <p>托盘天兵 → 同类同级天兵：直接升级</p>
                 <p>托盘、备战席、棋盘任意两处可交换或合成</p>
@@ -1827,28 +2331,18 @@ export function GamingPage() {
                 <p>流放：清空备战席中的全部单位</p>
                 <p>2/3/4 字神将按配方横向连续排列自动组成；固定后可整体迁移</p>
               </div>
-            </section>
-            {selectedLevelPreview ? <section className="gaming-panel-card"><p className="gaming-section-label">已选关卡</p><h2 className="mt-2 text-lg font-semibold text-white">{selectedLevelPreview.label} · {{ easy: '简单', normal: '普通', hard: '困难' }[selectedLevelPreview.difficulty]}</h2><p className="mt-2 text-sm leading-6 text-slate-300">{selectedLevelPreview.description}</p></section> : null}
+            </details>
+            {selectedLevelPreview ? <details className="gaming-panel-card gaming-info-fold"><summary><span>关卡情报</span><small>PVE-{selectedLevelPreview.levelId}</small></summary><h2 className="mt-2 text-lg font-semibold text-white">{selectedLevelPreview.label} · {{ easy: '简单', normal: '普通', hard: '困难' }[selectedLevelPreview.difficulty]}</h2><p className="mt-2 text-sm leading-6 text-slate-300">{selectedLevelPreview.description}</p></details> : null}
           </aside>
         </div>
       </section>
 
       {isLeaveConfirmOpen ? (
-        <div className="cyber-modal-backdrop" onClick={() => setIsLeaveConfirmOpen(false)}>
-          <div className="gaming-confirm-panel" onClick={(event) => event.stopPropagation()}>
-            <p className="gaming-confirm-eyebrow">Exit Match</p>
-            <h2 className="mt-3 text-2xl font-semibold tracking-[0.08em] text-white">确认退出游戏？</h2>
-            <p className="mt-3 text-sm leading-7 text-slate-300">确认后将离开当前对局，并返回等待房间页面。</p>
-            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
-              <button type="button" onClick={() => setIsLeaveConfirmOpen(false)} className="gaming-confirm-button gaming-confirm-button-muted">取消</button>
-              <button type="button" onClick={leaveGame} className="gaming-confirm-button gaming-confirm-button-danger">确认退出</button>
-            </div>
-          </div>
-        </div>
+        <LeaveConfirmDialog onCancel={() => setIsLeaveConfirmOpen(false)} onConfirm={leaveGame} />
       ) : null}
 
       {shouldShowMissionBriefing ? <MissionBriefingModal isHost={isHost} playerKind={playerKind} stageAccess={playerAccount.data?.pveProgression.stages ?? []} progressionLoading={playerAccount.isLoading} onSelectLevel={handleSelectLevel} engineError={error ?? playerAccount.error} /> : null}
-      {gameState?.result?.outcome ? <GameOverOverlay outcome={gameState.result.outcome} currentLevelId={selectedLevelInfo?.levelId ?? null} onLeave={leaveGame} /> : null}
+      {gameState?.result?.outcome ? <GameOverOverlay outcome={gameState.result.outcome} currentLevelId={selectedLevelInfo?.levelId ?? null} matchId={gameState.matchId} onReplay={leaveGame} onAdjustBuild={() => navigate('/build')} onLeave={returnHome} /> : null}
     </main>
   )
 }

@@ -10,10 +10,16 @@ import type { ServerConfig } from '../config/server-config'
 import type { FrontendGameState } from '../domain/frontend-game-state'
 import type { GameState } from '../domain/game-state'
 import type { GameNoticeUpdate, GameStatePatch, GameUiStateUpdate } from '../../../shared/contracts/game'
+import type { CombatEventBatch } from '../../../shared/contracts/game'
+import { applyPveDeltaToGameState } from '../../../shared/contracts/pve-state-delta'
+import { CombatEventJournal } from './combat-event-journal'
 
 export interface ProjectedTickBroadcast {
   patch: GameStatePatch
+  legacyPatch: GameStatePatch
   checkpoint: GameStatePatch
+  combatEventBatch: CombatEventBatch | null
+  baseRevision: number
   uiUpdate: GameUiStateUpdate
   noticeUpdate: GameNoticeUpdate | null
 }
@@ -42,6 +48,8 @@ export class ProjectedTickStream {
   private lastBroadcastState: FrontendGameState | null = null
 
   private lastStatus: GameState['status'] | null = null
+
+  private readonly combatEventJournal = new CombatEventJournal()
 
   private readonly unsubscribeEngineTick: () => void
 
@@ -90,9 +98,18 @@ export class ProjectedTickStream {
 
     if (options?.initializeBroadcastBaseline && !this.lastBroadcastState) {
       this.lastBroadcastState = this.latestFullState
+      this.baselineCombatEvents(this.latestFullState)
     }
 
     return this.latestFullState
+  }
+
+  getPresentationCursor() {
+    return this.combatEventJournal.cursor()
+  }
+
+  getCombatEventBatchAfter(fromSeq: number) {
+    return this.combatEventJournal.replayFrom(fromSeq)
   }
 
   dispose() {
@@ -125,10 +142,14 @@ export class ProjectedTickStream {
       const uiUpdate = this.telemetry.measure('projection.ui', () => projectFrontendUiStateUpdate(state, this.config, previousState))
       const noticeUpdate = this.telemetry.measure('projection.notice', () => projectFrontendNoticeUpdate(state, previousState))
       const patch = this.telemetry.measure('projection.patch', () => projectFrontendGameStatePatch(state, this.config, previousState))
+      this.observeCombatEvents(fullState)
 
       broadcast = {
         patch,
+        legacyPatch: createLegacyPatch(patch, fullState),
         checkpoint: createCheckpointPatch(fullState),
+        combatEventBatch: this.combatEventJournal.drain(),
+        baseRevision: previousState.tick,
         uiUpdate,
         noticeUpdate,
       }
@@ -170,6 +191,20 @@ export class ProjectedTickStream {
     this.telemetry.setGauge('projection.broadcastListeners', this.broadcastListeners.size)
     this.telemetry.setGauge('projection.listeners', this.tickListeners.size + this.broadcastListeners.size)
   }
+
+  private baselineCombatEvents(state: FrontendGameState) {
+    if (state.matchId && state.pve) this.combatEventJournal.baseline(state.matchId, state.pve.recentEvents)
+  }
+
+  private observeCombatEvents(state: FrontendGameState) {
+    if (state.matchId && state.pve) this.combatEventJournal.observe(state.matchId, state.pve.recentEvents)
+  }
+}
+
+function createLegacyPatch(patch: GameStatePatch, state: FrontendGameState): GameStatePatch {
+  if (!patch.pvePatch) return patch
+  const { pvePatch: _pvePatch, ...legacyPatch } = patch
+  return { ...legacyPatch, pve: state.pve }
 }
 
 function createCheckpointPatch(state: FrontendGameState): GameStatePatch {
@@ -195,6 +230,7 @@ function mergeFrontendGameStatePatch(previousState: FrontendGameState, patch: Ga
     towers: patch.towers ?? applyEntityDelta(previousState.towers, patch.towerDelta),
     enemies: patch.enemies ?? applyEntityDelta(previousState.enemies, patch.enemyDelta),
     map: patch.map ?? previousState.map,
+    pve: applyPveDeltaToGameState(previousState, patch),
   }
 }
 

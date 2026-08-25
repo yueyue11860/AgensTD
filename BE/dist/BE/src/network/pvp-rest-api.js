@@ -4,16 +4,16 @@ exports.createPvpRestApiRouter = createPvpRestApiRouter;
 const express_1 = require("express");
 const types_1 = require("../pvp-platform-v1/types");
 const gateway_auth_1 = require("./gateway-auth");
-function principalFrom(request, config) {
+async function principalFrom(request, config) {
     const token = (0, gateway_auth_1.extractHttpToken)(request);
-    if (process.env.NODE_ENV === 'production' && !token?.startsWith('sess_')) {
-        throw new types_1.PvpPlatformError('OAUTH_SESSION_REQUIRED', '正式 PVP 只接受真人 OAuth 会话', 401);
-    }
     // PVP 竞技边界不继承 PVE 本地“免鉴权回退到首个账号”的便利行为，
     // 否则 agent/anonymous 请求会被错认成默认真人。PVP 始终要求显式有效 token。
-    const principal = (0, gateway_auth_1.authenticateGatewayToken)({ ...config, authRequired: true }, token);
+    const principal = await (0, gateway_auth_1.authenticateGatewayTokenAsync)({ ...config, authRequired: true }, token);
     if (!principal)
         throw new types_1.PvpPlatformError('UNAUTHORIZED', 'Missing or invalid gateway token', 401);
+    if (process.env.NODE_ENV === 'production' && principal.authSource !== 'supabase') {
+        throw new types_1.PvpPlatformError('SUPABASE_SESSION_REQUIRED', '正式 PVP 只接受 Supabase 真人会话', 401);
+    }
     if (!(0, types_1.isHumanGatewayPrincipal)(principal))
         throw new types_1.PvpPlatformError('HUMAN_ACCOUNT_REQUIRED', 'PVP 只允许真人账号进入', 403);
     return principal;
@@ -31,6 +31,11 @@ function requiredString(value, field) {
 function optionalString(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
+function requiredInteger(value, field) {
+    if (!Number.isSafeInteger(value) || Number(value) < 0)
+        throw new types_1.PvpPlatformError('BAD_PAYLOAD', `${field} must be a non-negative integer`, 400);
+    return Number(value);
+}
 function numberQuery(value) {
     const number = Number(value);
     return Number.isFinite(number) && number > 0 ? Math.trunc(number) : undefined;
@@ -47,7 +52,7 @@ function sendError(response, error) {
 function route(handler, config) {
     return async (request, response) => {
         try {
-            const principal = principalFrom(request, config);
+            const principal = await principalFrom(request, config);
             await handler(request, response, principal);
         }
         catch (error) {
@@ -80,6 +85,34 @@ function createPvpRestApiRouter(config, platform) {
     router.get('/matches/:matchId/state', route((request, response, principal) => {
         const state = platform.matchState(principal, requiredString(request.params.matchId, 'matchId'));
         response.json({ ok: true, state });
+    }, config));
+    router.get('/matches/:matchId/events', route((request, response, principal) => {
+        const matchId = requiredString(request.params.matchId, 'matchId');
+        response.status(200);
+        response.setHeader('Content-Type', 'text/event-stream');
+        response.setHeader('Cache-Control', 'no-cache, no-transform');
+        response.setHeader('Connection', 'keep-alive');
+        response.flushHeaders();
+        const unsubscribe = platform.subscribeMatchState(principal, matchId, envelope => {
+            response.write(`id: ${envelope.seq}\nevent: pvp-state\ndata: ${JSON.stringify(envelope)}\n\n`);
+        });
+        const heartbeat = setInterval(() => response.write(': heartbeat\n\n'), 15_000);
+        request.on('close', () => { clearInterval(heartbeat); unsubscribe(); });
+    }, config));
+    router.post('/matches/:matchId/load-ack', route((request, response, principal) => {
+        const body = recordBody(request);
+        const input = {
+            requestId: requiredString(body.requestId, 'requestId'),
+            rulesetVersion: requiredString(body.rulesetVersion, 'rulesetVersion'),
+            mapId: requiredString(body.mapId, 'mapId'),
+            mapVersion: Number.isSafeInteger(body.mapVersion) ? body.mapVersion : -1,
+            routeHash: requiredString(body.routeHash, 'routeHash'),
+            assetsVersion: requiredString(body.assetsVersion, 'assetsVersion'),
+            status: body.status === 'loaded' ? 'loaded' : body.status === 'failed' ? 'failed' : (() => { throw new types_1.PvpPlatformError('BAD_PAYLOAD', 'status must be loaded or failed', 400); })(),
+            ...(typeof body.failureCode === 'string' ? { failureCode: body.failureCode } : {}),
+        };
+        const result = platform.acknowledgeLoad(principal, requiredString(request.params.matchId, 'matchId'), input);
+        response.status(result.ok ? 200 : 409).json(result);
     }, config));
     router.post('/queue', route(async (request, response, principal) => {
         const body = recordBody(request);
@@ -119,6 +152,33 @@ function createPvpRestApiRouter(config, platform) {
         const body = recordBody(request);
         const result = platform.sendPressure(principal, requiredString(request.params.matchId, 'matchId'), requiredString(body.requestId, 'requestId'));
         response.status(result.ok ? 200 : 409).json({ ...result });
+    }, config));
+    router.post('/matches/:matchId/recruit', route((request, response, principal) => {
+        const body = recordBody(request);
+        const result = platform.recruit(principal, requiredString(request.params.matchId, 'matchId'), {
+            requestId: requiredString(body.requestId, 'requestId'),
+            expectedTrayRevision: requiredInteger(body.expectedTrayRevision, 'expectedTrayRevision'),
+        });
+        response.status(result.ok ? 200 : 409).json(result);
+    }, config));
+    router.post('/matches/:matchId/deploy', route((request, response, principal) => {
+        const body = recordBody(request);
+        const result = platform.deploy(principal, requiredString(request.params.matchId, 'matchId'), {
+            requestId: requiredString(body.requestId, 'requestId'), unitId: requiredString(body.unitId, 'unitId'),
+            x: requiredInteger(body.x, 'x'), y: requiredInteger(body.y, 'y'),
+            expectedTrayRevision: requiredInteger(body.expectedTrayRevision, 'expectedTrayRevision'),
+            expectedBoardRevision: requiredInteger(body.expectedBoardRevision, 'expectedBoardRevision'),
+        });
+        response.status(result.ok ? 200 : 409).json(result);
+    }, config));
+    router.post('/matches/:matchId/move-or-merge', route((request, response, principal) => {
+        const body = recordBody(request);
+        const result = platform.moveOrMerge(principal, requiredString(request.params.matchId, 'matchId'), {
+            requestId: requiredString(body.requestId, 'requestId'), entityId: requiredString(body.entityId, 'entityId'),
+            x: requiredInteger(body.x, 'x'), y: requiredInteger(body.y, 'y'),
+            expectedBoardRevision: requiredInteger(body.expectedBoardRevision, 'expectedBoardRevision'),
+        });
+        response.status(result.ok ? 200 : 409).json(result);
     }, config));
     router.post('/matches/:matchId/surrender', route(async (request, response, principal) => {
         const body = recordBody(request);

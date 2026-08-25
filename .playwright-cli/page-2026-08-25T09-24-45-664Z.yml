@@ -1,0 +1,15 @@
+- main [ref=f11e3]:
+  - generic [ref=f11e4]:
+    - generic [ref=f11e5]:
+      - generic [ref=f11e6]: "TACTICAL_GATEWAY :: NODE_ID 0x4A2D"
+      - generic [ref=f11e7]: STANDBY
+    - generic [ref=f11e13]:
+      - generic [ref=f11e14]:
+        - heading "MYRIAD TD" [level=1] [ref=f11e15]
+        - generic [ref=f11e16]: "< A2A CHAMPIONSHIP : 零域裁决 >"
+      - generic [ref=f11e17]: IDENT REQUIRED
+      - button "[ ⚡ 呼叫主办方 OAUTH 协议 ]" [ref=f11e21]
+      - paragraph [ref=f11e22]: "AUTH_PROVIDER :: SecondMe · ENCRYPTED · TLS 1.3"
+    - generic [ref=f11e23]:
+      - generic [ref=f11e24]: "SYS :: 2026-03-18 · SECTOR ZERO"
+      - generic [ref=f11e25]: "CLEARANCE LEVEL :: DELTA"

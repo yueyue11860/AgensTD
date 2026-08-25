@@ -1,0 +1,482 @@
+{
+  "artifact": {
+    "sha256": "1bad7f670bd4f41c6156a3b117dfe4380ff153ee81280efec5369135f7fc10f7",
+    "fileCount": 42
+  },
+  "browser": "Chromium",
+  "unavailable": [
+    "WebKit browser binary",
+    "physical touch device"
+  ],
+  "viewports": [
+    {
+      "width": 390,
+      "height": 844,
+      "homeOverflow": false,
+      "consoleErrors": 0,
+      "gameOverflow": false
+    },
+    {
+      "width": 430,
+      "height": 932,
+      "homeOverflow": false,
+      "consoleErrors": 0,
+      "gameOverflow": false
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "homeOverflow": false,
+      "consoleErrors": 0,
+      "gameOverflow": false
+    },
+    {
+      "width": 1366,
+      "height": 768,
+      "homeOverflow": false,
+      "consoleErrors": 0,
+      "gameOverflow": false
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "homeOverflow": false,
+      "consoleErrors": 0,
+      "gameOverflow": false
+    }
+  ],
+  "mainChain": {
+    "deployed": true,
+    "offlineRecoveryMs": 5126,
+    "reducedMotion": true,
+    "stressWallMs": 68707,
+    "logicalTickDelta": 3220,
+    "logicalDurationMs": 322000,
+    "accelerationRatio": 4.686567598643515,
+    "accelerationControl": {
+      "ok": true,
+      "intervalMs": 20,
+      "logicalTickRateMs": 100
+    },
+    "initialUiBuildActions": 1,
+    "initialRestBuildActions": 5,
+    "initialAuthority": {
+      "tick": 220,
+      "wave": 1,
+      "enemies": 1,
+      "overloadTicks": 0,
+      "overloadCountdownSec": 0,
+      "enemyCapacity": 10,
+      "rice": 10,
+      "nextRecruitCost": 5,
+      "boardPieces": 5,
+      "trayPieces": 3,
+      "outcome": null
+    },
+    "finalAuthority": {
+      "tick": 3440,
+      "wave": 15,
+      "enemies": 14,
+      "overloadTicks": 100,
+      "overloadCountdownSec": 0,
+      "enemyCapacity": 10,
+      "rice": 5,
+      "nextRecruitCost": 13,
+      "boardPieces": 10,
+      "trayPieces": 5,
+      "outcome": "defeat"
+    },
+    "authorityTimeline": [
+      {
+        "wallMs": 996,
+        "tick": 268,
+        "wave": 1,
+        "enemies": 0,
+        "overloadTicks": 0,
+        "overloadCountdownSec": 0,
+        "enemyCapacity": 10,
+        "rice": 12,
+        "nextRecruitCost": 5,
+        "boardPieces": 6,
+        "trayPieces": 2,
+        "outcome": null
+      },
+      {
+        "wallMs": 3173,
+        "tick": 370,
+        "wave": 2,
+        "enemies": 1,
+        "overloadTicks": 0,
+        "overloadCountdownSec": 0,
+        "enemyCapacity": 10,
+        "rice": 18,
+        "nextRecruitCost": 5,
+        "boardPieces": 8,
+        "trayPieces": 0,
+        "outcome": null
+      },
+      {
+        "wallMs": 9789,
+        "tick": 676,
+        "wave": 3,
+        "enemies": 1,
+        "overloadTicks": 0,
+        "overloadCountdownSec": 0,
+        "enemyCapacity": 10,
+        "rice": 28,
+        "nextRecruitCost": 6,
+        "boardPieces": 10,
+        "trayPieces": 0,
+        "outcome": null
+      },
+      {
+        "wallMs": 14335,
+        "tick": 886,
+        "wave": 4,
+        "enemies": 0,
+        "overloadTicks": 0,
+        "overloadCountdownSec": 0,
+        "enemyCapacity": 10,
+        "rice": 34,
+        "nextRecruitCost": 6,
+        "boardPieces": 10,
+        "trayPieces": 2,
+        "outcome": null
+      },
+      {
+        "wallMs": 20019,
+        "tick": 1146,
+        "wave": 5,
+        "enemies": 1,
+        "overloadTicks": 0,
+        "overloadCountdownSec": 0,
+        "enemyCapacity": 10,
+        "rice": 35,
+        "nextRecruitCost": 7,
+        "boardPieces": 10,
+        "trayPieces": 4,
+        "outcome": null
+      },
+      {
+        "wallMs": 25751,
+        "tick": 1412,
+        "wave": 6,
+        "enemies": 1,
+        "overloadTicks": 0,
+        "overloadCountdownSec": 0,
+        "enemyCapacity": 10,
+        "rice": 24,
+        "nextRecruitCost": 8,
+        "boardPieces": 10,
+        "trayPieces": 5,
+        "outcome": null
+      },
+      {
+        "wallMs": 30367,
+        "tick": 1626,
+        "wave": 7,
+        "enemies": 1,
+        "overloadTicks": 0,
+        "overloadCountdownSec": 0,
+        "enemyCapacity": 10,
+        "rice": 3,
+        "nextRecruitCost": 9,
+        "boardPieces": 10,
+        "trayPieces": 5,
+        "outcome": null
+      },
+      {
+        "wallMs": 34447,
+        "tick": 1814,
+        "wave": 8,
+        "enemies": 1,
+        "overloadTicks": 0,
+        "overloadCountdownSec": 0,
+        "enemyCapacity": 10,
+        "rice": 7,
+        "nextRecruitCost": 10,
+        "boardPieces": 10,
+        "trayPieces": 5,
+        "outcome": null
+      },
+      {
+        "wallMs": 39562,
+        "tick": 2052,
+        "wave": 9,
+        "enemies": 1,
+        "overloadTicks": 0,
+        "overloadCountdownSec": 0,
+        "enemyCapacity": 10,
+        "rice": 11,
+        "nextRecruitCost": 10,
+        "boardPieces": 10,
+        "trayPieces": 5,
+        "outcome": null
+      },
+      {
+        "wallMs": 43697,
+        "tick": 2250,
+        "wave": 10,
+        "enemies": 1,
+        "overloadTicks": 0,
+        "overloadCountdownSec": 0,
+        "enemyCapacity": 10,
+        "rice": 15,
+        "nextRecruitCost": 10,
+        "boardPieces": 10,
+        "trayPieces": 5,
+        "outcome": null
+      },
+      {
+        "wallMs": 49026,
+        "tick": 2506,
+        "wave": 11,
+        "enemies": 3,
+        "overloadTicks": 0,
+        "overloadCountdownSec": 0,
+        "enemyCapacity": 10,
+        "rice": 4,
+        "nextRecruitCost": 11,
+        "boardPieces": 10,
+        "trayPieces": 5,
+        "outcome": null
+      },
+      {
+        "wallMs": 53254,
+        "tick": 2708,
+        "wave": 12,
+        "enemies": 6,
+        "overloadTicks": 0,
+        "overloadCountdownSec": 0,
+        "enemyCapacity": 10,
+        "rice": 20,
+        "nextRecruitCost": 11,
+        "boardPieces": 10,
+        "trayPieces": 5,
+        "outcome": null
+      },
+      {
+        "wallMs": 57810,
+        "tick": 2926,
+        "wave": 13,
+        "enemies": 7,
+        "overloadTicks": 0,
+        "overloadCountdownSec": 0,
+        "enemyCapacity": 10,
+        "rice": 1,
+        "nextRecruitCost": 12,
+        "boardPieces": 10,
+        "trayPieces": 5,
+        "outcome": null
+      },
+      {
+        "wallMs": 62081,
+        "tick": 3130,
+        "wave": 14,
+        "enemies": 9,
+        "overloadTicks": 0,
+        "overloadCountdownSec": 0,
+        "enemyCapacity": 10,
+        "rice": 2,
+        "nextRecruitCost": 12,
+        "boardPieces": 10,
+        "trayPieces": 5,
+        "outcome": null
+      },
+      {
+        "wallMs": 66411,
+        "tick": 3338,
+        "wave": 15,
+        "enemies": 11,
+        "overloadTicks": 34,
+        "overloadCountdownSec": 7,
+        "enemyCapacity": 10,
+        "rice": 4,
+        "nextRecruitCost": 13,
+        "boardPieces": 10,
+        "trayPieces": 5,
+        "outcome": null
+      }
+    ],
+    "acceptedBuildActions": 43,
+    "peak": {
+      "seenEnemies": 149,
+      "activeEnemies": 14,
+      "activeVfx": 10,
+      "pooledVfx": 17,
+      "display": 15,
+      "dom": 402,
+      "heap": 115388196
+    },
+    "realtime": {
+      "websocketFrames": 2767,
+      "websocketBytes": 6815982,
+      "combatBatchFrames": 766
+    },
+    "settlementVisible": true
+  },
+  "performance": [
+    {
+      "label": "post-deploy",
+      "fps": 25.2,
+      "frameP95Ms": 42.80000000000109,
+      "longTaskCount": 0,
+      "longTaskDurationMs": 0,
+      "domNodes": 248,
+      "overflow": false,
+      "vfx": {
+        "active": 0,
+        "pooled": 11,
+        "display": 15,
+        "enemies": 0,
+        "seenEnemies": 3
+      },
+      "jsHeapUsedBytes": 77962468,
+      "networkEvents": 56
+    },
+    {
+      "label": "stress-end",
+      "fps": 20.7,
+      "frameP95Ms": 50.80000000000291,
+      "longTaskCount": 0,
+      "longTaskDurationMs": 0,
+      "domNodes": 384,
+      "overflow": false,
+      "vfx": {
+        "active": 0,
+        "pooled": 17,
+        "display": 15,
+        "enemies": 14,
+        "seenEnemies": 149
+      },
+      "jsHeapUsedBytes": 30944624,
+      "networkEvents": 159
+    }
+  ],
+  "thresholds": {
+    "minHeadlessSoftwareFps": 20,
+    "maxHeadlessFrameP95Ms": 55,
+    "maxLongTasks": 25,
+    "maxDomNodes": 2500,
+    "maxActiveVfx": 32,
+    "maxPooledVfx": 66,
+    "maxHeapGrowthBytes": 67108864,
+    "minActiveEnemies": 80,
+    "minCombatEvents": 300,
+    "minLogicalDurationMs": 300000
+  },
+  "consoleErrors": [],
+  "expectedOfflineConsoleErrors": [],
+  "verdicts": {
+    "fps": true,
+    "frameP95": true,
+    "longTasks": true,
+    "dom": true,
+    "vfx": true,
+    "heap": true,
+    "deployed": true,
+    "settlement": true
+  },
+  "rendererProtocolStress": {
+    "fixtureKind": "renderer/protocol fixture; not a real match, damage, reward, account write, or settlement",
+    "productionForbidden": true,
+    "ticket": {
+      "ok": true,
+      "roomId": "E2E-RENDERER-STRESS",
+      "writesAccount": false,
+      "createsSettlement": false
+    },
+    "wallMs": 65518,
+    "logicalTickDelta": 3170,
+    "logicalDurationMs": 317000,
+    "startAuthority": {
+      "tick": 50,
+      "wave": 20,
+      "enemies": 80,
+      "overloadTicks": 0,
+      "overloadCountdownSec": 0,
+      "enemyCapacity": 100,
+      "rice": 0,
+      "nextRecruitCost": 999,
+      "boardPieces": 10,
+      "trayPieces": 0,
+      "outcome": null
+    },
+    "endAuthority": {
+      "tick": 3220,
+      "wave": 20,
+      "enemies": 80,
+      "overloadTicks": 0,
+      "overloadCountdownSec": 0,
+      "enemyCapacity": 100,
+      "rice": 0,
+      "nextRecruitCost": 999,
+      "boardPieces": 10,
+      "trayPieces": 0,
+      "outcome": null
+    },
+    "peak": {
+      "activeEnemies": 80,
+      "seenEnemies": 80,
+      "activeVfx": 0,
+      "pooledVfx": 0,
+      "display": 15,
+      "dom": 245,
+      "heap": 74456692
+    },
+    "realtime": {
+      "websocketFrames": 705,
+      "websocketBytes": 13275128,
+      "combatBatchFrames": 348
+    },
+    "first": {
+      "label": "renderer-stress-start",
+      "fps": 16.2,
+      "frameP95Ms": 66.80000000000018,
+      "longTaskCount": 0,
+      "longTaskDurationMs": 0,
+      "domNodes": 245,
+      "overflow": false,
+      "vfx": {
+        "active": 0,
+        "pooled": 0,
+        "display": 15,
+        "enemies": 80,
+        "seenEnemies": 80
+      },
+      "jsHeapUsedBytes": 17765840,
+      "networkEvents": 29
+    },
+    "last": {
+      "label": "renderer-stress-end",
+      "fps": 13.3,
+      "frameP95Ms": 83.39999999999418,
+      "longTaskCount": 0,
+      "longTaskDurationMs": 0,
+      "domNodes": 245,
+      "overflow": false,
+      "vfx": {
+        "active": 0,
+        "pooled": 0,
+        "display": 15,
+        "enemies": 80,
+        "seenEnemies": 80
+      },
+      "jsHeapUsedBytes": 66622048,
+      "networkEvents": 29
+    },
+    "mobileOverflow": false
+  },
+  "stressVerdicts": {
+    "duration": true,
+    "activeEnemies": true,
+    "combatEvents": true,
+    "fps": false,
+    "frameP95": false,
+    "longTasks": true,
+    "dom": true,
+    "vfx": true,
+    "heap": true,
+    "mobileOverflow": true
+  }
+}

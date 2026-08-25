@@ -2,6 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ProjectedTickStream = void 0;
 const state_projection_1 = require("./state-projection");
+const pve_state_delta_1 = require("../../../shared/contracts/pve-state-delta");
+const combat_event_journal_1 = require("./combat-event-journal");
 class ProjectedTickStream {
     engine;
     config;
@@ -13,6 +15,7 @@ class ProjectedTickStream {
     latestFullState = null;
     lastBroadcastState = null;
     lastStatus = null;
+    combatEventJournal = new combat_event_journal_1.CombatEventJournal();
     unsubscribeEngineTick;
     constructor(engine, config, telemetry) {
         this.engine = engine;
@@ -48,8 +51,15 @@ class ProjectedTickStream {
         }
         if (options?.initializeBroadcastBaseline && !this.lastBroadcastState) {
             this.lastBroadcastState = this.latestFullState;
+            this.baselineCombatEvents(this.latestFullState);
         }
         return this.latestFullState;
+    }
+    getPresentationCursor() {
+        return this.combatEventJournal.cursor();
+    }
+    getCombatEventBatchAfter(fromSeq) {
+        return this.combatEventJournal.replayFrom(fromSeq);
     }
     dispose() {
         this.unsubscribeEngineTick();
@@ -76,9 +86,13 @@ class ProjectedTickStream {
             const uiUpdate = this.telemetry.measure('projection.ui', () => (0, state_projection_1.projectFrontendUiStateUpdate)(state, this.config, previousState));
             const noticeUpdate = this.telemetry.measure('projection.notice', () => (0, state_projection_1.projectFrontendNoticeUpdate)(state, previousState));
             const patch = this.telemetry.measure('projection.patch', () => (0, state_projection_1.projectFrontendGameStatePatch)(state, this.config, previousState));
+            this.observeCombatEvents(fullState);
             broadcast = {
                 patch,
+                legacyPatch: createLegacyPatch(patch, fullState),
                 checkpoint: createCheckpointPatch(fullState),
+                combatEventBatch: this.combatEventJournal.drain(),
+                baseRevision: previousState.tick,
                 uiUpdate,
                 noticeUpdate,
             };
@@ -108,8 +122,22 @@ class ProjectedTickStream {
         this.telemetry.setGauge('projection.broadcastListeners', this.broadcastListeners.size);
         this.telemetry.setGauge('projection.listeners', this.tickListeners.size + this.broadcastListeners.size);
     }
+    baselineCombatEvents(state) {
+        if (state.matchId && state.pve)
+            this.combatEventJournal.baseline(state.matchId, state.pve.recentEvents);
+    }
+    observeCombatEvents(state) {
+        if (state.matchId && state.pve)
+            this.combatEventJournal.observe(state.matchId, state.pve.recentEvents);
+    }
 }
 exports.ProjectedTickStream = ProjectedTickStream;
+function createLegacyPatch(patch, state) {
+    if (!patch.pvePatch)
+        return patch;
+    const { pvePatch: _pvePatch, ...legacyPatch } = patch;
+    return { ...legacyPatch, pve: state.pve };
+}
 function createCheckpointPatch(state) {
     return {
         tick: state.tick,
@@ -132,6 +160,7 @@ function mergeFrontendGameStatePatch(previousState, patch) {
         towers: patch.towers ?? applyEntityDelta(previousState.towers, patch.towerDelta),
         enemies: patch.enemies ?? applyEntityDelta(previousState.enemies, patch.enemyDelta),
         map: patch.map ?? previousState.map,
+        pve: (0, pve_state_delta_1.applyPveDeltaToGameState)(previousState, patch),
     };
 }
 function mergeFrontendUiStateUpdate(previousState, update) {

@@ -4,6 +4,12 @@ import type {
   PvpMatchPhase,
   PvpMode as SharedPvpMode,
   PvpParticipantResult,
+  PvpBoardPieceState,
+  PvpEnemyState,
+  PvpRecruitState,
+  PvpRulesSnapshot,
+  PvpRuntimeEvent,
+  PvpSide,
   PvpQueueTicket as SharedPvpQueueTicket,
 } from '../../shared/contracts/pvp'
 
@@ -169,10 +175,23 @@ export interface PvpMatchPublicState {
   mapVersion: string
   rulesetVersion: string
   elapsedMs: number
+  tick: number
+  tickRateMs: number
+  realtimeSeq: number
+  rulesSnapshot: PvpRulesSnapshot
   round: number
   disasterLevel: number
-  self: { playerId: string; playerName: string; coreHp: number; rations: number; scripture: number }
-  opponent: { playerId: string; playerName: string; coreHp: number }
+  loading: {
+    rulesetVersion: string
+    mapId: string
+    mapVersion: number
+    routeHash: string
+    assetsVersion: string
+    remainingMs: number
+  }
+  self: { side: PvpSide; playerId: string; playerName: string; coreHp: number; rations: number; scripture: number; connected: boolean; loadStatus: string; loadFailureCode: string | null; populationUsed: number; populationCap: number; boardPieces: PvpBoardPieceState[]; enemies: PvpEnemyState[]; tray: Array<PvpRecruitState | null>; reserve: Array<PvpRecruitState | null>; trayRevision: number; boardRevision: number }
+  opponent: { side: PvpSide; playerId: string; playerName: string; coreHp: number; connected: boolean; loadStatus: string; populationUsed: number; boardPieces: PvpBoardPieceState[]; enemies: PvpEnemyState[] }
+  recentEvents: PvpRuntimeEvent[]
   notices: string[]
 }
 

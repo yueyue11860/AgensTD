@@ -4,6 +4,7 @@ import type { FrontendGameCell, FrontendGameState } from '../domain/frontend-gam
 import { enemyCatalog } from '../domain/enemy-catalog'
 import { getNextTowerCatalogEntryById, towerCatalog } from '../domain/tower-catalog'
 import type { EntityDelta, GameNoticeUpdate, GameStatePatch, GameUiState, GameUiStateUpdate } from '../../../shared/contracts/game'
+import { createPveMatchStatePatch } from '../../../shared/contracts/pve-state-delta'
 
 let cachedMapCellsSource: GameState['map']['cells'] | null = null
 let cachedProjectedMapCells: FrontendGameCell[] | null = null
@@ -460,7 +461,15 @@ export function projectFrontendGameStatePatch(
     wave: runtimeState.wave,
     score: runtimeState.score,
     updatedAt: runtimeState.updatedAt,
-    pve: runtimeState.pve,
+  }
+
+  if (runtimeState.pve) {
+    if (previousState?.pve && previousState.matchId === state.matchId) {
+      patch.pvePatch = createPveMatchStatePatch(previousState.pve, runtimeState.pve)
+    }
+    else {
+      patch.pve = runtimeState.pve
+    }
   }
 
   if (!previousState) {

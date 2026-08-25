@@ -12,7 +12,7 @@ import {
   PveGameRuntime,
   resolvePveLaneSpawnIntervalMs,
 } from './runtime'
-import { HOUYI_DEFINITION } from '../core/hero-v1/catalog'
+import { GENERAL_CATALOG, HOUYI_DEFINITION } from '../core/hero-v1/catalog'
 import type { GeneralDefinition } from '../core/hero-v1/types'
 import type { PveRuntimeSnapshot, SoldierPiece } from './types'
 import { runSummonSpawnPatternSmokeChecks } from './spawn-pattern-smoke'
@@ -90,12 +90,8 @@ export function runPveV2SmokeChecks(): {
   const runtime = createPreparedRuntime('smoke-combat')
   let snapshot = runtime.snapshot()
   assert.equal(snapshot.players[0].rice, 5)
-  assert.equal(snapshot.players[0].nextRecruitCost, 7)
+  assert.equal(snapshot.players[0].nextRecruitCost, 5)
   assert.ok(snapshot.players[0].tray.some((piece) => piece?.kind === 'soldier'))
-  assert.equal(
-    runtime.handleAction('player-1', { type: 'RECRUIT_BATCH', actionId: 'recruit-2' }).code,
-    'INSUFFICIENT_RICE',
-  )
   const duplicateRecruit = runtime.handleAction('player-1', { type: 'RECRUIT_BATCH', actionId: 'recruit-1' })
   assert.equal(duplicateRecruit.ok, true)
   assert.equal(runtime.snapshot().players[0].rice, 5)
@@ -130,7 +126,7 @@ export function runPveV2SmokeChecks(): {
   }
   snapshot = runtime.snapshot()
   assert.equal(snapshot.result?.outcome, 'victory')
-  assert.equal(snapshot.players[0].rice, 20)
+  assert.equal(snapshot.players[0].rice, 18)
   assert.deepEqual(snapshot.players[0].clearedWaves, [1])
 
   const mergeRuntime = new PveGameRuntime({ seed: 'smoke-merge', characterTokens: {} })
@@ -411,6 +407,12 @@ export function runPveV2SmokeChecks(): {
     if ((houyiRuntime.snapshot().players[0].generalProgress[0]?.experiencePoints ?? 0) > 0) break
   }
   houyiSnapshot = houyiRuntime.snapshot()
+  const houyiActionEvent = houyiSnapshot.recentEvents.find((event) => (
+    event.type === 'GENERAL_SKILL_CAST' || event.type === 'GENERAL_BASIC_ATTACK_STARTED'
+  ))
+  assert.ok(houyiActionEvent?.actionId?.startsWith(`${firstFormationId}:`))
+  assert.ok((houyiActionEvent?.targetIds?.length ?? 0) > 0)
+  assert.equal(houyiActionEvent?.geometry?.kind, 'polyline')
   const experienceBeforeDisband = houyiSnapshot.players[0].generalProgress[0]?.experiencePoints ?? 0
   assert.ok(experienceBeforeDisband > 0, 'Houyi should deal a killing contribution and receive experience')
   assert.equal(houyiRuntime.handleAction('houyi-player', {
@@ -423,6 +425,17 @@ export function runPveV2SmokeChecks(): {
   assert.equal(houyiSnapshot.players[0].generalFormations.length, 0)
   assert.equal(houyiSnapshot.players[0].populationUsed, 0)
   assert.equal(houyiSnapshot.players[0].generalProgress[0]?.experiencePoints, experienceBeforeDisband)
+
+  const yangjianRuntime = createFormedGeneralRuntime(GENERAL_CATALOG.yangjian, 'yangjian-choreography')
+  assert.equal(yangjianRuntime.start().ok, true)
+  let yangjianSkillEvent: PveRuntimeSnapshot['recentEvents'][number] | undefined
+  for (let tick = 0; tick < 300 && !yangjianSkillEvent; tick += 1) {
+    const next = yangjianRuntime.tick()
+    yangjianSkillEvent = next.recentEvents.find((event) => event.type === 'GENERAL_SKILL_CAST')
+  }
+  assert.ok(yangjianSkillEvent?.actionId?.includes('yangjian_sanjian_liangrenzhan'))
+  assert.ok((yangjianSkillEvent?.targetIds?.length ?? 0) > 0)
+  assert.equal(yangjianSkillEvent?.geometry?.kind, 'corridor')
   assert.equal(houyiRuntime.handleAction('houyi-player', {
     type: 'MOVE_BOARD_PIECE', actionId: 'reform-houyi', pieceId: yiPieceId, targetX: 11, targetY: 17,
   }).ok, true)

@@ -1,0 +1,47 @@
+- main [ref=f1e3]:
+  - generic [ref=f1e8]:
+    - generic [ref=f1e9]:
+      - button "返回主页" [ref=f1e10]
+      - button "排行榜" [ref=f1e15]
+    - generic [ref=f1e84]:
+      - generic [ref=f1e85]:
+        - button "返回大厅" [ref=f1e86]
+        - 'button "节点 ID: RM-3847 📋" [ref=f1e90]':
+          - generic [ref=f1e91]: "节点 ID:"
+          - generic [ref=f1e92]: RM-3847
+          - generic [ref=f1e93]: 📋
+        - generic [ref=f1e94]: 房间链路稳定
+      - generic [ref=f1e97]:
+        - generic: "3"
+        - generic [ref=f1e98]:
+          - paragraph [ref=f1e99]: P4 | 左上防线
+          - paragraph [ref=f1e100]: P3 | 右上防线
+          - generic [ref=f1e102]:
+            - generic [ref=f1e103]: 👤
+            - paragraph [ref=f1e105]: 待接入...
+            - generic [ref=f1e106]: 待接入...
+          - generic [ref=f1e109]:
+            - generic [ref=f1e110]: 👤
+            - paragraph [ref=f1e112]: 待接入...
+            - generic [ref=f1e113]: 待接入...
+          - button "[ 链路在线 ]" [disabled] [ref=f1e115]
+          - generic [ref=f1e117]:
+            - generic [ref=f1e118]: 👤
+            - generic [ref=f1e119]:
+              - paragraph [ref=f1e120]: Planner
+              - text: Host
+            - generic [ref=f1e121]: 链路在线
+          - generic [ref=f1e124]:
+            - generic [ref=f1e125]: 👤
+            - paragraph [ref=f1e127]: 待接入...
+            - generic [ref=f1e128]: 待接入...
+          - paragraph [ref=f1e130]: P1 | 左下防线
+          - paragraph [ref=f1e131]: P2 | 右下防线
+      - generic [ref=f1e132]:
+        - generic [ref=f1e133]:
+          - generic [ref=f1e134]: "延迟: --"
+          - generic [ref=f1e135]:
+            - text: "承载量:"
+            - generic [ref=f1e136]: 1/4
+          - generic [ref=f1e137]: "接口: CONNECTED"
+        - button "启动战局 (START)" [disabled]

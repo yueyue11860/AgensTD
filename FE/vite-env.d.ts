@@ -9,6 +9,10 @@ interface ImportMetaEnv {
 	readonly VITE_PLAYER_KIND?: string
 	readonly VITE_SUPABASE_URL?: string
 	readonly VITE_SUPABASE_ANON_KEY?: string
+	/** 仅 `vite dev` 有效；生产构建即使设置也不能绕过 RequireAuth。 */
+	readonly VITE_AUTH_BYPASS?: string
+	/** 竞技技术预览开关；生产默认不开放排位入口。 */
+	readonly VITE_PVP_RANKED_ENABLED?: string
 }
 
 interface ImportMeta {

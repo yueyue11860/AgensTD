@@ -236,6 +236,41 @@ export class GeneralFormationManager {
     )
   }
 
+  exportCheckpoint(): Record<string, unknown> {
+    return {
+      schemaVersion: 1,
+      formationSequence: this.formationSequence,
+      activeFormations: [...this.activeByOwnerAndGeneral.values()]
+        .sort((left, right) => generalKey(left.ownerPlayerId, left.generalId).localeCompare(generalKey(right.ownerPlayerId, right.generalId)))
+        .map(cloneFormation),
+      progress: [...this.progressByOwnerAndGeneral.values()]
+        .sort((left, right) => generalKey(left.ownerPlayerId, left.generalId).localeCompare(generalKey(right.ownerPlayerId, right.generalId)))
+        .map(cloneProgress),
+    }
+  }
+
+  restoreCheckpoint(checkpoint: Record<string, unknown>): void {
+    if (checkpoint.schemaVersion !== 1 || !Number.isSafeInteger(checkpoint.formationSequence)) {
+      throw new Error('Unsupported general formation checkpoint')
+    }
+    const formations = checkpoint.activeFormations
+    const progress = checkpoint.progress
+    if (!Array.isArray(formations) || !Array.isArray(progress)) throw new Error('Invalid general formation checkpoint')
+    this.activeByOwnerAndGeneral.clear()
+    this.progressByOwnerAndGeneral.clear()
+    for (const raw of formations) {
+      const formation = raw as GeneralFormationState
+      if (!formation || !this.catalog[formation.generalId] || !formation.ownerPlayerId) throw new Error('Invalid checkpoint formation')
+      this.activeByOwnerAndGeneral.set(generalKey(formation.ownerPlayerId, formation.generalId), cloneFormation(formation))
+    }
+    for (const raw of progress) {
+      const entry = raw as GeneralProgressState
+      if (!entry || !this.catalog[entry.generalId] || !entry.ownerPlayerId) throw new Error('Invalid checkpoint general progress')
+      this.progressByOwnerAndGeneral.set(generalKey(entry.ownerPlayerId, entry.generalId), cloneProgress(entry))
+    }
+    this.formationSequence = Number(checkpoint.formationSequence)
+  }
+
   private detectCandidates(
     ownerPlayerId: string,
     boardCharacters: readonly HeroCharacterToken[],

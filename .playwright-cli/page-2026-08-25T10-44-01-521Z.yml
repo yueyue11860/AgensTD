@@ -1,0 +1,21 @@
+- dialog [ref=f3e3]:
+  - paragraph [ref=f3e4]: 本局故事已展开
+  - generic [ref=f3e5]:
+    - generic [ref=f3e13]:
+      - paragraph [ref=f3e14]: 服务端已落签
+      - heading "守关已成" [level=1] [ref=f3e15]
+      - paragraph [ref=f3e16]: PVE-1 防线稳固
+    - button "跳过揭晓" [ref=f3e42]
+  - generic [ref=f3e45]:
+    - generic [ref=f3e46]:
+      - generic [ref=f3e47]: victory
+      - strong [ref=f3e48]: 20 / 20 波
+      - generic [ref=f3e49]: 旧版结算记录
+    - generic [ref=f3e50]:
+      - strong [ref=f3e54]: 本局故事
+      - paragraph [ref=f3e55]: 最高完成第 20 波，结算已持久化。
+  - paragraph [ref=f3e30]: 奖励、首通与 MVP 完全以服务端持久记录为准 · MATCH visual-recovery
+  - generic [ref=f3e31]:
+    - button "再来一局" [ref=f3e32]
+    - button "调整构筑" [ref=f3e36]
+    - button "返回大厅" [ref=f3e41]

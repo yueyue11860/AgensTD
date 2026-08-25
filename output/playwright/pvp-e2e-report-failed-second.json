@@ -1,0 +1,695 @@
+{
+  "schemaVersion": 1,
+  "startedAt": "2026-08-25T11:57:12.965Z",
+  "requestedRuns": 20,
+  "completedRuns": 19,
+  "blockers": [
+    {
+      "run": 20,
+      "message": "Error: STATE_TIMEOUT:terminal:19:\"playing\"\n    at waitForState (file:///Users/yueyue/AI%E9%A1%B9%E7%9B%AE/A2A/AgensTD/FE/scripts/pvp-e2e.mjs:93:9)\n    at async runOne (file:///Users/yueyue/AI%E9%A1%B9%E7%9B%AE/A2A/AgensTD/FE/scripts/pvp-e2e.mjs:289:20)\n    at async main (file:///Users/yueyue/AI%E9%A1%B9%E7%9B%AE/A2A/AgensTD/FE/scripts/pvp-e2e.mjs:339:19)"
+    }
+  ],
+  "networkScenarios": [
+    "slow_load_ack",
+    "rtt_120ms",
+    "rtt_250ms",
+    "sse_gap_rest_full",
+    "background_tab",
+    "offline_10s_reconnect",
+    "loss_1pct"
+  ],
+  "runs": [
+    {
+      "index": 1,
+      "scenario": "duplicate_request",
+      "matchId": "pvp-custom-1787659035115-980f7a",
+      "durationMs": 8868,
+      "finalStateHash": "4d2a66c56350fe12fc919759fd4ea8db596c17bff39acab32e03d2814a290aa7",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659035115-980f7a",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659035115-980f7a:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659035115-980f7a:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 6
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 2,
+      "scenario": "slow_load_ack",
+      "matchId": "pvp-custom-1787659043911-4541c7",
+      "durationMs": 9399,
+      "finalStateHash": "216e64b64611a1e4c2ed5fc3f8ab8c23b81b4f7ef1b17a93c7ad949c39ad84ec",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659043911-4541c7",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659043911-4541c7:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659043911-4541c7:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 4
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 3,
+      "scenario": "rtt_120ms",
+      "matchId": "pvp-custom-1787659053314-a49e10",
+      "durationMs": 9043,
+      "finalStateHash": "9954aa8a8735a058a49ed044e33a5ee902856cb85724ba660794527d7a3b7868",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659053314-a49e10",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659053314-a49e10:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659053314-a49e10:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 5
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 4,
+      "scenario": "rtt_250ms",
+      "matchId": "pvp-custom-1787659062346-d68be3",
+      "durationMs": 10851,
+      "finalStateHash": "a204bc95927ad44d320a4d7df35a9edf61fe0c58827696ba0c56faaa3d1e83ea",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659062346-d68be3",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659062346-d68be3:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659062346-d68be3:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 4
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 5,
+      "scenario": "sse_gap_rest_full",
+      "matchId": "pvp-custom-1787659073200-655610",
+      "durationMs": 10448,
+      "finalStateHash": "f6f31471177b1fff148a1b22930618caaa63df3400ac2d214aecdd2681254193",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659073200-655610",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659073200-655610:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659073200-655610:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 1,
+        "restFullRequests": 1,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 6
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 6,
+      "scenario": "background_tab",
+      "matchId": "pvp-custom-1787659083671-159af5",
+      "durationMs": 9393,
+      "finalStateHash": "c220e4860c63cc3d68b1d48c4b10e0961a9470be91870c0328a4ce5cc53c2fe3",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659083671-159af5",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659083671-159af5:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659083671-159af5:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 5
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 7,
+      "scenario": "offline_10s_reconnect",
+      "matchId": "pvp-custom-1787659093063-12eb69",
+      "durationMs": 15547,
+      "finalStateHash": "fc8aec04ca42b6c5c2cff23c086d9ac6d290b0bb4d2f87726289a16c6c9584b7",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659093063-12eb69",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659093063-12eb69:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659093063-12eb69:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 5
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 8,
+      "scenario": "loss_1pct",
+      "matchId": "pvp-custom-1787659108590-4b0c23",
+      "durationMs": 9059,
+      "finalStateHash": "a3720e035229fdc826bb8132eed7e79ab8ff45bce18f289f62ae9a8ee70f88d2",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659108590-4b0c23",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659108590-4b0c23:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659108590-4b0c23:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 2
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 4
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 9,
+      "scenario": "refresh_reconnect",
+      "matchId": "pvp-custom-1787659117635-e6ae92",
+      "durationMs": 8867,
+      "finalStateHash": "056f985c7e73f4230787276d18d9d7ed29a46ee0314b02bcbda1d20ced1bae8d",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659117635-e6ae92",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659117635-e6ae92:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659117635-e6ae92:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 4
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 10,
+      "scenario": "normal",
+      "matchId": "pvp-custom-1787659126480-3a5b4d",
+      "durationMs": 9335,
+      "finalStateHash": "261887f0b1101ad7b54cbb8ed24eb3f18980f0a906b6dc40eb4ef47e3f66aab1",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659126480-3a5b4d",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659126480-3a5b4d:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659126480-3a5b4d:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 4
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 11,
+      "scenario": "normal",
+      "matchId": "pvp-custom-1787659135822-10bbee",
+      "durationMs": 9548,
+      "finalStateHash": "13a952cb4d1944209f381b89f0d09dccd6f46c8bbc82b48045d93e6ef2b26744",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659135822-10bbee",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659135822-10bbee:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659135822-10bbee:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 4
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 12,
+      "scenario": "normal",
+      "matchId": "pvp-custom-1787659145378-4b315a",
+      "durationMs": 10069,
+      "finalStateHash": "fa16a0215d5d6cd4479ad6052bc5e15b9fb15b6bb4567484117d5318aa0798a7",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659145378-4b315a",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659145378-4b315a:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659145378-4b315a:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 5
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 13,
+      "scenario": "normal",
+      "matchId": "pvp-custom-1787659155441-39475c",
+      "durationMs": 8849,
+      "finalStateHash": "3f82145233c1cff39f3e5e31552a548d784d5a545e29cf10422f62f606671554",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659155441-39475c",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659155441-39475c:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659155441-39475c:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 4
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 14,
+      "scenario": "normal",
+      "matchId": "pvp-custom-1787659164296-c312fc",
+      "durationMs": 8757,
+      "finalStateHash": "2dd64ff5a049f2c9694b225e164879afa2a8ae6cc12173e742af78f7c3c7c811",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659164296-c312fc",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659164296-c312fc:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659164296-c312fc:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 3
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 15,
+      "scenario": "normal",
+      "matchId": "pvp-custom-1787659173039-26903d",
+      "durationMs": 9186,
+      "finalStateHash": "06c01133a95fc7c107e0843d31927c21e5fca51a08f884ec54191721cd74f5fd",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659173039-26903d",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659173039-26903d:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659173039-26903d:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 5
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 16,
+      "scenario": "normal",
+      "matchId": "pvp-custom-1787659182239-185182",
+      "durationMs": 10064,
+      "finalStateHash": "69fd9a8e0bfd3b30b8cd311e48715f4e1ad8ac23e8b04df36ad9e579d64d4087",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659182239-185182",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659182239-185182:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659182239-185182:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 5
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 17,
+      "scenario": "normal",
+      "matchId": "pvp-custom-1787659192299-bba97d",
+      "durationMs": 8860,
+      "finalStateHash": "45561dbe0adbdbd8bd860a99b2e2abe74cd161240d46e8aba772e09825fcc783",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659192299-bba97d",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659192299-bba97d:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659192299-bba97d:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 5
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 18,
+      "scenario": "normal",
+      "matchId": "pvp-custom-1787659201150-a0dbbc",
+      "durationMs": 9302,
+      "finalStateHash": "510b7e55c2ccf9feb19c9152fedc23064d2d7a4a148660fa39ddf0928667279e",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659201150-a0dbbc",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659201150-a0dbbc:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659201150-a0dbbc:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 5
+      },
+      "pressureSent": 1
+    },
+    {
+      "index": 19,
+      "scenario": "normal",
+      "matchId": "pvp-custom-1787659210455-636757",
+      "durationMs": 10308,
+      "finalStateHash": "95c741edabb97c890c3a5e06f91c89351ba06502265b7a8daa5c156355ff8174",
+      "resultReason": "surrendered",
+      "settlementRequestId": "settle:pvp-custom-1787659210455-636757",
+      "settlementIds": [
+        "pvp:pvp-custom-1787659210455-636757:pvp-e2e-alice",
+        "pvp:pvp-custom-1787659210455-636757:pvp-e2e-bob"
+      ],
+      "rewards": [
+        {
+          "playerId": "pvp-e2e-alice",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        },
+        {
+          "playerId": "pvp-e2e-bob",
+          "rewardStatus": "not_applicable",
+          "reward": {}
+        }
+      ],
+      "counters": {
+        "sseCuts": 0,
+        "restFullRequests": 0,
+        "lossDrops": 0
+      },
+      "baseKills": {
+        "A": 5,
+        "B": 5
+      },
+      "pressureSent": 1
+    }
+  ],
+  "summary": {
+    "passed": false,
+    "blockerRate": 0.05,
+    "completedRuns": 19,
+    "firstBlocker": "Error: STATE_TIMEOUT:terminal:19:\"playing\"\n    at waitForState (file:///Users/yueyue/AI%E9%A1%B9%E7%9B%AE/A2A/AgensTD/FE/scripts/pvp-e2e.mjs:93:9)\n    at async runOne (file:///Users/yueyue/AI%E9%A1%B9%E7%9B%AE/A2A/AgensTD/FE/scripts/pvp-e2e.mjs:289:20)\n    at async main (file:///Users/yueyue/AI%E9%A1%B9%E7%9B%AE/A2A/AgensTD/FE/scripts/pvp-e2e.mjs:339:19)"
+  },
+  "finishedAt": "2026-08-25T12:01:31.753Z"
+}

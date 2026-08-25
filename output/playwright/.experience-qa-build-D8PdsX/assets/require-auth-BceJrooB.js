@@ -1,0 +1,1 @@
+import{u as o,j as t}from"./react-vendor-BvK9ARaL.js";import{u}from"./index-DqeRfBDV.js";import"./ui-vendor-4wN-b1e8.js";function m({children:r}){return u(),o(),t.jsx(t.Fragment,{children:r})}export{m as RequireAuth};

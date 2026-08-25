@@ -13,19 +13,6 @@
 		"resolveJsonModule": true,
 		"types": ["node"]
 	},
-	"include": [
-		"../shared/contracts/**/*.ts",
-		"src/server.ts",
-		"src/config/**/*.ts",
-		"src/core/**/*.ts",
-		"src/data/**/*.ts",
-		"src/domain/**/*.ts",
-		"src/network/**/*.ts",
-		"src/pvp-v1/**/*.ts",
-		"src/matchmaking-v1/**/*.ts",
-		"src/rank-v1/**/*.ts",
-		"src/pvp-platform-v1/**/*.ts",
-		"src/synergy-v1/**/*.ts"
-	],
+	"include": ["../shared/contracts/**/*.ts", "src/**/*.ts"],
 	"exclude": ["dist", "node_modules", "scripts", "src/game", "src/gateway", "src/supabase"]
 }

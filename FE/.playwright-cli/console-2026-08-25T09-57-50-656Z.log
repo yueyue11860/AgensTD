@@ -1,0 +1,91 @@
+[   29572ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[   29896ms] [WARNING] WebSocket connection to 'ws://127.0.0.1:3000/socket.io/?token=human-dev-token&playerId=human-dev&playerName=human-dev&playerKind=human&EIO=4&transport=websocket' failed: WebSocket is closed before the connection is established. @ http://127.0.0.1:5174/node_modules/.vite/deps/socket__io-client.js?v=1fd8c596:1038
+[   39861ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[   40174ms] [WARNING] WebSocket connection to 'ws://127.0.0.1:3000/socket.io/?token=human-dev-token&playerId=human-dev&playerName=human-dev&playerKind=human&EIO=4&transport=websocket' failed: WebSocket is closed before the connection is established. @ http://127.0.0.1:5174/node_modules/.vite/deps/socket__io-client.js?v=1fd8c596:1038
+[   67117ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[   67429ms] [WARNING] WebSocket connection to 'ws://127.0.0.1:3000/socket.io/?token=human-dev-token&playerId=human-dev&playerName=human-dev&playerKind=human&EIO=4&transport=websocket' failed: WebSocket is closed before the connection is established. @ http://127.0.0.1:5174/node_modules/.vite/deps/socket__io-client.js?v=1fd8c596:1038
+[  134825ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[  135137ms] [WARNING] WebSocket connection to 'ws://127.0.0.1:3000/socket.io/?token=human-dev-token&playerId=human-dev&playerName=human-dev&playerKind=human&EIO=4&transport=websocket' failed: WebSocket is closed before the connection is established. @ http://127.0.0.1:5174/node_modules/.vite/deps/socket__io-client.js?v=1fd8c596:1038
+[  141334ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[  141645ms] [WARNING] WebSocket connection to 'ws://127.0.0.1:3000/socket.io/?token=human-dev-token&playerId=human-dev&playerName=human-dev&playerKind=human&EIO=4&transport=websocket' failed: WebSocket is closed before the connection is established. @ http://127.0.0.1:5174/node_modules/.vite/deps/socket__io-client.js?v=1fd8c596:1038
+[  202510ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[  202824ms] [WARNING] WebSocket connection to 'ws://127.0.0.1:3000/socket.io/?token=human-dev-token&playerId=human-dev&playerName=human-dev&playerKind=human&EIO=4&transport=websocket' failed: WebSocket is closed before the connection is established. @ http://127.0.0.1:5174/node_modules/.vite/deps/socket__io-client.js?v=1fd8c596:1038
+[  273756ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[  274067ms] [WARNING] WebSocket connection to 'ws://127.0.0.1:3000/socket.io/?token=human-dev-token&playerId=human-dev&playerName=human-dev&playerKind=human&EIO=4&transport=websocket' failed: WebSocket is closed before the connection is established. @ http://127.0.0.1:5174/node_modules/.vite/deps/socket__io-client.js?v=1fd8c596:1038
+[  327039ms] [ERROR] React has detected a change in the order of Hooks called by %s. This will lead to bugs and errors if not fixed. For more information, read the Rules of Hooks: https://react.dev/link/rules-of-hooks
+
+   Previous render            Next render
+   ------------------------------------------------------
+%s   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ TowerDefenseFrontendPage 1. useContext                 useContext
+2. useContext                 useContext
+3. useContext                 useContext
+4. useContext                 useContext
+5. useContext                 useContext
+6. useContext                 useContext
+7. useContext                 useContext
+8. useRef                     useRef
+9. useContext                 useContext
+10. useLayoutEffect           useLayoutEffect
+11. useCallback               useCallback
+12. useContext                useContext
+13. useContext                useContext
+14. useContext                useContext
+15. useRef                    useRef
+16. useRef                    useRef
+17. useState                  useState
+18. useEffect                 useEffect
+19. useCallback               useCallback
+20. useCallback               useCallback
+21. useCallback               useCallback
+22. useRef                    useRef
+23. useRef                    useRef
+24. useRef                    useRef
+25. useMemo                   useMemo
+26. useMemo                   useMemo
+27. useState                  useState
+28. useState                  useState
+29. useState                  useState
+30. useEffectEvent            useEffectEvent
+31. useEffectEvent            useEffectEvent
+32. useEffect                 useEffect
+33. useState                  useState
+34. useState                  useState
+35. useState                  useState
+36. useState                  useState
+37. useState                  useState
+38. useState                  useState
+39. useState                  useState
+40. useState                  useState
+41. useState                  useState
+42. useState                  useState
+43. useRef                    useRef
+44. useRef                    useRef
+45. useRef                    useRef
+46. useRef                    useRef
+47. useState                  useState
+48. useState                  useState
+49. useState                  useState
+50. useState                  useState
+51. useRef                    useRef
+52. useState                  useRef
+ @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:5593
+[  327043ms] [ERROR] %o
+
+%s
+
+%s
+ Error: Should have a queue. You are likely calling Hooks conditionally, which is not allowed. (https://react.dev/link/invalid-hook-call)
+    at updateReducerImpl (http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:5892:17)
+    at updateReducer (http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:5887:16)
+    at Object.useState (http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:18996:20)
+    at exports.useState (http://127.0.0.1:5174/node_modules/.vite/deps/chunk-NZUFYADL.js?v=1fd8c596:959:36)
+    at useGameEngine (http://127.0.0.1:5174/hooks/use-game-engine.ts?t=1787652197602:182:31)
+    at TowerDefenseFrontendPage (http://127.0.0.1:5174/pages/tower-defense-frontend-page.tsx?t=1787652197602:842:7)
+    at Object.react_stack_bottom_frame (http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:18509:20)
+    at renderWithHooks (http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:5654:24)
+    at updateFunctionComponent (http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:7475:21)
+    at beginWork (http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:8525:20) The above error occurred in the <TowerDefenseFrontendPage> component. React will try to recreate this component tree from scratch using the error boundary you provided, RouteErrorBoundaryInner. @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:7000
+[  327043ms] [ERROR] Route rendering failed {name: Error} @ http://127.0.0.1:5174/components/route-boundary.tsx?t=1787651813477:35
+[  389637ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:5174/node_modules/.vite/deps/react-dom_client.js?v=1fd8c596:20102
+[  389950ms] [WARNING] WebSocket connection to 'ws://127.0.0.1:3000/socket.io/?token=human-dev-token&playerId=human-dev&playerName=human-dev&playerKind=human&EIO=4&transport=websocket' failed: WebSocket is closed before the connection is established. @ http://127.0.0.1:5174/node_modules/.vite/deps/socket__io-client.js?v=1fd8c596:1038

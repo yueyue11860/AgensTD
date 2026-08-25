@@ -89,7 +89,7 @@ export function createAgentApiRouter(
 
       writeSseEvent(telemetry, 'agent.sse.TICK_UPDATE.patch', response, 'TICK_UPDATE', {
         mode: 'patch',
-        patch: event.broadcast.patch,
+        patch: event.broadcast.legacyPatch,
         sentAt: Date.now(),
       })
 

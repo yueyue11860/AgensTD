@@ -53,18 +53,56 @@ class PvpPlatformService {
     ready;
     liveMatches = new Map();
     customRooms = new Map();
+    matchSubscribers = new Map();
     tickTimer;
+    runtimeOptions;
+    terminalRetentionMs;
+    maxRetainedTerminalMatches;
+    nowMs;
     constructor(options = {}) {
         this.store = options.store ?? new memory_pvp_store_1.MemoryPvpStore();
         this.matchmaking = new service_1.InMemoryPvpMatchmakingService();
         this.rank = new service_2.PvpRankService(this.store);
         this.ready = this.bootstrapCatalog();
-        this.tickTimer = options.autoTick === false ? null : setInterval(() => this.tick(), TICK_RATE_MS);
+        this.runtimeOptions = {
+            runtimeTickRateMs: Math.max(10, Math.trunc(options.runtimeTickRateMs ?? TICK_RATE_MS)),
+            countdownMs: Math.max(0, Math.trunc(options.countdownMs ?? 5000)),
+            roundIntervalMs: options.roundIntervalMs,
+            disconnectForfeitMs: options.disconnectForfeitMs,
+        };
+        this.terminalRetentionMs = Math.max(0, Math.trunc(options.terminalRetentionMs ?? 5 * 60_000));
+        this.maxRetainedTerminalMatches = Math.max(0, Math.trunc(options.maxRetainedTerminalMatches ?? 500));
+        this.nowMs = options.nowMs ?? Date.now;
+        this.tickTimer = options.autoTick === false ? null : setInterval(() => this.tick(), Math.max(1, Math.trunc(options.timerIntervalMs ?? TICK_RATE_MS)));
         this.tickTimer?.unref();
     }
     shutdown() {
         if (this.tickTimer)
             clearInterval(this.tickTimer);
+        this.tickTimer = null;
+    }
+    diagnostics() {
+        let realtimeConnections = 0;
+        for (const live of this.liveMatches.values())
+            for (const count of live.realtimeConnections.values())
+                realtimeConnections += count;
+        return {
+            tickTimerActive: this.tickTimer ? 1 : 0,
+            liveMatches: this.liveMatches.size,
+            activeMatches: [...this.liveMatches.values()].filter((live) => !live.runtime.isQuiescent()).length,
+            customRooms: this.customRooms.size,
+            retainedTerminalMatches: [...this.liveMatches.values()].filter((live) => live.runtime.isQuiescent()).length,
+            subscriberCount: [...this.matchSubscribers.values()].reduce((total, subscribers) => total + subscribers.size, 0),
+            realtimeConnections,
+        };
+    }
+    injectRealtimeGapForE2e(matchId, skipped = 1) {
+        if (process.env.NODE_ENV === 'production' || process.env.PVP_E2E_ENABLED !== 'true')
+            throw new Error('PVP_E2E_GAP_INJECTION_FORBIDDEN');
+        const live = this.liveMatches.get(matchId);
+        if (!live)
+            throw new types_1.PvpPlatformError('MATCH_NOT_FOUND', 'PVP 对局不存在', 404);
+        live.realtimeSeq += Math.max(1, Math.min(10, Math.trunc(skipped)));
     }
     async currentSeason(mode = 'ranked_1v1') {
         await this.ready;
@@ -143,8 +181,42 @@ class PvpPlatformService {
         const live = this.requireLiveMatchForPlayer(matchId, principal.playerId);
         return live.runtime.projectForViewer(principal.playerId);
     }
+    acknowledgeLoad(principal, matchId, input) {
+        const live = this.requireLiveMatchForPlayer(matchId, principal.playerId);
+        const result = live.runtime.acknowledgeLoad(principal.playerId, input);
+        this.publishMatchState(matchId, live);
+        return result;
+    }
+    subscribeMatchState(principal, matchId, listener) {
+        const live = this.requireLiveMatchForPlayer(matchId, principal.playerId);
+        const subscriber = { playerId: principal.playerId, listener };
+        const subscribers = this.matchSubscribers.get(matchId) ?? new Set();
+        subscribers.add(subscriber);
+        this.matchSubscribers.set(matchId, subscribers);
+        const connectionCount = live.realtimeConnections.get(principal.playerId) ?? 0;
+        live.realtimeConnections.set(principal.playerId, connectionCount + 1);
+        if (connectionCount === 0)
+            live.runtime.markReconnected(principal.playerId);
+        listener({ kind: 'full', matchId, seq: live.realtimeSeq, state: live.runtime.projectForViewer(principal.playerId) });
+        return () => {
+            subscribers.delete(subscriber);
+            const remaining = Math.max(0, (live.realtimeConnections.get(principal.playerId) ?? 1) - 1);
+            if (remaining === 0) {
+                live.realtimeConnections.delete(principal.playerId);
+                live.runtime.markDisconnected(principal.playerId);
+                this.publishMatchState(matchId, live);
+            }
+            else
+                live.realtimeConnections.set(principal.playerId, remaining);
+            if (subscribers.size === 0)
+                this.matchSubscribers.delete(matchId);
+        };
+    }
     async joinQueue(principal, request) {
         await this.ready;
+        if (request.mode === 'ranked_1v1' && process.env.NODE_ENV === 'production' && process.env.PVP_RANKED_ENABLED !== 'true') {
+            throw new types_1.PvpPlatformError('PVP_TECH_PREVIEW_ONLY', '排位入口尚未对生产开放', 403);
+        }
         const activeMatch = [...this.liveMatches.values()].find(live => (live.participants.some(participant => participant.playerId === principal.playerId)
             && !['completed', 'voided'].includes(live.runtime.snapshot().phase)));
         if (activeMatch)
@@ -200,7 +272,27 @@ class PvpPlatformService {
     }
     sendPressure(principal, matchId, requestId) {
         const live = this.requireLiveMatchForPlayer(matchId, principal.playerId);
-        return live.runtime.sendPressure(principal.playerId, requestId);
+        const result = live.runtime.sendPressure(principal.playerId, requestId);
+        this.publishMatchState(matchId, live);
+        return result;
+    }
+    recruit(principal, matchId, input) {
+        const live = this.requireLiveMatchForPlayer(matchId, principal.playerId);
+        const result = live.runtime.recruit(principal.playerId, input);
+        this.publishMatchState(matchId, live);
+        return result;
+    }
+    deploy(principal, matchId, input) {
+        const live = this.requireLiveMatchForPlayer(matchId, principal.playerId);
+        const result = live.runtime.deploy(principal.playerId, input);
+        this.publishMatchState(matchId, live);
+        return result;
+    }
+    moveOrMerge(principal, matchId, input) {
+        const live = this.requireLiveMatchForPlayer(matchId, principal.playerId);
+        const result = live.runtime.moveOrMerge(principal.playerId, input);
+        this.publishMatchState(matchId, live);
+        return result;
     }
     /** 仅供服务端战斗解析器调用；REST/Socket 绝不得接收客户端伤害数值后转发。 */
     applyAuthoritativeDamage(matchId, input) {
@@ -214,6 +306,7 @@ class PvpPlatformService {
         const result = live.runtime.surrender(principal.playerId, requestId);
         if (result.ok)
             await this.settleIfNeeded(live);
+        this.publishMatchState(matchId, live);
         return result;
     }
     async listRooms() {
@@ -286,10 +379,14 @@ class PvpPlatformService {
     tick() {
         this.matchmaking.advance();
         for (const live of this.liveMatches.values()) {
+            if (live.runtime.isQuiescent())
+                continue;
             const state = live.runtime.tick();
+            this.publishMatchState(state.matchId, live);
             if (state.phase === 'settling' || state.phase === 'voided')
                 void this.settleIfNeeded(live);
         }
+        this.reapTerminalMatches();
     }
     async bootstrapCatalog() {
         const now = Date.now();
@@ -370,15 +467,15 @@ class PvpPlatformService {
             mode: match.mode,
             seed: `${match.matchId}:${match.acceptedAt}`,
             rulesetVersion: match.rulesetVersion,
-            tickRateMs: TICK_RATE_MS,
-            countdownMs: 5000,
+            tickRateMs: this.runtimeOptions.runtimeTickRateMs,
+            countdownMs: this.runtimeOptions.countdownMs,
+            roundIntervalMs: this.runtimeOptions.roundIntervalMs,
+            disconnectForfeitMs: this.runtimeOptions.disconnectForfeitMs,
         });
+        // Matchmaking accept/custom ready are explicit human actions; only that confirmed readiness is carried forward.
+        // Asset loading is never acknowledged here: each browser must submit its own versioned load ACK.
         for (const player of match.players)
-            runtime.registerParticipant(player.side, player);
-        for (const player of match.players)
-            runtime.setReady(player.playerId, true);
-        for (const player of match.players)
-            runtime.markLoaded(player.playerId);
+            runtime.registerParticipant(player.side, player, true);
         const live = {
             runtime,
             mode: match.mode,
@@ -388,8 +485,22 @@ class PvpPlatformService {
             participants: match.players.map(player => ({ ...player })),
             settling: false,
             settledDetail: null,
+            settledAtMs: null,
+            realtimeSeq: 1,
+            realtimeConnections: new Map(),
         };
         this.liveMatches.set(match.matchId, live);
+    }
+    publishMatchState(matchId, live) {
+        const subscribers = this.matchSubscribers.get(matchId);
+        if (!subscribers?.size)
+            return;
+        live.realtimeSeq += 1;
+        for (const subscriber of subscribers)
+            subscriber.listener({
+                kind: 'full', matchId, seq: live.realtimeSeq,
+                state: live.runtime.projectForViewer(subscriber.playerId),
+            });
     }
     async settleIfNeeded(live) {
         const authority = live.runtime.snapshot();
@@ -428,6 +539,7 @@ class PvpPlatformService {
                 })),
             });
             live.settledDetail = detail;
+            live.settledAtMs = this.nowMs();
             if (authority.phase === 'settling')
                 live.runtime.completeSettlement();
         }
@@ -437,6 +549,29 @@ class PvpPlatformService {
             return;
         }
         live.settling = false;
+    }
+    reapTerminalMatches() {
+        const now = this.nowMs();
+        const candidates = [...this.liveMatches.entries()]
+            .filter(([matchId, live]) => live.settledDetail !== null
+            && live.settledAtMs !== null
+            && (this.matchSubscribers.get(matchId)?.size ?? 0) === 0
+            && live.realtimeConnections.size === 0)
+            .sort(([, left], [, right]) => (left.settledAtMs ?? 0) - (right.settledAtMs ?? 0));
+        let retained = candidates.length;
+        for (const [matchId, live] of candidates) {
+            const expired = now - live.settledAtMs >= this.terminalRetentionMs;
+            const overCapacity = retained > this.maxRetainedTerminalMatches;
+            if (!expired && !overCapacity)
+                continue;
+            this.liveMatches.delete(matchId);
+            if ((this.matchSubscribers.get(matchId)?.size ?? 0) === 0)
+                this.matchSubscribers.delete(matchId);
+            for (const [roomId, room] of this.customRooms)
+                if (room.matchId === matchId)
+                    this.customRooms.delete(roomId);
+            retained -= 1;
+        }
     }
     rewardFor(result, durationMs) {
         if (result === 'void' || durationMs < 30_000)

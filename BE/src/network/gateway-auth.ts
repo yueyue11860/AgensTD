@@ -2,10 +2,13 @@ import type { Request } from 'express'
 import type { Socket } from 'socket.io'
 import type { ServerConfig } from '../config/server-config'
 import type { PlayerIdentity } from '../domain/actions'
-import { getSessionByToken } from './oauth-routes'
+import { getSupabaseAuthVerifier } from '../auth/supabase-auth'
 
 export interface GatewayPrincipal extends PlayerIdentity {
   token: string
+  authSource?: 'static' | 'supabase'
+  email?: string
+  avatar?: string
 }
 
 function readAuthorizationToken(authorizationHeader: string | undefined) {
@@ -25,19 +28,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** 尝试从 session token 解析已登录的 OAuth 用户 */
-function resolveSessionPrincipal(token: string): GatewayPrincipal | null {
-  if (!token.startsWith('sess_')) return null
+/** 验证静态服务 token，或由 Supabase Auth 验证真人 JWT。 */
+export async function authenticateGatewayTokenAsync(config: ServerConfig, token: string | undefined) {
+  const staticPrincipal = authenticateGatewayToken(config, token)
+  if (staticPrincipal || !token) return staticPrincipal
 
-  const session = getSessionByToken(token)
-  if (!session) return null
-
-  return {
-    token,
-    playerId: session.user.userId,
-    playerName: session.user.name || session.user.userId,
-    playerKind: 'human',
+  const identity = await getSupabaseAuthVerifier()?.verify(token)
+  if (identity) {
+    return {
+      token,
+      playerId: identity.userId,
+      playerName: identity.name || identity.userId,
+      playerKind: 'human',
+      email: identity.email,
+      avatar: identity.avatar,
+      authSource: 'supabase',
+    } satisfies GatewayPrincipal
   }
+  return null
 }
 
 export function authenticateGatewayToken(config: ServerConfig, token: string | undefined) {
@@ -52,6 +60,7 @@ export function authenticateGatewayToken(config: ServerConfig, token: string | u
       playerId: fallback.playerId,
       playerName: fallback.playerName,
       playerKind: fallback.playerKind,
+      authSource: 'static',
     } satisfies GatewayPrincipal
   }
 
@@ -59,11 +68,7 @@ export function authenticateGatewayToken(config: ServerConfig, token: string | u
     return null
   }
 
-  // 优先检查 session token（OAuth 登录用户）
-  const sessionPrincipal = resolveSessionPrincipal(token)
-  if (sessionPrincipal) return sessionPrincipal
-
-  // 回退到静态 token 匹配（dev/agent token）
+  // 静态 token 只用于开发、E2E 和 agent 接入；真人使用异步 Supabase JWT 验证。
   const match = config.authTokens.find((candidate) => candidate.token === token)
   if (!match) {
     return null
@@ -74,6 +79,7 @@ export function authenticateGatewayToken(config: ServerConfig, token: string | u
     playerId: match.playerId,
     playerName: match.playerName,
     playerKind: match.playerKind,
+    authSource: 'static',
   } satisfies GatewayPrincipal
 }
 

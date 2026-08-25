@@ -3,7 +3,7 @@ import { resolveSupabaseAnonKey, resolveSupabaseUrl } from './runtime-config'
 
 let browserClient: SupabaseClient | null | undefined
 
-export function getSupabaseRealtimeClient() {
+export function getSupabaseBrowserClient() {
   if (browserClient !== undefined) {
     return browserClient
   }
@@ -18,11 +18,14 @@ export function getSupabaseRealtimeClient() {
 
   browserClient = createClient(url, anonKey, {
     auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
     },
   })
 
   return browserClient
 }
+
+// Realtime and Auth share one client so refreshed JWTs also reach realtime channels.
+export const getSupabaseRealtimeClient = getSupabaseBrowserClient

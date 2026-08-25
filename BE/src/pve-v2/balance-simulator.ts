@@ -7,6 +7,12 @@ import {
 import { DeterministicPrng } from './prng'
 import { resolvePveWaveCatalog, type PveDifficulty } from './balance-catalog'
 import type { SoldierLevel, SoldierType } from './types'
+import {
+  PVE_STARTING_RICE,
+  resolvePveBossRiceReward,
+  resolvePveLaneClearRiceReward,
+  resolvePvePaidRecruitBaseCost,
+} from './economy'
 
 export interface SoldierStack {
   soldierType: SoldierType
@@ -29,6 +35,9 @@ export interface PureSoldierEconomyRun {
   difficulty: PveDifficulty
   highestClearedWave: number
   recruitBatches: number
+  recruitBatchesAfterWave5: number
+  grossRiceEarned: number
+  riceSpent: number
   remainingRice: number
   finalArmy: SoldierStack[]
 }
@@ -40,6 +49,9 @@ export interface PureSoldierMonteCarloSummary {
   medianHighestClearedWave: number
   p10HighestClearedWave: number
   p90HighestClearedWave: number
+  averageRecruitBatchesMilli: number
+  averageRecruitBatchesAfterWave5Milli: number
+  averageRemainingRiceMilli: number
   histogram: Readonly<Record<number, number>>
 }
 
@@ -152,12 +164,13 @@ function selectBestTen(army: MutableArmy, armor: number): SoldierStack[] {
 function recruitWhileAffordable(
   prng: DeterministicPrng,
   army: MutableArmy,
-  state: { rice: number, recruitBatches: number },
+  state: { rice: number, recruitBatches: number, riceSpent: number },
 ): void {
   while (true) {
-    const cost = 5 + state.recruitBatches * 2
+    const cost = resolvePvePaidRecruitBaseCost(state.recruitBatches)
     if (state.rice < cost) return
     state.rice -= cost
+    state.riceSpent += cost
     const soldierTypes: SoldierType[] = []
     for (let slot = 0; slot < 5; slot += 1) {
       if (!prng.rollBps(CHARACTER_BRANCH_BPS)) {
@@ -183,7 +196,9 @@ export function simulatePureSoldierEconomyRun(
 ): PureSoldierEconomyRun {
   const prng = new DeterministicPrng(seed)
   const army = createEmptyArmy()
-  const economy = { rice: 10, recruitBatches: 0 }
+  const economy = { rice: PVE_STARTING_RICE, recruitBatches: 0, riceSpent: 0 }
+  let grossRiceEarned = PVE_STARTING_RICE
+  let recruitBatchesAfterWave5 = 0
   const waves = resolvePveWaveCatalog(levelId, difficulty).waves
   recruitWhileAffordable(prng, army, economy)
 
@@ -192,8 +207,13 @@ export function simulatePureSoldierEconomyRun(
     const deployed = selectBestTen(army, wave.armor)
     if (!simulateFixedSoldierWave(wave, deployed).passesCapacityWindow) break
     highestClearedWave = wave.waveNumber
-    economy.rice += wave.countPerPlayer + 5 * wave.waveNumber
+    const waveIncome = wave.countPerPlayer
+      + resolvePveLaneClearRiceReward(wave.waveNumber)
+      + resolvePveBossRiceReward(wave.waveNumber)
+    economy.rice += waveIncome
+    grossRiceEarned += waveIncome
     recruitWhileAffordable(prng, army, economy)
+    if (wave.waveNumber === 5) recruitBatchesAfterWave5 = economy.recruitBatches
   }
 
   return {
@@ -202,6 +222,9 @@ export function simulatePureSoldierEconomyRun(
     difficulty,
     highestClearedWave,
     recruitBatches: economy.recruitBatches,
+    recruitBatchesAfterWave5,
+    grossRiceEarned,
+    riceSpent: economy.riceSpent,
     remainingRice: economy.rice,
     finalArmy: armyStacks(army),
   }
@@ -219,9 +242,10 @@ export function runPureSoldierMonteCarlo(
   seedPrefix = 'pve-balance',
 ): PureSoldierMonteCarloSummary {
   if (!Number.isInteger(runs) || runs < 1) throw new Error('runs must be a positive integer')
-  const cleared = Array.from({ length: runs }, (_, index) => (
-    simulatePureSoldierEconomyRun(`${seedPrefix}:${index}`, levelId, difficulty).highestClearedWave
-  )).sort((left, right) => left - right)
+  const results = Array.from({ length: runs }, (_, index) => (
+    simulatePureSoldierEconomyRun(`${seedPrefix}:${index}`, levelId, difficulty)
+  ))
+  const cleared = results.map(result => result.highestClearedWave).sort((left, right) => left - right)
   const histogram: Record<number, number> = {}
   for (const wave of cleared) histogram[wave] = (histogram[wave] ?? 0) + 1
   return {
@@ -231,6 +255,9 @@ export function runPureSoldierMonteCarlo(
     medianHighestClearedWave: percentile(cleared, 0.5),
     p10HighestClearedWave: percentile(cleared, 0.1),
     p90HighestClearedWave: percentile(cleared, 0.9),
+    averageRecruitBatchesMilli: Math.floor(results.reduce((sum, result) => sum + result.recruitBatches, 0) * 1000 / runs),
+    averageRecruitBatchesAfterWave5Milli: Math.floor(results.reduce((sum, result) => sum + result.recruitBatchesAfterWave5, 0) * 1000 / runs),
+    averageRemainingRiceMilli: Math.floor(results.reduce((sum, result) => sum + result.remainingRice, 0) * 1000 / runs),
     histogram,
   }
 }

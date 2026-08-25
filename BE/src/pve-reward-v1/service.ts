@@ -5,7 +5,8 @@ import {
   rollWaveMilestoneWeaponDrops,
   type WeaponRewardAccountState,
 } from '../weapon-v1/rewards'
-import { PveRewardLedger } from './ledger'
+import { MemoryPveRewardStore } from './memory-store'
+import { PveRewardStoreConflictError, type PveRewardStore } from './store'
 import type {
   PveRewardBatchResult,
   PveRewardPlayerContext,
@@ -34,14 +35,20 @@ const outcomeBatchKey = (input: RecordMatchOutcomeInput) => [
 ].join(':')
 
 export class PveRewardService {
-  constructor(readonly ledger = new PveRewardLedger()) {}
+  constructor(readonly store: PveRewardStore = new MemoryPveRewardStore()) {}
 
-  recordWaveMilestone(input: RecordWaveMilestoneInput): PveRewardBatchResult {
+  async recordWaveMilestone(input: RecordWaveMilestoneInput): Promise<PveRewardBatchResult> {
+    this.assertAuthoritativeContext(input)
     const batchKey = milestoneBatchKey(input)
     const fingerprint = stableStringify(input)
-    const replay = this.ledger.readBatch(batchKey, fingerprint)
-    if (replay) return replay
-    const weaponState = this.effectiveWeaponState(input)
+    const replay = await this.store.getBatch(batchKey)
+    if (replay) {
+      if (replay.fingerprint !== fingerprint) throw new PveRewardStoreConflictError(
+        'REWARD_BATCH_CONFLICT', `Reward batch ${batchKey} conflicts with stored facts`,
+      )
+      return { batchKey, duplicate: true, events: replay.events }
+    }
+    const weaponState = await this.effectiveWeaponState(input)
     const dropInput = {
       matchSeed: input.matchSeed,
       stageId: input.stage.stageId,
@@ -82,16 +89,32 @@ export class PveRewardService {
       milestone: input.milestone,
       ...drop,
     }))
-    return this.ledger.recordBatch(batchKey, fingerprint, events)
+    const recorded = await this.store.recordBatch({
+      batchKey, fingerprint, matchId: input.matchId, playerId: input.playerId,
+      combatRulesetVersion: input.combatRulesetVersion, configSnapshot: structuredClone(input.configSnapshot),
+      kind: 'wave_milestone', events, createdAt: new Date().toISOString(),
+    })
+    return { batchKey, duplicate: recorded.duplicate, events: recorded.batch.events }
   }
 
-  recordMatchOutcome(input: RecordMatchOutcomeInput): PveRewardBatchResult {
+  async recordMatchOutcome(input: RecordMatchOutcomeInput): Promise<PveRewardBatchResult> {
+    this.assertAuthoritativeContext(input)
     const batchKey = outcomeBatchKey(input)
     const fingerprint = stableStringify(input)
-    const replay = this.ledger.readBatch(batchKey, fingerprint)
-    if (replay) return replay
+    const replay = await this.store.getBatch(batchKey)
+    if (replay) {
+      if (replay.fingerprint !== fingerprint) throw new PveRewardStoreConflictError(
+        'REWARD_BATCH_CONFLICT', `Reward batch ${batchKey} conflicts with stored facts`,
+      )
+      return { batchKey, duplicate: true, events: replay.events }
+    }
     if (!input.officialVictory || input.stage.difficulty !== 'hard') {
-      return this.ledger.recordBatch(batchKey, fingerprint, [])
+      const recorded = await this.store.recordBatch({
+        batchKey, fingerprint, matchId: input.matchId, playerId: input.playerId,
+        combatRulesetVersion: input.combatRulesetVersion, configSnapshot: structuredClone(input.configSnapshot),
+        kind: 'match_outcome', events: [], createdAt: new Date().toISOString(),
+      })
+      return { batchKey, duplicate: recorded.duplicate, events: recorded.batch.events }
     }
     const drop = rollHardVictoryExclusiveWeaponDrop({
       matchSeed: input.matchSeed,
@@ -100,7 +123,7 @@ export class PveRewardService {
       playerId: input.playerId,
       activatedGeneralIds: input.activatedGeneralIds,
       discoveredGeneralIds: input.discoveredGeneralIds,
-      weaponState: this.effectiveWeaponState(input),
+      weaponState: await this.effectiveWeaponState(input),
     })
     const event: PveWeaponRewardEvent = {
       schemaVersion: 1,
@@ -112,15 +135,44 @@ export class PveRewardService {
       source: 'hard_victory_exclusive_guarantee',
       ...drop,
     }
-    return this.ledger.recordBatch(batchKey, fingerprint, [event])
+    const recorded = await this.store.recordBatch({
+      batchKey, fingerprint, matchId: input.matchId, playerId: input.playerId,
+      combatRulesetVersion: input.combatRulesetVersion, configSnapshot: structuredClone(input.configSnapshot),
+      kind: 'match_outcome', events: [event], createdAt: new Date().toISOString(),
+    })
+    return { batchKey, duplicate: recorded.duplicate, events: recorded.batch.events }
   }
 
-  private effectiveWeaponState(input: PveRewardPlayerContext): WeaponRewardAccountState {
-    const pending = this.ledger.getPlayerFragmentBalances(input.matchId, input.playerId)
+  async freezePlayerRewards(matchId: string, playerId: string) {
+    const batches = await this.store.listPlayerBatches(matchId, playerId)
+    const events = batches.flatMap(batch => batch.events).sort((left, right) => left.eventId.localeCompare(right.eventId))
+    const fragmentBalances: Record<string, number> = {}
+    for (const event of events) fragmentBalances[event.weaponId] = (fragmentBalances[event.weaponId] ?? 0) + event.amount
+    return Object.freeze({
+      matchId,
+      playerId,
+      rewardEventIds: Object.freeze(events.map(event => event.eventId)),
+      fragmentBalances: Object.freeze(fragmentBalances),
+    })
+  }
+
+  private async effectiveWeaponState(input: PveRewardPlayerContext): Promise<WeaponRewardAccountState> {
+    const pending = (await this.freezePlayerRewards(input.matchId, input.playerId)).fragmentBalances
     const fragmentBalances = { ...input.weaponState.fragmentBalances }
     for (const [weaponId, amount] of Object.entries(pending)) {
       fragmentBalances[weaponId] = (fragmentBalances[weaponId] ?? 0) + amount
     }
     return { fragmentBalances, unlockedWeaponIds: input.weaponState.unlockedWeaponIds }
+  }
+
+  private assertAuthoritativeContext(input: PveRewardPlayerContext): void {
+    const snapshot = input.configSnapshot
+    if (snapshot.runtimeKind !== 'pve-v2'
+      || input.combatRulesetVersion !== snapshot.combatRulesetVersion
+      || input.stage.levelId !== snapshot.levelId
+      || input.stage.stageId !== snapshot.stageId
+      || input.stage.difficulty !== snapshot.difficulty) {
+      throw new Error('PVE_REWARD_RULESET_SNAPSHOT_MISMATCH')
+    }
   }
 }

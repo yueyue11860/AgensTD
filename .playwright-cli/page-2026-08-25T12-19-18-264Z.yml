@@ -1,0 +1,110 @@
+- main [ref=e7]:
+  - button "退出" [ref=e9]
+  - generic [ref=e16]:
+    - generic "全局战况" [ref=e17]:
+      - generic [ref=e18]:
+        - generic [ref=e19]: DEFENSE GRID
+        - strong [ref=e20]: 花果山
+        - generic [ref=e21]: 简单
+      - generic [ref=e22]:
+        - generic [ref=e23]:
+          - generic [ref=e29]: 斋饭
+          - strong [ref=e30]: "10"
+        - generic [ref=e31]:
+          - generic [ref=e37]: 人口
+          - strong [ref=e38]: 0/10
+        - generic [ref=e39]:
+          - generic [ref=e45]: 敌军
+          - strong [ref=e46]: "0"
+      - generic [ref=e47]:
+        - generic [ref=e50]: 交战中
+        - strong [ref=e51]: 第 0 / 20 波
+        - generic "战斗音量" [ref=e53]:
+          - button "静音战斗音效" [ref=e54]
+          - slider "战斗音效主音量" [ref=e59]: "45"
+      - generic [ref=e61]:
+        - generic [ref=e62]: BOSS首领尚未现身
+        - strong [ref=e63]: 预计第 5 波
+    - generic [ref=e65]:
+      - complementary [ref=e66]:
+        - button "收起 0/5" [expanded] [ref=e67]:
+          - generic [ref=e68]: 收起
+          - strong [ref=e69]: 0/5
+        - generic [ref=e70]:
+          - region "队友连接状态" [ref=e71]:
+            - generic [ref=e72]:
+              - paragraph [ref=e73]: 联机路况
+              - generic [ref=e74]: 1/1 在线
+            - generic [ref=e76]:
+              - generic [ref=e77]: P1 · 你
+              - strong [ref=e78]: 在线
+          - generic [ref=e79]:
+            - paragraph [ref=e80]: 召唤托盘
+            - generic [ref=e81]:
+              - button "空托盘1" [ref=e82]:
+                - generic [ref=e83]: 空
+              - button "空托盘2" [ref=e84]:
+                - generic [ref=e85]: 空
+              - button "空托盘3" [ref=e86]:
+                - generic [ref=e87]: 空
+              - button "空托盘4" [ref=e88]:
+                - generic [ref=e89]: 空
+              - button "空托盘5" [ref=e90]:
+                - generic [ref=e91]: 空
+            - button "召唤 5 斋饭" [disabled] [ref=e92]:
+              - generic [ref=e98]: 召唤
+              - strong [ref=e99]: 5 斋饭
+            - generic [ref=e101]:
+              - button "备战席空位1" [ref=e102]:
+                - generic [ref=e103]: 空
+              - button "备战席空位2" [ref=e104]:
+                - generic [ref=e105]: 空
+          - generic [ref=e106]:
+            - generic [ref=e108]:
+              - paragraph [ref=e109]: 主动道具
+              - paragraph [ref=e110]: 2 槽 · 服务端确认后才扣除次数
+            - generic [ref=e111]:
+              - button "空 未携带 局外构筑后生效" [disabled] [ref=e112]:
+                - generic [ref=e113]: 空
+                - generic [ref=e114]:
+                  - strong [ref=e115]: 未携带
+                  - generic [ref=e116]: 局外构筑后生效
+              - button "空 未携带 局外构筑后生效" [disabled] [ref=e120]:
+                - generic [ref=e121]: 空
+                - generic [ref=e122]:
+                  - strong [ref=e123]: 未携带
+                  - generic [ref=e124]: 局外构筑后生效
+      - complementary "战场文字摘要" [ref=e128]:
+        - heading "战场摘要" [level=2] [ref=e129]
+        - paragraph [ref=e130]: 第 0 / 20 波，当前敌军 0。
+        - paragraph [ref=e131]: 当前没有已现身首领。
+        - paragraph [ref=e132]: 战场尚未聚焦。
+        - paragraph [ref=e133]: 当前选择：无。
+        - paragraph [ref=e134]: 可执行动作：先选择召唤托盘、备战席或己方棋子；战场聚焦后可用方向键浏览。
+      - region "29×29西游汉字战场" [ref=e135]:
+        - generic [ref=e136]:
+          - application "29×29西游汉字战场，第 0 波。方向键移动格游标，Enter 或空格执行，Escape 取消。" [ref=e137]
+          - group "战场视角控制" [ref=e139]:
+            - button "全阵" [pressed] [ref=e140]
+            - button "聚焦" [ref=e141]
+            - button "缩小战场" [ref=e142]: −
+            - status "战场缩放比例" [ref=e143]: 100%
+            - button "放大战场" [ref=e144]: ＋
+          - paragraph: 滚轮缩放 · 双指缩放平移 · Shift+方向键平移
+      - complementary "情境情报抽屉":
+        - group [ref=e145]:
+          - generic "已激活羁绊 ＋" [ref=e146] [cursor=pointer]:
+            - generic [ref=e147]: 已激活羁绊
+            - text: ＋
+        - group [ref=e148]:
+          - generic "战斗效果 ＋" [ref=e149] [cursor=pointer]:
+            - generic [ref=e150]: 战斗效果
+            - text: ＋
+        - group [ref=e151]:
+          - generic "操作提示 ＋" [ref=e152] [cursor=pointer]:
+            - generic [ref=e153]: 操作提示
+            - text: ＋
+        - group [ref=e616]:
+          - generic "关卡情报 ＋" [ref=e617] [cursor=pointer]:
+            - generic [ref=e618]: 关卡情报
+            - text: ＋

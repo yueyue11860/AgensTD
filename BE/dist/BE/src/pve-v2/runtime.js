@@ -15,6 +15,8 @@ const summon_catalog_1 = require("../core/hero-v1/summon-catalog");
 const synergy_v1_1 = require("../synergy-v1");
 const item_v1_1 = require("../item-v1");
 const weapon_v1_1 = require("../weapon-v1");
+const ruleset_1 = require("./ruleset");
+const economy_1 = require("./economy");
 const TRAY_SIZE = 5;
 const RESERVE_SIZE = 2;
 const POPULATION_CAP = 10;
@@ -117,6 +119,7 @@ class PveGameRuntime {
     balanceProfile;
     waveCatalog;
     eventHistoryLimit;
+    eventObserver;
     players = new Map();
     slotAssignments = new Map();
     processedActions = new Map();
@@ -130,6 +133,7 @@ class PveGameRuntime {
     /** 羁绊效果唯一运行时来源；重配与失活由 reconcile commands 精确替换/移除。 */
     synergyEffects = new synergy_v1_1.SynergyRuntimeProjectionRegistry(synergy_v1_1.GENERAL_SYNERGY_PROFILES);
     bossRuntime;
+    configSnapshot;
     enemies = [];
     statuses = [];
     /** 神将自身 buff 与敌方 debuff 分开存储，避免 self targeting 被误解为敌人状态。 */
@@ -175,7 +179,17 @@ class PveGameRuntime {
         const resolvedBalance = (0, balance_catalog_1.resolvePveWaveCatalog)(options.levelId ?? 1, options.difficulty ?? 'easy');
         this.balanceProfile = resolvedBalance.profile;
         this.waveCatalog = resolvedBalance.waves;
+        this.configSnapshot = (0, ruleset_1.createPveMatchConfigSnapshot)({
+            levelId: options.levelId ?? 1,
+            difficulty: options.difficulty ?? 'easy',
+            balanceProfile: this.balanceProfile,
+            tickRateMs: this.tickRateMs,
+            prepDurationMs: this.prepDurationTicks * this.tickRateMs,
+            maxWaves: this.maxWaves,
+            initialWaveNumber: this.initialWaveNumber,
+        });
         this.eventHistoryLimit = Math.max(20, options.eventHistoryLimit ?? 300);
+        this.eventObserver = options.eventObserver ?? null;
         this.generalCatalog = options.generalCatalog ?? catalog_1.GENERAL_CATALOG;
         this.itemLoadoutSnapshots = structuredClone(options.itemLoadoutSnapshots ?? {});
         this.weaponLoadoutSnapshots = structuredClone(options.weaponLoadoutSnapshots ?? {});
@@ -204,7 +218,7 @@ class PveGameRuntime {
         const player = {
             playerId,
             slot,
-            rice: 10 + (passiveItems?.startingRationsBonus ?? 0),
+            rice: economy_1.PVE_STARTING_RICE + (passiveItems?.startingRationsBonus ?? 0),
             recruitCount: 0,
             populationCap: POPULATION_CAP + (passiveItems?.populationCapBonus ?? 0),
             trayRevision: 0,
@@ -361,6 +375,8 @@ class PveGameRuntime {
             .map((player) => this.playerSnapshot(player));
         return {
             schemaVersion: 2,
+            combatRulesetVersion: this.configSnapshot.combatRulesetVersion,
+            configSnapshot: structuredClone(this.configSnapshot),
             tick: this.currentTick,
             tickRateMs: this.tickRateMs,
             seed: this.seed,
@@ -427,6 +443,136 @@ class PveGameRuntime {
                 data: structuredClone(event.data),
             })),
         };
+    }
+    /**
+     * Authoritative, JSON-compatible checkpoint. recentEvents are intentionally excluded:
+     * recovery continues simulation state but never replays historical presentation/VFX.
+     */
+    exportCheckpoint() {
+        const checkpoint = {
+            schemaVersion: 1,
+            combatRulesetVersion: this.configSnapshot.combatRulesetVersion,
+            configSnapshot: structuredClone(this.configSnapshot),
+            seed: this.seed,
+            rngState: this.prng.snapshot(),
+            players: [...this.players.values()].sort((left, right) => slotOrder(left.slot) - slotOrder(right.slot)).map((player) => ({
+                ...structuredClone(player),
+                board: [...player.board.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => [key, structuredClone(value)]),
+                remainingCharacterTokens: [...player.remainingCharacterTokens.entries()].sort(([left], [right]) => left.localeCompare(right)),
+                clearedWaves: [...player.clearedWaves].sort((left, right) => left - right),
+            })),
+            slotAssignments: [...this.slotAssignments.entries()].sort(([left], [right]) => slotOrder(left) - slotOrder(right)),
+            processedActions: [...this.processedActions.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => [key, structuredClone(value)]),
+            generalFormations: this.generalFormations.exportCheckpoint(),
+            reportedUnsupportedWeaponEffects: [...this.reportedUnsupportedWeaponEffects].sort(),
+            synergies: [...this.synergyByPlayer.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => [key, structuredClone(value)]),
+            bossRuntime: this.bossRuntime.exportCheckpoint(),
+            enemies: this.enemies.map((enemy) => ({
+                ...structuredClone(enemy),
+                generalContributions: [...enemy.generalContributions.entries()].sort(([left], [right]) => left.localeCompare(right))
+                    .map(([key, value]) => [key, structuredClone(value)]),
+            })),
+            statuses: structuredClone(this.statuses),
+            generalStatuses: structuredClone(this.generalStatuses),
+            damageOverTime: structuredClone(this.damageOverTime),
+            summonedUnits: structuredClone(this.summonedUnits),
+            zones: structuredClone(this.zones),
+            effectParameterPatches: [...this.effectParameterPatches.entries()].sort(([left], [right]) => left.localeCompare(right)),
+            pendingCombatActions: structuredClone(this.pendingCombatActions),
+            laneWaves: structuredClone(this.laneWaves),
+            currentTick: this.currentTick,
+            status: this.status,
+            result: this.result ? structuredClone(this.result) : null,
+            currentWaveNumber: this.currentWaveNumber,
+            pendingWaveNumber: this.pendingWaveNumber,
+            wavePhase: this.wavePhase,
+            prepRemainingTicks: this.prepRemainingTicks,
+            playerCountAtStart: this.playerCountAtStart,
+            enemyCapacity: this.enemyCapacity,
+            overloadTicks: this.overloadTicks,
+            pieceSequence: this.pieceSequence,
+            enemySequence: this.enemySequence,
+            eventSequence: this.eventSequence,
+            effectSequence: this.effectSequence,
+        };
+        return structuredClone(checkpoint);
+    }
+    restoreCheckpoint(raw) {
+        const checkpoint = structuredClone(raw);
+        if (checkpoint.schemaVersion !== 1
+            || checkpoint.combatRulesetVersion !== this.configSnapshot.combatRulesetVersion
+            || JSON.stringify(checkpoint.configSnapshot) !== JSON.stringify(this.configSnapshot)) {
+            throw new Error('PVE_CHECKPOINT_RULESET_OR_CONFIG_MISMATCH');
+        }
+        if (!Array.isArray(checkpoint.players) || !Array.isArray(checkpoint.enemies)
+            || !Array.isArray(checkpoint.processedActions) || !Number.isSafeInteger(checkpoint.currentTick)) {
+            throw new Error('PVE_CHECKPOINT_INVALID');
+        }
+        const allPlayerIds = new Set([...this.players.keys(), ...checkpoint.players.map((player) => player.playerId)]);
+        for (const playerId of allPlayerIds)
+            this.synergyEffects.removePlayer(playerId);
+        this.players.clear();
+        for (const stored of checkpoint.players) {
+            const player = {
+                ...structuredClone(stored),
+                board: new Map(stored.board.map(([key, value]) => [key, structuredClone(value)])),
+                remainingCharacterTokens: new Map(stored.remainingCharacterTokens),
+                clearedWaves: new Set(stored.clearedWaves),
+            };
+            this.players.set(player.playerId, player);
+        }
+        this.slotAssignments.clear();
+        for (const [slot, playerId] of checkpoint.slotAssignments)
+            this.slotAssignments.set(slot, playerId);
+        this.processedActions.clear();
+        for (const [key, value] of checkpoint.processedActions)
+            this.processedActions.set(key, structuredClone(value));
+        this.generalFormations.restoreCheckpoint(checkpoint.generalFormations);
+        this.reportedUnsupportedWeaponEffects.clear();
+        for (const key of checkpoint.reportedUnsupportedWeaponEffects)
+            this.reportedUnsupportedWeaponEffects.add(key);
+        this.synergyByPlayer.clear();
+        for (const [playerId, next] of checkpoint.synergies) {
+            const previous = { ownerPlayerId: playerId, activeGeneralIds: [], activeSynergies: [] };
+            const reconciliation = (0, synergy_v1_1.reconcilePlayerSynergies)({ previous, next, definitions: synergy_v1_1.SYNERGY_V1_CATALOG });
+            this.synergyEffects.applyReconcileCommands({ ownerPlayerId: playerId, commands: reconciliation.commands });
+            this.synergyByPlayer.set(playerId, structuredClone(next));
+        }
+        this.bossRuntime.restoreCheckpoint(checkpoint.bossRuntime);
+        this.enemies = checkpoint.enemies.map((enemy) => ({
+            ...structuredClone(enemy),
+            generalContributions: new Map(enemy.generalContributions.map(([key, value]) => [key, structuredClone(value)])),
+        }));
+        this.statuses = structuredClone(checkpoint.statuses);
+        this.generalStatuses = structuredClone(checkpoint.generalStatuses);
+        this.damageOverTime = structuredClone(checkpoint.damageOverTime);
+        this.summonedUnits = structuredClone(checkpoint.summonedUnits);
+        this.zones = structuredClone(checkpoint.zones);
+        this.effectParameterPatches.clear();
+        for (const [key, value] of checkpoint.effectParameterPatches)
+            this.effectParameterPatches.set(key, structuredClone(value));
+        this.pendingCombatActions = structuredClone(checkpoint.pendingCombatActions);
+        this.laneWaves = structuredClone(checkpoint.laneWaves);
+        this.currentTick = checkpoint.currentTick;
+        this.status = checkpoint.status;
+        this.result = checkpoint.result ? structuredClone(checkpoint.result) : null;
+        this.currentWaveNumber = checkpoint.currentWaveNumber;
+        this.pendingWaveNumber = checkpoint.pendingWaveNumber;
+        this.wavePhase = checkpoint.wavePhase;
+        this.prepRemainingTicks = checkpoint.prepRemainingTicks;
+        this.playerCountAtStart = checkpoint.playerCountAtStart;
+        this.enemyCapacity = checkpoint.enemyCapacity;
+        this.overloadTicks = checkpoint.overloadTicks;
+        this.pieceSequence = checkpoint.pieceSequence;
+        this.enemySequence = checkpoint.enemySequence;
+        this.eventSequence = checkpoint.eventSequence;
+        this.effectSequence = checkpoint.effectSequence;
+        this.prng.restore(checkpoint.rngState);
+        this.seed = checkpoint.seed;
+        this.recentEvents.length = 0;
+    }
+    discardPresentationEvents() {
+        this.recentEvents.length = 0;
     }
     /**
      * 未来 Boss/精英怪主动特性的统一门禁。
@@ -1261,7 +1407,7 @@ class PveGameRuntime {
             generalContributions: new Map(),
         };
         this.enemies.push(enemy);
-        this.bossRuntime.registerBoss(enemy, encounter, this.currentTick, (type, data) => this.emit(type, data));
+        this.bossRuntime.registerBoss(enemy, encounter, this.currentTick, (type, data, choreography) => this.emit(type, data, choreography));
         this.emit('ENEMY_SPAWNED', {
             enemyId: enemy.id,
             glyph: enemy.glyph,
@@ -1290,7 +1436,7 @@ class PveGameRuntime {
                 && this.statusMagnitude(enemy.id, 'root') <= 0
                 && this.statusMagnitude(enemy.id, 'suppress') <= 0) {
                 const slow = (0, boss_runtime_1.settleEnemySlowBps)(enemy.entityKind, this.statusMagnitude(enemy.id, 'slow'));
-                const bossMovementRatio = this.bossRuntime.movementRatioBps(enemy, this.bossEnemyViews(), this.currentTick, (type, data) => this.emit(type, data));
+                const bossMovementRatio = this.bossRuntime.movementRatioBps(enemy, this.bossEnemyViews(), this.currentTick, (type, data, choreography) => this.emit(type, data, choreography));
                 this.moveEnemy(enemy, Math.floor(distancePerTick * (10000 - slow) / 10000 * bossMovementRatio / 10000));
             }
             if (enemy.spawnProtected
@@ -1311,7 +1457,7 @@ class PveGameRuntime {
         this.bossRuntime.advance({
             tick: this.currentTick,
             enemies: this.bossEnemyViews(),
-            emit: (type, data) => this.emit(type, data),
+            emit: (type, data, choreography) => this.emit(type, data, choreography),
         });
         for (const enemy of this.enemies) {
             if (enemy.entityKind !== 'boss')
@@ -1327,7 +1473,7 @@ class PveGameRuntime {
         return this.enemies.map((enemy) => enemy);
     }
     bossDamageTakenRatioBps(enemy) {
-        return this.bossRuntime.damageTakenRatioBps(enemy, this.bossEnemyViews(), this.currentTick, (type, data) => this.emit(type, data));
+        return this.bossRuntime.damageTakenRatioBps(enemy, this.bossEnemyViews(), this.currentTick, (type, data, choreography) => this.emit(type, data, choreography));
     }
     settleEnemyControlDurationMs(enemy, requestedDurationMs) {
         if (enemy.entityKind !== 'boss')
@@ -1441,8 +1587,25 @@ class PveGameRuntime {
                 })),
             });
             this.generalFormations.replaceProgress(combatPlan.nextProgress);
+            const targetsByActionId = new Map();
+            for (const action of combatPlan.combatActions) {
+                const targets = targetsByActionId.get(action.actionId) ?? [];
+                for (const targetId of action.targetEnemyIds)
+                    if (!targets.includes(targetId))
+                        targets.push(targetId);
+                if (action.effectType === 'damage') {
+                    for (const target of this.selectHouyiWeaponExtensionTargets(player, action)) {
+                        if (!targets.includes(target.id))
+                            targets.push(target.id);
+                    }
+                }
+                targetsByActionId.set(action.actionId, targets);
+            }
             const emittedCasts = new Set();
             for (const action of combatPlan.combatActions) {
+                const actionId = `${formation.formationId}:${action.actionId}`;
+                const targetIds = targetsByActionId.get(action.actionId) ?? [];
+                const geometry = this.generalActionGeometry(player, formation, progress.level, definition, action, targetIds);
                 if (!emittedCasts.has(action.actionId) && action.actionKind === 'active_skill') {
                     this.emit('GENERAL_SKILL_CAST', {
                         playerId: player.playerId,
@@ -1451,7 +1614,9 @@ class PveGameRuntime {
                         skillId: definition.activeSkill.skillId,
                         skillName: definition.activeSkill.skillName,
                         targetEnemyId: action.primaryTargetEnemyId,
-                    });
+                        targetIds,
+                        actionId,
+                    }, { actionId, targetIds, geometry });
                 }
                 else if (!emittedCasts.has(action.actionId) && action.actionKind === 'basic_attack') {
                     this.emit('GENERAL_BASIC_ATTACK_STARTED', {
@@ -1459,7 +1624,9 @@ class PveGameRuntime {
                         generalId: action.sourceGeneralId,
                         formationId: action.sourceFormationId,
                         targetEnemyId: action.primaryTargetEnemyId,
-                    });
+                        targetIds,
+                        actionId,
+                    }, { actionId, targetIds, geometry });
                 }
                 emittedCasts.add(action.actionId);
                 this.executeGeneralCombatAction(player, formation, progress.level, action);
@@ -1535,12 +1702,7 @@ class PveGameRuntime {
         const hpBefore = target.currentHp;
         target.currentHp = Math.max(0, target.currentHp - resolvedDamage);
         target.lastDamagePlayerId = player.playerId;
-        target.generalContributions.set(`${player.playerId}:${action.sourceGeneralId}`, {
-            ownerPlayerId: player.playerId,
-            generalId: action.sourceGeneralId,
-            category: definition.archetype,
-            lastContributionTick: this.currentTick,
-        });
+        this.recordGeneralContribution(target, player.playerId, action.sourceGeneralId, action.damage.damageType === 'physical' ? 'physical' : 'magic');
         this.emit('DAMAGE_APPLIED', {
             attackerId: formation.formationId,
             playerId: player.playerId,
@@ -1554,6 +1716,11 @@ class PveGameRuntime {
             hpAfter: target.currentHp,
             isCritical,
             isSecondary: false,
+            actionId: `${formation.formationId}:${action.actionId}`,
+        }, {
+            actionId: `${formation.formationId}:${action.actionId}`,
+            targetIds: [target.id],
+            geometry: { kind: 'point', xMilli: target.xMilli, yMilli: target.yMilli },
         });
         if (target.currentHp <= 0)
             this.settleEnemyDeath(target);
@@ -1680,10 +1847,7 @@ class PveGameRuntime {
         if (hasHouyiBow && action.effectType === 'damage' && action.actionKind === 'active_skill' && action.targetIndex === 0
             && action.effectId.includes('houyi_chuanyun')) {
             const primary = this.enemies.find((enemy) => enemy.id === action.targetEnemyId);
-            const extras = this.enemies.filter((enemy) => enemy.lifecycle === 'alive' && this.isEnemyTargetable(enemy)
-                && enemy.id !== action.targetEnemyId)
-                .sort((left, right) => right.pathProgressMilli - left.pathProgressMilli || left.id.localeCompare(right.id))
-                .slice(0, 2);
+            const extras = this.selectHouyiWeaponExtensionTargets(player, action);
             extras.forEach((enemy, index) => {
                 const ratio = index === 0 ? 8000 : 6000;
                 this.executeGeneralCombatAction(player, formation, level, {
@@ -1712,6 +1876,57 @@ class PveGameRuntime {
                 }
             }
         }
+    }
+    /** Must stay shared by choreography and execution so the client never advertises a guessed target. */
+    selectHouyiWeaponExtensionTargets(player, action) {
+        if (action.effectType !== 'damage' || action.actionKind !== 'active_skill' || action.targetIndex !== 0
+            || !action.effectId.includes('houyi_chuanyun')
+            || !this.weaponSources(player.playerId, action.sourceGeneralId)
+                .some((source) => source.weaponId === 'houyi_sun_shooting_bow'))
+            return [];
+        return this.enemies.filter((enemy) => enemy.lifecycle === 'alive' && this.isEnemyTargetable(enemy)
+            && enemy.id !== action.targetEnemyId)
+            .sort((left, right) => right.pathProgressMilli - left.pathProgressMilli || left.id.localeCompare(right.id))
+            .slice(0, 2);
+    }
+    generalActionGeometry(player, formation, level, definition, action, targetIds) {
+        const source = { xMilli: formation.anchorMilli.x, yMilli: formation.anchorMilli.y };
+        const targets = targetIds.map((targetId) => this.enemies.find((enemy) => enemy.id === targetId))
+            .filter((enemy) => Boolean(enemy));
+        const targeting = action.actionKind === 'active_skill' ? definition.activeSkill.targeting
+            : action.actionKind === 'basic_attack' ? definition.basicAttack.targeting : null;
+        const primary = targets.find((target) => target.id === action.primaryTargetEnemyId) ?? targets[0];
+        if (targeting?.scope === 'enemies_in_line_from_caster' && primary) {
+            const rawLength = (0, catalog_1.getGeneralLevelValue)(targeting.lengthMilliCellsByLevel, level);
+            const rawHalfWidth = (0, catalog_1.getGeneralLevelValue)(targeting.halfWidthMilliCellsByLevel, level);
+            const length = Math.max(1, Math.floor(this.resolvePlanningEffectParameter(player.playerId, action.sourceGeneralId, action.sourceFormationId, action.effectId, 'lengthMilliCells', rawLength)));
+            const halfWidth = Math.max(0, Math.floor(this.resolvePlanningEffectParameter(player.playerId, action.sourceGeneralId, action.sourceFormationId, action.effectId, 'halfWidthMilliCells', rawHalfWidth)));
+            const dx = primary.xMilli - source.xMilli;
+            const dy = primary.yMilli - source.yMilli;
+            const magnitude = Math.hypot(dx, dy);
+            if (magnitude > 0)
+                return {
+                    kind: 'corridor',
+                    from: source,
+                    to: {
+                        xMilli: Math.round(source.xMilli + dx / magnitude * length),
+                        yMilli: Math.round(source.yMilli + dy / magnitude * length),
+                    },
+                    halfWidthMilliCells: halfWidth,
+                };
+        }
+        if (targeting?.scope === 'enemies_around_primary' && primary) {
+            const rawRadius = (0, catalog_1.getGeneralLevelValue)(targeting.radiusMilliCellsByLevel, level);
+            const radius = Math.max(0, Math.floor(this.resolvePlanningEffectParameter(player.playerId, action.sourceGeneralId, action.sourceFormationId, action.effectId, 'radiusMilliCells', rawRadius)));
+            return { kind: 'circle', xMilli: primary.xMilli, yMilli: primary.yMilli, radiusMilliCells: radius };
+        }
+        if (action.targetPointMilli && targets.length === 0) {
+            return { kind: 'point', xMilli: action.targetPointMilli.x, yMilli: action.targetPointMilli.y };
+        }
+        return {
+            kind: 'polyline',
+            points: [source, ...targets.map((target) => ({ xMilli: target.xMilli, yMilli: target.yMilli }))],
+        };
     }
     applyWeaponStatus(player, formation, enemy, statusId, magnitude, durationMs, sourceKey) {
         const settledDurationMs = CONTROL_STATUS_IDS.has(statusId)
@@ -1943,8 +2158,13 @@ class PveGameRuntime {
     }
     recordGeneralContribution(enemy, ownerPlayerId, generalId, category) {
         const definition = this.getGeneralDefinition(generalId);
-        enemy.generalContributions.set(`${ownerPlayerId}:${generalId}`, { ownerPlayerId, generalId,
-            category: category ?? definition?.archetype ?? 'physical', lastContributionTick: this.currentTick });
+        const resolvedCategory = category ?? definition?.archetype ?? 'physical';
+        enemy.generalContributions.set(`${ownerPlayerId}:${generalId}:${resolvedCategory}`, {
+            ownerPlayerId,
+            generalId,
+            category: resolvedCategory,
+            lastContributionTick: this.currentTick,
+        });
     }
     expireEffectInstances() {
         const expiredStatuses = this.statuses.filter((entry) => entry.expiresAtTick <= this.currentTick);
@@ -2029,6 +2249,7 @@ class PveGameRuntime {
                 sourceInactivePolicy: action.sourceInactivePolicy,
             };
             this.summonedUnits.push(summon);
+            const actionId = `${formation.formationId}:${action.actionId}:summon:${index}`;
             this.emit('SUMMON_SPAWNED', {
                 summonId: summon.id,
                 summonUnitId: summon.summonUnitId,
@@ -2038,6 +2259,12 @@ class PveGameRuntime {
                 yMilli: summon.yMilli,
                 targetXMilli: action.targetPointMilli?.x ?? null,
                 targetYMilli: action.targetPointMilli?.y ?? null,
+                actionId,
+                targetIds: [summon.id],
+            }, {
+                actionId,
+                targetIds: [summon.id],
+                geometry: { kind: 'point', xMilli: summon.xMilli, yMilli: summon.yMilli },
             });
         }
     }
@@ -2321,7 +2548,7 @@ class PveGameRuntime {
         const hpBefore = target.currentHp;
         target.currentHp = Math.max(0, target.currentHp - finalDamage);
         target.lastDamagePlayerId = ownerPlayerId;
-        this.recordGeneralContribution(target, ownerPlayerId, sourceGeneralId, sourceKind === 'summon' ? 'summon' : undefined);
+        this.recordGeneralContribution(target, ownerPlayerId, sourceGeneralId, sourceKind === 'summon' ? 'summon' : damageType === 'physical' ? 'physical' : 'magic');
         this.emit('DAMAGE_APPLIED', { attackerId: sourceFormationId, playerId: ownerPlayerId, generalId: sourceGeneralId,
             sourceKind, effectId, enemyId: target.id, rawDamage, finalDamage, hpBefore, hpAfter: target.currentHp,
             isCritical: false, isSecondary: false });
@@ -2349,19 +2576,32 @@ class PveGameRuntime {
                 continue;
             }
             const targets = this.freezeAttackTargets(entry, soldier, definition, primary);
+            const actionId = `${soldier.id}:basic:${this.currentTick}`;
+            const targetIds = targets.map((target) => target.id);
             const auraSpeedRatio = this.summonAuraAttackSpeedRatio(player.playerId, entry.x * 1000, entry.y * 1000);
             soldier.nextAttackTick = this.currentTick + Math.max(1, Math.ceil(this.attackIntervalTicks(soldier) * 10000 / Math.max(1, auraSpeedRatio)));
             this.emit('BASIC_ATTACK_STARTED', {
                 attackerId: soldier.id,
                 playerId: player.playerId,
-                targetIds: targets.map((target) => target.id),
+                targetIds,
+                actionId,
+            }, {
+                actionId,
+                targetIds,
+                geometry: {
+                    kind: 'polyline',
+                    points: [
+                        { xMilli: entry.x * 1000, yMilli: entry.y * 1000 },
+                        ...targets.map((target) => ({ xMilli: target.xMilli, yMilli: target.yMilli })),
+                    ],
+                },
             });
             for (let targetIndex = 0; targetIndex < targets.length; targetIndex += 1) {
                 const target = targets[targetIndex];
                 if (target.lifecycle !== 'alive') {
                     continue;
                 }
-                this.applySoldierDamage(player, soldier, definition, target, targetIndex > 0);
+                this.applySoldierDamage(player, soldier, definition, target, targetIndex > 0, actionId);
             }
         }
     }
@@ -2398,12 +2638,12 @@ class PveGameRuntime {
                 const radius = (0, catalogs_1.getSoldierLevelValue)(definition.radiusMilliCellsByLevel, level);
                 return this.distanceSquared(primary.xMilli, primary.yMilli, enemy.xMilli, enemy.yMilli) <= radius * radius;
             }
-            return this.isOnPierceLine(attackerX, attackerY, primary, enemy);
+            return this.isOnPierceLine(attackerX, attackerY, primary, enemy, (0, catalogs_1.getSoldierLevelValue)(definition.radiusMilliCellsByLevel, level));
         });
         candidates.sort((left, right) => this.compareEnemyPriority(left, right));
         return [primary, ...candidates.slice(0, maxTargets - 1)];
     }
-    isOnPierceLine(attackerX, attackerY, primary, candidate) {
+    isOnPierceLine(attackerX, attackerY, primary, candidate, toleranceMilli) {
         const lineX = primary.xMilli - attackerX;
         const lineY = primary.yMilli - attackerY;
         const candidateX = candidate.xMilli - attackerX;
@@ -2417,10 +2657,9 @@ class PveGameRuntime {
             return false;
         }
         const cross = candidateX * lineY - candidateY * lineX;
-        const toleranceMilli = 500;
         return cross * cross <= toleranceMilli * toleranceMilli * lineLengthSquared;
     }
-    applySoldierDamage(player, soldier, definition, target, isSecondary) {
+    applySoldierDamage(player, soldier, definition, target, isSecondary, actionId) {
         if (!this.isEnemyTargetable(target)) {
             return;
         }
@@ -2432,6 +2671,9 @@ class PveGameRuntime {
         const isCritical = this.prng.rollBps((0, catalogs_1.getSoldierLevelValue)(definition.critChanceBpsByLevel, soldier.level));
         if (isCritical) {
             rawDamage = Math.floor(rawDamage * (0, catalogs_1.getSoldierLevelValue)(definition.critDamageBpsByLevel, soldier.level) / 10000);
+        }
+        if (target.entityKind === 'boss') {
+            rawDamage = Math.floor(rawDamage * (0, catalogs_1.getSoldierLevelValue)(definition.bossDamageBpsByLevel, soldier.level) / 10000);
         }
         const finalDamage = Math.max(1, Math.floor(rawDamage * 100 / (100 + Math.max(0, target.armor))
             * this.bossDamageTakenRatioBps(target) / 10000));
@@ -2448,7 +2690,8 @@ class PveGameRuntime {
             hpAfter: target.currentHp,
             isCritical,
             isSecondary,
-        });
+            actionId,
+        }, { actionId, targetIds: [target.id] });
         if (target.currentHp <= 0) {
             this.settleEnemyDeath(target);
         }
@@ -2466,7 +2709,7 @@ class PveGameRuntime {
             entityKind: enemy.entityKind,
         });
         if (enemy.entityKind === 'boss') {
-            this.bossRuntime.handleBossDeath(enemy, this.currentTick, (type, data) => this.emit(type, data));
+            this.bossRuntime.handleBossDeath(enemy, this.currentTick, (type, data, choreography) => this.emit(type, data, choreography));
             this.emit('BOSS_DIED', {
                 enemyId: enemy.id,
                 bossDefinitionId: enemy.bossDefinitionId,
@@ -2476,24 +2719,29 @@ class PveGameRuntime {
                 lastDamagePlayerId: enemy.lastDamagePlayerId,
             });
         }
-        if (!enemy.lastDamagePlayerId) {
-            return;
-        }
-        const killer = this.players.get(enemy.lastDamagePlayerId);
-        if (killer) {
-            killer.rice += enemy.riceReward;
+        const laneOwner = this.players.get(enemy.laneOwnerPlayerId);
+        if (laneOwner) {
+            laneOwner.rice += enemy.riceReward;
             this.emit('RICE_GRANTED', {
-                playerId: killer.playerId,
+                playerId: laneOwner.playerId,
                 enemyId: enemy.id,
                 amount: enemy.riceReward,
-                reason: 'LAST_DAMAGE_KILL',
+                reason: enemy.entityKind === 'boss' ? 'LANE_OWNER_BOSS_DEFEATED' : 'LANE_OWNER_MINION_DEFEATED',
             });
+        }
+        this.recordCrossLaneAssists(enemy);
+        const xpByPlayer = this.settleGeneralExperience(enemy);
+        for (const [playerId, xpPoints] of [...xpByPlayer.entries()].sort(([left], [right]) => left.localeCompare(right))) {
             this.emit('GENERAL_XP_SETTLEMENT_AVAILABLE', {
-                playerId: killer.playerId,
+                playerId,
                 enemyId: enemy.id,
-                xpPoints: this.generalExperienceReward(killer.playerId, enemy.experiencePoints),
+                xpPoints,
             });
-            this.settleGeneralExperience(killer, enemy);
+        }
+        if (enemy.lastDamagePlayerId) {
+            const killer = this.players.get(enemy.lastDamagePlayerId);
+            if (!killer)
+                return;
             for (const formation of this.generalFormations.getActiveFormations(killer.playerId)) {
                 const progress = this.generalFormations.getProgress(killer.playerId, formation.generalId);
                 if (progress)
@@ -2501,56 +2749,82 @@ class PveGameRuntime {
             }
         }
     }
-    settleGeneralExperience(player, enemy) {
+    /**
+     * V2 尚无逐次天兵伤害贡献账本；可靠战绩只记录跨路线尾刀者和近 5 秒神将贡献者。
+     * 它不产生经济，仅作为回放/结算层可消费的协防战绩事件。
+     */
+    recordCrossLaneAssists(enemy) {
         const contributionWindowTicks = Math.ceil(5000 / this.tickRateMs);
-        const weights = { physical: 3, magic: 3, summon: 3, control: 1 };
-        const eligible = [...enemy.generalContributions.values()]
-            .filter((entry) => entry.ownerPlayerId === player.playerId
-            && this.currentTick - entry.lastContributionTick <= contributionWindowTicks
-            && this.generalFormations.getProgress(player.playerId, entry.generalId) !== null)
-            .sort((left, right) => left.generalId.localeCompare(right.generalId));
-        if (eligible.length === 0)
-            return;
-        const rewardPoints = this.generalExperienceReward(player.playerId, enemy.experiencePoints);
-        const totalWeight = eligible.reduce((sum, entry) => sum + weights[entry.category], 0);
-        const allocations = eligible.map((entry) => {
-            const weightedPoints = rewardPoints * weights[entry.category];
-            return {
-                entry,
-                points: Math.floor(weightedPoints / totalWeight),
-                remainder: weightedPoints % totalWeight,
-            };
-        });
-        let unallocated = rewardPoints - allocations.reduce((sum, allocation) => sum + allocation.points, 0);
-        allocations.sort((left, right) => right.remainder - left.remainder
-            || left.entry.generalId.localeCompare(right.entry.generalId));
-        for (const allocation of allocations) {
-            if (unallocated <= 0)
-                break;
-            allocation.points += 1;
-            unallocated -= 1;
+        const generalIdsByPlayer = new Map();
+        for (const entry of enemy.generalContributions.values()) {
+            if (entry.ownerPlayerId === enemy.laneOwnerPlayerId
+                || !this.players.has(entry.ownerPlayerId)
+                || this.currentTick - entry.lastContributionTick > contributionWindowTicks)
+                continue;
+            const generalIds = generalIdsByPlayer.get(entry.ownerPlayerId) ?? new Set();
+            generalIds.add(entry.generalId);
+            generalIdsByPlayer.set(entry.ownerPlayerId, generalIds);
         }
-        for (const allocation of allocations.sort((left, right) => (left.entry.generalId.localeCompare(right.entry.generalId)))) {
-            const previous = this.generalFormations.getProgress(player.playerId, allocation.entry.generalId);
-            const next = this.generalFormations.addExperience(player.playerId, allocation.entry.generalId, allocation.points);
+        if (enemy.lastDamagePlayerId && enemy.lastDamagePlayerId !== enemy.laneOwnerPlayerId
+            && this.players.has(enemy.lastDamagePlayerId) && !generalIdsByPlayer.has(enemy.lastDamagePlayerId)) {
+            generalIdsByPlayer.set(enemy.lastDamagePlayerId, new Set());
+        }
+        for (const [playerId, generalIds] of [...generalIdsByPlayer.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+            this.emit('ASSIST_RECORDED', {
+                playerId,
+                enemyId: enemy.id,
+                laneOwnerPlayerId: enemy.laneOwnerPlayerId,
+                generalIds: [...generalIds].sort(),
+                includedLastDamage: enemy.lastDamagePlayerId === playerId,
+                telemetryScope: 'cross_lane_last_damage_and_recent_general_contributions',
+            });
+        }
+    }
+    settleGeneralExperience(enemy) {
+        const contributionWindowTicks = Math.ceil(5000 / this.tickRateMs);
+        const eligible = [...enemy.generalContributions.entries()]
+            .filter(([, entry]) => this.currentTick - entry.lastContributionTick <= contributionWindowTicks
+            && this.players.has(entry.ownerPlayerId)
+            && this.generalFormations.getProgress(entry.ownerPlayerId, entry.generalId) !== null)
+            .map(([contributionKey, entry]) => ({ contributionKey, ...entry }));
+        const baseAllocations = (0, economy_1.allocatePveBaseXpByContribution)(enemy.experiencePoints, eligible);
+        const byGeneral = new Map();
+        for (const entry of eligible) {
+            const points = baseAllocations.get(entry.contributionKey) ?? 0;
+            if (points <= 0)
+                continue;
+            const key = `${entry.ownerPlayerId}:${entry.generalId}`;
+            const current = byGeneral.get(key);
+            if (current)
+                current.basePoints += points;
+            else
+                byGeneral.set(key, { ownerPlayerId: entry.ownerPlayerId, generalId: entry.generalId, basePoints: points });
+        }
+        const xpByPlayer = new Map();
+        for (const allocation of [...byGeneral.values()].sort((left, right) => (left.ownerPlayerId.localeCompare(right.ownerPlayerId) || left.generalId.localeCompare(right.generalId)))) {
+            const points = this.generalExperienceReward(allocation.ownerPlayerId, allocation.basePoints);
+            const previous = this.generalFormations.getProgress(allocation.ownerPlayerId, allocation.generalId);
+            const next = this.generalFormations.addExperience(allocation.ownerPlayerId, allocation.generalId, points);
             if (!previous || !next)
                 continue;
+            xpByPlayer.set(allocation.ownerPlayerId, (xpByPlayer.get(allocation.ownerPlayerId) ?? 0) + points);
             this.emit('GENERAL_XP_GRANTED', {
-                playerId: player.playerId,
+                playerId: allocation.ownerPlayerId,
                 enemyId: enemy.id,
-                generalId: allocation.entry.generalId,
-                xpPoints: allocation.points,
+                generalId: allocation.generalId,
+                xpPoints: points,
                 experiencePoints: next.experiencePoints,
             });
             if (next.level > previous.level) {
                 this.emit('GENERAL_LEVEL_UP', {
-                    playerId: player.playerId,
-                    generalId: allocation.entry.generalId,
+                    playerId: allocation.ownerPlayerId,
+                    generalId: allocation.generalId,
                     previousLevel: previous.level,
                     level: next.level,
                 });
             }
         }
+        return xpByPlayer;
     }
     generalExperienceReward(playerId, baseExperiencePoints = XP_REWARD_POINTS) {
         const modifiers = this.synergyEffects.query({
@@ -2577,7 +2851,8 @@ class PveGameRuntime {
             if (!owner) {
                 continue;
             }
-            const reward = 5 * lane.waveNumber + (owner.passiveItems?.ownLaneWaveClearRationsBonus ?? 0);
+            const reward = (0, economy_1.resolvePveLaneClearRiceReward)(lane.waveNumber)
+                + (owner.passiveItems?.ownLaneWaveClearRationsBonus ?? 0);
             owner.rice += reward;
             owner.clearedWaves.add(lane.waveNumber);
             this.emit('LANE_WAVE_CLEARED', {
@@ -3080,7 +3355,7 @@ class PveGameRuntime {
         };
     }
     nextRecruitCost(player) {
-        const baseCost = 5 + 2 * player.recruitCount;
+        const baseCost = (0, economy_1.resolvePvePaidRecruitBaseCost)(player.recruitCount);
         return player.passiveItems ? (0, item_v1_1.resolvePaidRecruitCost)(baseCost, player.passiveItems) : baseCost;
     }
     populationUsed(player) {
@@ -3255,14 +3530,21 @@ class PveGameRuntime {
     actionResult(action, ok, code, details) {
         return { ok, code, tick: this.currentTick, actionId: action.actionId, details };
     }
-    emit(type, data) {
+    emit(type, data, choreography) {
         this.eventSequence += 1;
-        this.recentEvents.push({
+        const event = {
             id: `event-${this.eventSequence}`,
             tick: this.currentTick,
             type,
-            data,
-        });
+            data: structuredClone(data),
+            ...(choreography?.actionId ? { actionId: choreography.actionId } : {}),
+            ...(choreography?.targetIds ? { targetIds: [...new Set(choreography.targetIds)] } : {}),
+            ...(choreography?.geometry !== undefined
+                ? { geometry: choreography.geometry === null ? null : structuredClone(choreography.geometry) }
+                : {}),
+        };
+        this.recentEvents.push(event);
+        this.eventObserver?.(structuredClone(event));
         while (this.recentEvents.length > this.eventHistoryLimit) {
             this.recentEvents.shift();
         }

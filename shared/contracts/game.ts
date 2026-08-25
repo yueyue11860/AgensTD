@@ -332,6 +332,10 @@ export interface PveEnemyState extends GridPosition {
     startedAtTick: number
     executeAtTick: number
     targetPlayerIds: string[]
+    /** Optional v1 choreography metadata. Older clients may safely ignore it. */
+    actionId?: string
+    targetIds?: string[]
+    geometry?: CombatTargetGeometry | null
   } | null
   glyph: string
   waveNumber: number
@@ -389,11 +393,56 @@ export interface PveEffectZoneState extends GridPosition {
   expiresAtTick: number
 }
 
+export interface CombatPointMilli {
+  xMilli: number
+  yMilli: number
+}
+
+/** Server-authored cast geometry. Coordinates use the same milli-cell space as PVE entities. */
+export type CombatTargetGeometry =
+  | ({ kind: 'point' } & CombatPointMilli)
+  | ({ kind: 'circle'; radiusMilliCells: number } & CombatPointMilli)
+  | { kind: 'corridor'; from: CombatPointMilli; to: CombatPointMilli; halfWidthMilliCells: number }
+  | { kind: 'polyline'; points: CombatPointMilli[] }
+
 export interface PveCombatEventState {
   id: string
   tick: number
   type: string
   data: Record<string, string | number | boolean | string[] | number[] | null>
+  /** Stable identity of one logical combat action, shared by its cast/hit projections. */
+  actionId?: string
+  /** Authoritative, ordered entity ids affected by this action. */
+  targetIds?: string[]
+  /** Authoritative cast-time geometry; clients must not infer missing areas. */
+  geometry?: CombatTargetGeometry | null
+}
+
+export const COMBAT_PRESENTATION_VERSION = 1 as const
+
+export interface SequencedCombatEvent extends PveCombatEventState {
+  /** Match-scoped, stable and strictly increasing presentation cursor. */
+  seq: number
+}
+
+export interface CombatEventBatch {
+  matchId: string
+  presentationVersion: typeof COMBAT_PRESENTATION_VERSION
+  fromSeq: number
+  toSeq: number
+  events: SequencedCombatEvent[]
+}
+
+export interface CombatEventAck {
+  matchId: string
+  presentationVersion: typeof COMBAT_PRESENTATION_VERSION
+  ackSeq: number
+}
+
+export interface CombatEventReplayRequest {
+  matchId: string
+  presentationVersion: typeof COMBAT_PRESENTATION_VERSION
+  fromSeq: number
 }
 
 export interface PvePlayerState {
@@ -444,6 +493,22 @@ export interface PveLaneWaveState {
 
 export interface PveMatchState {
   schemaVersion: 2
+  combatRulesetVersion: 'pve-v2.3.0'
+  configSnapshot: {
+    schemaVersion: 1
+    runtimeKind: 'pve-v2'
+    combatRulesetVersion: 'pve-v2.3.0'
+    stageCatalogRevision: 'pve-stage-2026-08-25-v1'
+    balanceCatalogRevision: 'pve-balance-2026-08-25-v3'
+    stageId: string
+    levelId: number
+    difficulty: 'easy' | 'normal' | 'hard'
+    balanceProfileId: string
+    tickRateMs: number
+    prepDurationMs: number
+    maxWaves: number
+    initialWaveNumber: number
+  }
   phase: 'waiting' | 'running' | 'finished'
   tick: number
   players: PvePlayerState[]
@@ -464,6 +529,33 @@ export interface PveMatchState {
 export interface EntityDelta<T extends { id: string }> {
   upsert: T[]
   remove: string[]
+}
+
+export interface PveCollectionDelta<T> {
+  upsert: T[]
+  remove: string[]
+}
+
+/**
+ * High-frequency PVE delta. Combat events intentionally travel on COMBAT_EVENT_BATCH,
+ * independently from authoritative state revision ordering.
+ */
+export interface PveMatchStatePatch {
+  baseTick: number
+  tick: number
+  phase: PveMatchState['phase']
+  currentWave: number
+  maxWaves: number
+  enemyCount: number
+  maxCapacity: number
+  overloadCountdownSec: number
+  playerDelta?: PveCollectionDelta<PvePlayerState>
+  boardPieceDelta?: PveCollectionDelta<PveBoardPieceState>
+  pveEnemyDelta?: PveCollectionDelta<PveEnemyState>
+  statusDelta?: PveCollectionDelta<PveEnemyStatusState>
+  summonedUnitDelta?: PveCollectionDelta<PveSummonedUnitState>
+  zoneDelta?: PveCollectionDelta<PveEffectZoneState>
+  laneWaves?: PveLaneWaveState[]
 }
 
 export interface GameUiState {
@@ -539,18 +631,27 @@ export interface GameStatePatch {
   updatedAt?: GameState['updatedAt']
   map?: GameState['map']
   pve?: GameState['pve']
+  pvePatch?: PveMatchStatePatch
 }
 
 export interface FullTickEnvelope {
   mode: 'full'
   gameState: GameState
   sentAt: number
+  /** Optional v2 sync metadata; omitted for legacy peers. */
+  revision?: number
+  presentationVersion?: typeof COMBAT_PRESENTATION_VERSION
+  eventSeq?: number
+  eventsDetached?: boolean
 }
 
 export interface PatchTickEnvelope {
   mode: 'patch'
   patch: GameStatePatch
   sentAt: number
+  revision?: number
+  baseRevision?: number
+  eventsDetached?: boolean
 }
 
 export interface CheckpointTickEnvelope {
@@ -558,6 +659,9 @@ export interface CheckpointTickEnvelope {
   mode: 'checkpoint'
   patch: GameStatePatch
   sentAt: number
+  revision?: number
+  baseRevision?: number
+  eventsDetached?: boolean
 }
 
 export type TickEnvelope = FullTickEnvelope | PatchTickEnvelope | CheckpointTickEnvelope
