@@ -39,6 +39,15 @@ export {
 export { runPveV2SmokeChecks } from './smoke'
 export { runPveBalanceSmokeChecks } from './balance-smoke'
 export {
+  BOSS_RUNTIME_SCHEMA_VERSION,
+  BossCombatRuntimeV1,
+  isLaneWaveSpawningComplete,
+  nextLaneSpawnEntityKind,
+  settleBossControlDurationMs,
+  settleEnemySlowBps,
+} from './boss-runtime'
+export { runBossRuntimeSmokeChecks } from './boss-runtime-smoke'
+export {
   runPureSoldierMonteCarlo,
   simulateFixedSoldierWave,
   simulatePureSoldierEconomyRun,
@@ -51,6 +60,8 @@ export type {
 } from './balance-simulator'
 export type {
   PveGameRuntimeOptions,
+  PveEnemySnapshot,
+  PveBossActiveCastSnapshot,
   PveLaneRoute,
   PveLaneSlot,
   PvePiece,

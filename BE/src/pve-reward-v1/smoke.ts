@@ -90,11 +90,30 @@ function checkConflictsAndPlayerIsolation(): void {
   assert.equal(new Set(eventIds).size, 4)
 }
 
+function checkBossFragmentBonus(): void {
+  const service = new PveRewardService()
+  const input: RecordWaveMilestoneInput = {
+    ...milestoneInput('boss-bonus', 'p1', 5),
+    bossFragmentBonus: {
+      chanceBps: 10_000,
+      extraCount: 1,
+      maxExtraPerBoss: 1,
+      qualityPolicy: 'same_quality_random_fragment',
+    },
+  }
+  const first = service.recordWaveMilestone(input)
+  assert.equal(first.events.length, 2)
+  assert.equal(first.events[1].source, 'boss_fragment_bonus')
+  assert.equal(first.events[1].quality, first.events[0].quality)
+  assert.deepEqual(service.recordWaveMilestone(input).events, first.events)
+}
+
 export function runPveRewardV1SmokeChecks(): { checks: string[] } {
   checkMilestoneIdempotencyAndFreeze()
   checkNoGuaranteeWithoutHardVictory()
   checkConflictsAndPlayerIsolation()
-  return { checks: ['milestone-idempotency', 'hard-victory-exclusive', 'failure-no-guarantee', 'player-isolation'] }
+  checkBossFragmentBonus()
+  return { checks: ['milestone-idempotency', 'hard-victory-exclusive', 'failure-no-guarantee', 'player-isolation', 'boss-fragment-bonus'] }
 }
 
 if (require.main === module) process.stdout.write(`${JSON.stringify(runPveRewardV1SmokeChecks())}\n`)

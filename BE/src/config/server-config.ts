@@ -26,6 +26,8 @@ export interface ServerConfig {
   replayMaxActions: number
   persistenceFlushEveryTicks: number
   verboseGameLogs: boolean
+  /** 仅本地/测试验收使用；生产环境始终强制为 1。 */
+  pveInitialWaveNumber: number
   supabaseUrl: string | null
   supabaseServiceRoleKey: string | null
   oauthClientId: string
@@ -106,6 +108,9 @@ export function createServerConfig(): ServerConfig {
     replayMaxActions: readNumber('REPLAY_MAX_ACTIONS', 500),
     persistenceFlushEveryTicks: Math.max(1, Math.round(readNumber('PERSISTENCE_FLUSH_EVERY_TICKS', 50))),
     verboseGameLogs: readBoolean('VERBOSE_GAME_LOGS', process.env.NODE_ENV !== 'production'),
+    pveInitialWaveNumber: process.env.NODE_ENV === 'production'
+      ? 1
+      : Math.min(20, Math.max(1, Math.trunc(readNumber('PVE_INITIAL_WAVE', 1)))),
     supabaseUrl: readString('SUPABASE_URL'),
     supabaseServiceRoleKey: readString('SUPABASE_SERVICE_ROLE_KEY'),
     oauthClientId: process.env.OAUTH_CLIENT_ID ?? '',

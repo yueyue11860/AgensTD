@@ -62,6 +62,9 @@ function createServerConfig() {
         replayMaxActions: readNumber('REPLAY_MAX_ACTIONS', 500),
         persistenceFlushEveryTicks: Math.max(1, Math.round(readNumber('PERSISTENCE_FLUSH_EVERY_TICKS', 50))),
         verboseGameLogs: readBoolean('VERBOSE_GAME_LOGS', process.env.NODE_ENV !== 'production'),
+        pveInitialWaveNumber: process.env.NODE_ENV === 'production'
+            ? 1
+            : Math.min(20, Math.max(1, Math.trunc(readNumber('PVE_INITIAL_WAVE', 1)))),
         supabaseUrl: readString('SUPABASE_URL'),
         supabaseServiceRoleKey: readString('SUPABASE_SERVICE_ROLE_KEY'),
         oauthClientId: process.env.OAUTH_CLIENT_ID ?? '',

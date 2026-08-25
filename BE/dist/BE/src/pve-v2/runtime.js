@@ -3,8 +3,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PveGameRuntime = exports.PVE_MIN_LANE_SPAWN_INTERVAL_MS = exports.PVE_WAVE_PREP_DURATION_MS = void 0;
 exports.resolvePveLaneSpawnIntervalMs = resolvePveLaneSpawnIntervalMs;
 const catalogs_1 = require("./catalogs");
+const balance_catalog_1 = require("./balance-catalog");
 const arena_1 = require("./arena");
 const prng_1 = require("./prng");
+const boss_catalog_1 = require("./boss-catalog");
+const boss_runtime_1 = require("./boss-runtime");
 const catalog_1 = require("../core/hero-v1/catalog");
 const combat_engine_1 = require("../core/hero-v1/combat-engine");
 const formation_manager_1 = require("../core/hero-v1/formation-manager");
@@ -93,6 +96,11 @@ function validateRuntimeOptions(options) {
     if (!Number.isInteger(options.maxWaves ?? 20) || (options.maxWaves ?? 20) < 1 || (options.maxWaves ?? 20) > 20) {
         throw new Error('maxWaves must be an integer between 1 and 20');
     }
+    if (!Number.isInteger(options.initialWaveNumber ?? 1)
+        || (options.initialWaveNumber ?? 1) < 1
+        || (options.initialWaveNumber ?? 1) > (options.maxWaves ?? 20)) {
+        throw new Error('initialWaveNumber must be between 1 and maxWaves');
+    }
 }
 class PveGameRuntime {
     tickRateMs;
@@ -100,10 +108,14 @@ class PveGameRuntime {
     prng;
     prepDurationTicks;
     maxWaves;
+    initialWaveNumber;
     laneRoutes;
     isDeployableCell;
     initialCharacterTokens;
     waveGlyphPools;
+    /** 本局冻结后的数值表，不会随账户解锁或配置热更改变。 */
+    balanceProfile;
+    waveCatalog;
     eventHistoryLimit;
     players = new Map();
     slotAssignments = new Map();
@@ -117,6 +129,7 @@ class PveGameRuntime {
     synergyByPlayer = new Map();
     /** 羁绊效果唯一运行时来源；重配与失活由 reconcile commands 精确替换/移除。 */
     synergyEffects = new synergy_v1_1.SynergyRuntimeProjectionRegistry(synergy_v1_1.GENERAL_SYNERGY_PROFILES);
+    bossRuntime;
     enemies = [];
     statuses = [];
     /** 神将自身 buff 与敌方 debuff 分开存储，避免 self targeting 被误解为敌人状态。 */
@@ -147,21 +160,27 @@ class PveGameRuntime {
     effectSequence = 0;
     constructor(options) {
         (0, catalogs_1.validatePveV2Catalogs)();
+        (0, balance_catalog_1.validatePveBalanceCatalog)();
         validateRuntimeOptions(options);
         this.tickRateMs = options.tickRateMs ?? 100;
         this.seed = String(options.seed);
         this.prng = new prng_1.DeterministicPrng(options.seed);
         this.prepDurationTicks = Math.ceil((options.prepDurationMs ?? exports.PVE_WAVE_PREP_DURATION_MS) / this.tickRateMs);
         this.maxWaves = options.maxWaves ?? 20;
+        this.initialWaveNumber = options.initialWaveNumber ?? 1;
         this.laneRoutes = (0, arena_1.createPveLaneRoutes)(options.laneRoutes);
         this.isDeployableCell = options.isDeployableCell ?? arena_1.isDefaultDeployableCell;
         this.initialCharacterTokens = sanitizeCharacterTokens(options.characterTokens);
         this.waveGlyphPools = sanitizeWaveGlyphPools(options.waveGlyphPools, this.maxWaves);
+        const resolvedBalance = (0, balance_catalog_1.resolvePveWaveCatalog)(options.levelId ?? 1, options.difficulty ?? 'easy');
+        this.balanceProfile = resolvedBalance.profile;
+        this.waveCatalog = resolvedBalance.waves;
         this.eventHistoryLimit = Math.max(20, options.eventHistoryLimit ?? 300);
         this.generalCatalog = options.generalCatalog ?? catalog_1.GENERAL_CATALOG;
         this.itemLoadoutSnapshots = structuredClone(options.itemLoadoutSnapshots ?? {});
         this.weaponLoadoutSnapshots = structuredClone(options.weaponLoadoutSnapshots ?? {});
         this.generalFormations = new formation_manager_1.GeneralFormationManager(this.generalCatalog);
+        this.bossRuntime = new boss_runtime_1.BossCombatRuntimeV1(this.tickRateMs);
     }
     registerPlayer(playerId, slot) {
         if (this.status !== 'waiting') {
@@ -237,11 +256,14 @@ class PveGameRuntime {
         this.status = 'running';
         this.playerCountAtStart = this.players.size;
         this.enemyCapacity = this.playerCountAtStart * ENEMY_CAPACITY_PER_PLAYER;
-        this.prepareWave(1);
+        this.prepareWave(this.initialWaveNumber);
         this.emit('MATCH_STARTED', {
             playerCount: this.playerCountAtStart,
             enemyCapacity: this.enemyCapacity,
             seed: this.seed,
+            levelId: this.balanceProfile.levelId,
+            difficulty: this.balanceProfile.difficulty,
+            balanceProfileId: this.balanceProfile.profileId,
         });
         if (this.prepRemainingTicks === 0) {
             this.beginPreparedWave();
@@ -317,6 +339,7 @@ class PveGameRuntime {
         }
         this.spawnDueEnemies();
         this.expireEffectInstances();
+        this.advanceBossSkills();
         this.resolvePendingCombatActions();
         this.moveEnemies();
         this.resolveDamageOverTime();
@@ -344,6 +367,13 @@ class PveGameRuntime {
             rngState: this.prng.snapshot(),
             status: this.status,
             result: this.result ? { ...this.result } : null,
+            balance: {
+                profileId: this.balanceProfile.profileId,
+                levelId: this.balanceProfile.levelId,
+                difficulty: this.balanceProfile.difficulty,
+                enemyHpMultiplierBps: this.balanceProfile.enemyHpMultiplierBps,
+                enemyDefenseAdd: this.balanceProfile.enemyDefenseAdd,
+            },
             playerCountAtStart: this.playerCountAtStart,
             enemyCapacity: this.enemyCapacity,
             overloadTicks: this.overloadTicks,
@@ -363,7 +393,12 @@ class PveGameRuntime {
                     slot: lane.slot,
                     spawnedCount: lane.spawnedCount,
                     totalCount: lane.totalCount,
-                    cleared: lane.spawnedCount >= lane.totalCount && !this.hasAliveLaneEnemy(lane),
+                    bossRequired: lane.bossEncounter !== null,
+                    bossSpawned: lane.bossSpawned,
+                    bossEnemyId: lane.bossEnemyId,
+                    cleared: lane.spawnedCount >= lane.totalCount
+                        && (!lane.bossEncounter || lane.bossSpawned || lane.retired)
+                        && !this.hasAliveLaneEnemy(lane),
                     clearRewardGranted: lane.clearRewardGranted,
                     retired: lane.retired,
                 })),
@@ -373,7 +408,7 @@ class PveGameRuntime {
                 .filter((enemy) => enemy.lifecycle === 'alive')
                 .slice()
                 .sort((left, right) => left.spawnSequence - right.spawnSequence)
-                .map(({ lifecycle: _lifecycle, generalContributions: _generalContributions, ...enemy }) => ({ ...enemy })),
+                .map(({ lifecycle: _lifecycle, generalContributions: _generalContributions, riceReward: _riceReward, experiencePoints: _experiencePoints, ...enemy }) => ({ ...enemy })),
             statuses: this.statuses
                 .slice()
                 .sort((left, right) => left.instanceId.localeCompare(right.instanceId))
@@ -386,6 +421,7 @@ class PveGameRuntime {
                 .slice()
                 .sort((left, right) => left.id.localeCompare(right.id))
                 .map(({ tickIntervalTicks: _interval, tickEffects: _effects, ...zone }) => ({ ...zone })),
+            bossRuntime: this.bossRuntime.snapshot(),
             recentEvents: this.recentEvents.map((event) => ({
                 ...event,
                 data: structuredClone(event.data),
@@ -606,7 +642,9 @@ class PveGameRuntime {
                         continue;
                     const ratio = this.enemyTags(enemy).includes('boss') ? effect.bossCurrentHpRatioBps : effect.normalCurrentHpRatioBps;
                     const hpBefore = enemy.currentHp;
-                    enemy.currentHp = Math.max(effect.minimumRemainingHp, enemy.currentHp - Math.floor(enemy.currentHp * ratio / 10000));
+                    const requestedDamage = Math.floor(enemy.currentHp * ratio / 10000);
+                    const resolvedDamage = Math.floor(requestedDamage * this.bossDamageTakenRatioBps(enemy) / 10000);
+                    enemy.currentHp = Math.max(effect.minimumRemainingHp, enemy.currentHp - resolvedDamage);
                     this.emit('DAMAGE_APPLIED', { enemyId: enemy.id, playerId: player.playerId, generalId: 'active_item',
                         effectId: effect.effectId, damage: hpBefore - enemy.currentHp, hpBefore, hpAfter: enemy.currentHp,
                         damageType: 'true', actionKind: 'active_item', isCritical: false, isSecondary: false });
@@ -618,7 +656,10 @@ class PveGameRuntime {
                         || this.distanceSquared(target.xMilli, target.yMilli, enemy.xMilli, enemy.yMilli) > effect.radiusMilliCells ** 2)
                         continue;
                     this.effectSequence += 1;
-                    const durationMs = this.enemyTags(enemy).includes('boss') ? effect.bossBaseDurationMs : effect.normalDurationMs;
+                    const baseDurationMs = this.enemyTags(enemy).includes('boss') ? effect.bossBaseDurationMs : effect.normalDurationMs;
+                    const durationMs = CONTROL_STATUS_IDS.has(effect.statusId)
+                        ? this.settleEnemyControlDurationMs(enemy, baseDurationMs)
+                        : baseDurationMs;
                     this.statuses.push({ instanceId: `status-${this.effectSequence}`, enemyId: enemy.id,
                         sourceGeneralId: 'active_item', ownerPlayerId: player.playerId, statusId: effect.statusId,
                         stackGroup: `${sourceKey}:${effect.statusId}`, magnitude: effect.magnitudeBps, stacks: 1,
@@ -1072,6 +1113,9 @@ class PveGameRuntime {
             totalCount: definition.countPerPlayer,
             nextSpawnTick: this.currentTick,
             lastSpawnedEnemyId: null,
+            bossEncounter: (0, boss_catalog_1.resolveBossEncounter)(this.balanceProfile.levelId, this.balanceProfile.difficulty, this.currentWaveNumber),
+            bossSpawned: false,
+            bossEnemyId: null,
             clearRewardGranted: false,
             retired: false,
         }));
@@ -1080,6 +1124,7 @@ class PveGameRuntime {
             waveNumber: this.currentWaveNumber,
             laneCount: nextLaneWaves.length,
             countPerLane: definition.countPerPlayer,
+            bossPerLane: nextLaneWaves[0]?.bossEncounter ? 1 : 0,
         });
     }
     spawnDueEnemies() {
@@ -1093,12 +1138,30 @@ class PveGameRuntime {
         const intervalTicks = Math.max(1, Math.ceil(resolvePveLaneSpawnIntervalMs(definition.spawnIntervalMs) / this.tickRateMs));
         const currentLanes = this.currentLaneWaves();
         for (const lane of currentLanes) {
-            if (lane.spawnedCount >= lane.totalCount
+            if ((0, boss_runtime_1.nextLaneSpawnEntityKind)({
+                ordinarySpawnedCount: lane.spawnedCount,
+                ordinaryTotalCount: lane.totalCount,
+                bossRequired: lane.bossEncounter !== null,
+                bossSpawned: lane.bossSpawned,
+            }) === null
                 || this.currentTick < lane.nextSpawnTick
                 || !this.hasPreviousSpawnFullyExited(lane))
                 continue;
-            const enemy = this.spawnEnemy(lane, definition);
-            lane.spawnedCount += 1;
+            const spawnBoss = (0, boss_runtime_1.nextLaneSpawnEntityKind)({
+                ordinarySpawnedCount: lane.spawnedCount,
+                ordinaryTotalCount: lane.totalCount,
+                bossRequired: lane.bossEncounter !== null,
+                bossSpawned: lane.bossSpawned,
+            }) === 'boss';
+            const enemy = spawnBoss
+                ? this.spawnBoss(lane, lane.bossEncounter)
+                : this.spawnEnemy(lane, definition);
+            if (spawnBoss) {
+                lane.bossSpawned = true;
+                lane.bossEnemyId = enemy.id;
+            }
+            else
+                lane.spawnedCount += 1;
             lane.lastSpawnedEnemyId = enemy.id;
             // 以实际生成 Tick 为基准，禁止因历史积压在同一 Tick 连续补刷多个单位。
             // 下一只还必须同时通过 hasPreviousSpawnFullyExited 空间门：
@@ -1136,10 +1199,19 @@ class PveGameRuntime {
             magicResistance: definition.magicResistance,
             moveSpeedMilliCellsPerSecond: definition.moveSpeedMilliCellsPerSecond,
             lastDamagePlayerId: null,
+            entityKind: 'ordinary_minion',
+            bossDefinitionId: null,
+            bossName: null,
+            controlResistanceBps: 0,
+            controlDurationCapMs: 0,
+            bossPhase: 0,
+            activeCast: null,
             // 这是空间入场锁，不是护盾或定时无敌；整个身体离开中央出生方格后解除。
             spawnProtected: true,
             invulnerable: false,
             lifecycle: 'alive',
+            riceReward: definition.riceReward,
+            experiencePoints: definition.xpRewardPoints,
             generalContributions: new Map(),
         };
         this.enemies.push(enemy);
@@ -1147,6 +1219,62 @@ class PveGameRuntime {
             enemyId: enemy.id,
             glyph,
             waveNumber: definition.waveNumber,
+            laneOwnerPlayerId: lane.playerId,
+            laneSlot: lane.slot,
+        });
+        return enemy;
+    }
+    spawnBoss(lane, encounter) {
+        const route = this.laneRoutes[lane.slot];
+        const spawn = route.waypoints[0];
+        this.enemySequence += 1;
+        const enemy = {
+            id: `enemy-${this.enemySequence}`,
+            glyph: encounter.definition.glyph,
+            waveNumber: encounter.waveNumber,
+            laneOwnerPlayerId: lane.playerId,
+            laneSlot: lane.slot,
+            spawnSequence: this.enemySequence,
+            xMilli: spawn.x * 1000,
+            yMilli: spawn.y * 1000,
+            routeWaypointIndex: 0,
+            lapCount: 0,
+            pathProgressMilli: 0,
+            currentHp: encounter.stats.maxHp,
+            maxHp: encounter.stats.maxHp,
+            armor: encounter.stats.armor,
+            magicResistance: encounter.stats.magicResistance,
+            moveSpeedMilliCellsPerSecond: encounter.stats.moveSpeedMilliCellsPerSecond,
+            lastDamagePlayerId: null,
+            entityKind: 'boss',
+            bossDefinitionId: encounter.definition.bossDefinitionId,
+            bossName: encounter.definition.displayName,
+            controlResistanceBps: encounter.stats.controlResistanceBps,
+            controlDurationCapMs: encounter.stats.maxSingleControlDurationMs,
+            bossPhase: 1,
+            activeCast: null,
+            spawnProtected: true,
+            invulnerable: false,
+            lifecycle: 'alive',
+            riceReward: encounter.rewardProfile.rice,
+            experiencePoints: encounter.rewardProfile.experienceMilli,
+            generalContributions: new Map(),
+        };
+        this.enemies.push(enemy);
+        this.bossRuntime.registerBoss(enemy, encounter, this.currentTick, (type, data) => this.emit(type, data));
+        this.emit('ENEMY_SPAWNED', {
+            enemyId: enemy.id,
+            glyph: enemy.glyph,
+            entityKind: enemy.entityKind,
+            waveNumber: enemy.waveNumber,
+            laneOwnerPlayerId: lane.playerId,
+            laneSlot: lane.slot,
+        });
+        this.emit('BOSS_SPAWNED', {
+            enemyId: enemy.id,
+            bossDefinitionId: enemy.bossDefinitionId,
+            bossName: enemy.bossName,
+            waveNumber: enemy.waveNumber,
             laneOwnerPlayerId: lane.playerId,
             laneSlot: lane.slot,
         });
@@ -1161,8 +1289,9 @@ class PveGameRuntime {
             if (this.statusMagnitude(enemy.id, 'stun') <= 0
                 && this.statusMagnitude(enemy.id, 'root') <= 0
                 && this.statusMagnitude(enemy.id, 'suppress') <= 0) {
-                const slow = Math.min(8000, this.statusMagnitude(enemy.id, 'slow'));
-                this.moveEnemy(enemy, Math.floor(distancePerTick * (10000 - slow) / 10000));
+                const slow = (0, boss_runtime_1.settleEnemySlowBps)(enemy.entityKind, this.statusMagnitude(enemy.id, 'slow'));
+                const bossMovementRatio = this.bossRuntime.movementRatioBps(enemy, this.bossEnemyViews(), this.currentTick, (type, data) => this.emit(type, data));
+                this.moveEnemy(enemy, Math.floor(distancePerTick * (10000 - slow) / 10000 * bossMovementRatio / 10000));
             }
             if (enemy.spawnProtected
                 && (0, arena_1.hasEnemyBodyFullyExitedPveSpawnSquareMilli)(enemy.xMilli, enemy.yMilli)) {
@@ -1177,6 +1306,33 @@ class PveGameRuntime {
                 });
             }
         }
+    }
+    advanceBossSkills() {
+        this.bossRuntime.advance({
+            tick: this.currentTick,
+            enemies: this.bossEnemyViews(),
+            emit: (type, data) => this.emit(type, data),
+        });
+        for (const enemy of this.enemies) {
+            if (enemy.entityKind !== 'boss')
+                continue;
+            const projection = this.bossRuntime.projectEnemy(enemy.id);
+            if (projection) {
+                enemy.bossPhase = projection.phase;
+                enemy.activeCast = projection.activeCast;
+            }
+        }
+    }
+    bossEnemyViews() {
+        return this.enemies.map((enemy) => enemy);
+    }
+    bossDamageTakenRatioBps(enemy) {
+        return this.bossRuntime.damageTakenRatioBps(enemy, this.bossEnemyViews(), this.currentTick, (type, data) => this.emit(type, data));
+    }
+    settleEnemyControlDurationMs(enemy, requestedDurationMs) {
+        if (enemy.entityKind !== 'boss')
+            return Math.max(0, requestedDurationMs);
+        return (0, boss_runtime_1.settleBossControlDurationMs)(requestedDurationMs, enemy.controlResistanceBps, enemy.controlDurationCapMs);
     }
     moveEnemy(enemy, requestedDistance) {
         const route = this.laneRoutes[enemy.laneSlot];
@@ -1374,7 +1530,8 @@ class PveGameRuntime {
         const defense = action.damage.damageType === 'physical' ? physicalDefense : target.magicResistance;
         const finalDamage = Math.max(1, Math.floor(rawDamage * 100 / (100 + Math.max(0, defense))));
         const vulnerable = this.damageVulnerabilityMagnitude(target.id, action.actionKind, action.damage.damageType);
-        const resolvedDamage = Math.max(1, Math.floor(finalDamage * (10000 + vulnerable) / 10000));
+        const resolvedDamage = Math.max(1, Math.floor(finalDamage * (10000 + vulnerable) / 10000
+            * this.bossDamageTakenRatioBps(target) / 10000));
         const hpBefore = target.currentHp;
         target.currentHp = Math.max(0, target.currentHp - resolvedDamage);
         target.lastDamagePlayerId = player.playerId;
@@ -1557,13 +1714,16 @@ class PveGameRuntime {
         }
     }
     applyWeaponStatus(player, formation, enemy, statusId, magnitude, durationMs, sourceKey) {
+        const settledDurationMs = CONTROL_STATUS_IDS.has(statusId)
+            ? this.settleEnemyControlDurationMs(enemy, durationMs)
+            : durationMs;
         this.effectSequence += 1;
         this.statuses.push({ instanceId: `status-${this.effectSequence}`, enemyId: enemy.id,
             sourceGeneralId: formation.generalId, ownerPlayerId: player.playerId, statusId,
             stackGroup: `${sourceKey}:${statusId}`, magnitude, stacks: 1, appliedAtTick: this.currentTick,
-            expiresAtTick: this.currentTick + Math.max(1, Math.ceil(durationMs / this.tickRateMs)) });
+            expiresAtTick: this.currentTick + Math.max(1, Math.ceil(settledDurationMs / this.tickRateMs)) });
         this.emit('STATUS_APPLIED', { enemyId: enemy.id, generalId: formation.generalId, statusId, magnitude,
-            chanceBps: 10000, durationMs, controlResistanceDownBps: 0 });
+            chanceBps: 10000, durationMs: settledDurationMs, controlResistanceDownBps: 0 });
     }
     resolvePendingCombatActions() {
         const due = this.pendingCombatActions.filter((entry) => entry.dueTick <= this.currentTick)
@@ -1653,6 +1813,7 @@ class PveGameRuntime {
         }
         if (CONTROL_STATUS_IDS.has(action.statusId)) {
             durationMs = Math.floor(durationMs * (10000 + resistanceDown) / 10000);
+            durationMs = this.settleEnemyControlDurationMs(enemy, durationMs);
         }
         // 杨戬“当前生命斩”是瞬时效果，不创建持续状态；每次都以执行瞬间的当前生命结算。
         if (action.statusId === 'current_hp_physical_damage') {
@@ -2123,7 +2284,8 @@ class PveGameRuntime {
             generalId: sourceGeneralId, stat: 'controlDuration', baseValue: durationMs,
             targetTags: this.enemyTags(enemy), effectTags: ['status_apply', statusId] });
         const controlAdjustedDurationMs = CONTROL_STATUS_IDS.has(statusId)
-            ? Math.floor(settledDurationMs * (10000 + resistanceDown) / 10000) : settledDurationMs;
+            ? this.settleEnemyControlDurationMs(enemy, Math.floor(settledDurationMs * (10000 + resistanceDown) / 10000))
+            : settledDurationMs;
         const expiresAtTick = this.currentTick + Math.max(1, Math.ceil(controlAdjustedDurationMs / this.tickRateMs));
         if (existing) {
             existing.magnitude = Math.max(existing.magnitude, magnitude);
@@ -2154,7 +2316,8 @@ class PveGameRuntime {
         const defense = damageType === 'true' ? 0 : damageType === 'physical' ? armor : target.magicResistance;
         const reduced = damageType === 'true' ? rawDamage : Math.max(1, Math.floor(rawDamage * 100 / (100 + Math.max(0, defense))));
         const finalDamage = Math.max(1, Math.floor(reduced * (10000
-            + this.damageVulnerabilityMagnitude(target.id, sourceKind, damageType)) / 10000));
+            + this.damageVulnerabilityMagnitude(target.id, sourceKind, damageType)) / 10000
+            * this.bossDamageTakenRatioBps(target) / 10000));
         const hpBefore = target.currentHp;
         target.currentHp = Math.max(0, target.currentHp - finalDamage);
         target.lastDamagePlayerId = ownerPlayerId;
@@ -2270,7 +2433,8 @@ class PveGameRuntime {
         if (isCritical) {
             rawDamage = Math.floor(rawDamage * (0, catalogs_1.getSoldierLevelValue)(definition.critDamageBpsByLevel, soldier.level) / 10000);
         }
-        const finalDamage = Math.max(1, Math.floor(rawDamage * 100 / (100 + Math.max(0, target.armor))));
+        const finalDamage = Math.max(1, Math.floor(rawDamage * 100 / (100 + Math.max(0, target.armor))
+            * this.bossDamageTakenRatioBps(target) / 10000));
         const hpBefore = target.currentHp;
         target.currentHp = Math.max(0, target.currentHp - finalDamage);
         target.lastDamagePlayerId = player.playerId;
@@ -2299,23 +2463,35 @@ class PveGameRuntime {
             waveNumber: enemy.waveNumber,
             laneOwnerPlayerId: enemy.laneOwnerPlayerId,
             lastDamagePlayerId: enemy.lastDamagePlayerId,
+            entityKind: enemy.entityKind,
         });
+        if (enemy.entityKind === 'boss') {
+            this.bossRuntime.handleBossDeath(enemy, this.currentTick, (type, data) => this.emit(type, data));
+            this.emit('BOSS_DIED', {
+                enemyId: enemy.id,
+                bossDefinitionId: enemy.bossDefinitionId,
+                bossName: enemy.bossName,
+                waveNumber: enemy.waveNumber,
+                laneOwnerPlayerId: enemy.laneOwnerPlayerId,
+                lastDamagePlayerId: enemy.lastDamagePlayerId,
+            });
+        }
         if (!enemy.lastDamagePlayerId) {
             return;
         }
         const killer = this.players.get(enemy.lastDamagePlayerId);
         if (killer) {
-            killer.rice += 1;
+            killer.rice += enemy.riceReward;
             this.emit('RICE_GRANTED', {
                 playerId: killer.playerId,
                 enemyId: enemy.id,
-                amount: 1,
+                amount: enemy.riceReward,
                 reason: 'LAST_DAMAGE_KILL',
             });
             this.emit('GENERAL_XP_SETTLEMENT_AVAILABLE', {
                 playerId: killer.playerId,
                 enemyId: enemy.id,
-                xpPoints: this.generalExperienceReward(killer.playerId),
+                xpPoints: this.generalExperienceReward(killer.playerId, enemy.experiencePoints),
             });
             this.settleGeneralExperience(killer, enemy);
             for (const formation of this.generalFormations.getActiveFormations(killer.playerId)) {
@@ -2335,7 +2511,7 @@ class PveGameRuntime {
             .sort((left, right) => left.generalId.localeCompare(right.generalId));
         if (eligible.length === 0)
             return;
-        const rewardPoints = this.generalExperienceReward(player.playerId);
+        const rewardPoints = this.generalExperienceReward(player.playerId, enemy.experiencePoints);
         const totalWeight = eligible.reduce((sum, entry) => sum + weights[entry.category], 0);
         const allocations = eligible.map((entry) => {
             const weightedPoints = rewardPoints * weights[entry.category];
@@ -2376,12 +2552,12 @@ class PveGameRuntime {
             }
         }
     }
-    generalExperienceReward(playerId) {
+    generalExperienceReward(playerId, baseExperiencePoints = XP_REWARD_POINTS) {
         const modifiers = this.synergyEffects.query({
             subject: { kind: 'player', ownerPlayerId: playerId },
         }).statModifiers;
         const synergyReward = Math.max(0, Math.floor((0, synergy_v1_1.settleRuntimeSynergyStat)({
-            baseValue: XP_REWARD_POINTS,
+            baseValue: baseExperiencePoints,
             stat: 'generalExperienceGain',
             modifiers,
         })));
@@ -2392,7 +2568,8 @@ class PveGameRuntime {
     }
     updateLaneClearRewards() {
         for (const lane of this.laneWaves) {
-            if (lane.retired || lane.clearRewardGranted || lane.spawnedCount < lane.totalCount || this.hasAliveLaneEnemy(lane)) {
+            if (lane.retired || lane.clearRewardGranted || lane.spawnedCount < lane.totalCount
+                || (lane.bossEncounter && !lane.bossSpawned) || this.hasAliveLaneEnemy(lane)) {
                 continue;
             }
             lane.clearRewardGranted = true;
@@ -2408,6 +2585,8 @@ class PveGameRuntime {
                 slot: owner.slot,
                 waveNumber: lane.waveNumber,
                 riceReward: reward,
+                bossNode: lane.bossEncounter !== null,
+                bossDefinitionId: lane.bossEncounter?.definition.bossDefinitionId ?? null,
             });
             this.emit('RICE_GRANTED', {
                 playerId: owner.playerId,
@@ -2422,7 +2601,13 @@ class PveGameRuntime {
         if (currentLanes.length === 0 || this.wavePhase === 'prep') {
             return;
         }
-        const allSpawned = currentLanes.every((lane) => lane.spawnedCount >= lane.totalCount);
+        const allSpawned = currentLanes.every((lane) => (0, boss_runtime_1.isLaneWaveSpawningComplete)({
+            ordinarySpawnedCount: lane.spawnedCount,
+            ordinaryTotalCount: lane.totalCount,
+            bossRequired: lane.bossEncounter !== null,
+            bossSpawned: lane.bossSpawned,
+            retired: lane.retired,
+        }));
         if (!allSpawned) {
             return;
         }
@@ -2443,7 +2628,8 @@ class PveGameRuntime {
         if (this.status !== 'running' || this.enemyCapacity <= 0) {
             return;
         }
-        const aliveCount = this.enemies.filter((enemy) => enemy.lifecycle === 'alive').length;
+        // Boss 使用每路线独立容量槽，不挤占原有“10只普通怪/人”的失败容量。
+        const aliveCount = this.enemies.filter((enemy) => (enemy.lifecycle === 'alive' && enemy.entityKind === 'ordinary_minion')).length;
         this.overloadTicks = aliveCount >= this.enemyCapacity ? this.overloadTicks + 1 : 0;
         if (this.overloadTicks >= Math.ceil(OVERLOAD_DURATION_MS / this.tickRateMs)) {
             this.finishMatch('defeat', 'Enemy capacity remained full for 10 seconds');
@@ -2579,7 +2765,7 @@ class PveGameRuntime {
         }
     }
     enemyTags(enemy) {
-        const tags = ['normal'];
+        const tags = [enemy.entityKind === 'boss' ? 'boss' : 'normal'];
         if (enemy.glyph === '妖')
             tags.push('yao');
         if (enemy.glyph === '魔')
@@ -3043,7 +3229,7 @@ class PveGameRuntime {
         }
     }
     getWaveDefinition(waveNumber) {
-        const definition = (0, catalogs_1.getWaveMinionCatalogEntry)(waveNumber);
+        const definition = this.waveCatalog[waveNumber - 1] ?? null;
         const stageGlyphPool = this.waveGlyphPools?.[waveNumber - 1];
         return definition && stageGlyphPool
             ? { ...definition, glyphPool: stageGlyphPool }

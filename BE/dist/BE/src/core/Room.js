@@ -59,7 +59,13 @@ class Room {
     // 倒计时定时器句柄（idle 时务必清除）
     countdownTimer = null;
     countdownPreparing = false;
-    pendingLevelId = null;
+    pendingStageSelection = null;
+    activeStageSelection = null;
+    /**
+     * 结算与奖励是异步执行的；按 matchId 保留关卡快照，避免玩家立即重开时
+     * 把上一局的奖励写到新一局所选关卡。
+     */
+    stageSelectionsByMatchId = new Map();
     matchBuildSnapshots = new Map();
     constructor(id, config, options, accountRuntime) {
         this.accountRuntime = accountRuntime;
@@ -221,10 +227,12 @@ class Room {
      * 校验通过后点火引擎：加载关卡波次配置并启动刷怪。
      * 应由 SocketGateway 在所有校验通过后调用。
      */
-    igniteWithLevel(waves, startingGold, levelId) {
-        this.pendingLevelId = null;
+    igniteWithLevel(waves, selection, startingGold) {
+        this.pendingStageSelection = null;
+        this.activeStageSelection = structuredClone(selection);
         this.phase = 'playing';
-        this.engine.ignite(waves, startingGold, levelId);
+        this.engine.ignite(waves, startingGold, selection.levelId, selection.difficulty);
+        this.stageSelectionsByMatchId.set(this.engine.getStateSnapshot().matchId, structuredClone(selection));
     }
     getMatchBuildSnapshot(playerId) {
         const snapshot = this.matchBuildSnapshots.get(playerId);
@@ -239,19 +247,27 @@ class Room {
             throw new Error('PLAYER_ACCOUNT_SERVICE_NOT_CONFIGURED');
         return this.accountRuntime.accountService.settleMatch({
             ...input,
-            matchId: this.engine.getStateSnapshot().matchId,
         });
     }
-    setPendingLevelSelection(levelId) {
-        this.pendingLevelId = levelId;
+    setPendingStageSelection(selection) {
+        this.pendingStageSelection = structuredClone(selection);
     }
-    consumePendingLevelSelection() {
-        const nextLevelId = this.pendingLevelId;
-        this.pendingLevelId = null;
-        return nextLevelId;
+    consumePendingStageSelection() {
+        const selection = this.pendingStageSelection;
+        this.pendingStageSelection = null;
+        return selection ? structuredClone(selection) : null;
+    }
+    getActiveStageSelection() {
+        return this.activeStageSelection ? structuredClone(this.activeStageSelection) : null;
+    }
+    getStageSelectionForMatch(matchId) {
+        const selection = this.stageSelectionsByMatchId.get(matchId);
+        return selection ? structuredClone(selection) : null;
     }
     destroy() {
-        this.pendingLevelId = null;
+        this.pendingStageSelection = null;
+        this.activeStageSelection = null;
+        this.stageSelectionsByMatchId.clear();
         this.countdownPreparing = false;
         if (this.countdownTimer) {
             clearTimeout(this.countdownTimer);

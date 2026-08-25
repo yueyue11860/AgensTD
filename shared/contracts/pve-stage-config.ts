@@ -53,7 +53,7 @@ export interface PveStageDefinition {
   minionGlyphs: readonly [PveMinionGlyph, PveMinionGlyph, PveMinionGlyph, PveMinionGlyph]
   waveGlyphPools: readonly (readonly PveMinionGlyph[])[]
   sceneTheme: PveSceneTheme
-  /** 仅作为后续 Boss 专项的西游主题锚点，不表示当前已实现。 */
+  /** Boss 目录的西游主题锚点；正式节点与技能由服务端 Boss 目录解析。 */
   bossTheme: string
 }
 

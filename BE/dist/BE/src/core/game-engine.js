@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.GameEngine = void 0;
+exports.projectPveEnemySnapshot = projectPveEnemySnapshot;
 const action_queue_1 = require("./action-queue");
 const enemy_factory_1 = require("./enemy-factory");
 const tower_builder_1 = require("./tower-builder");
@@ -76,6 +77,38 @@ function createPveLaneRouteSnapshots(laneRoutes) {
                 loopStartIndex: route.loopStartIndex ?? 0,
             }];
     }));
+}
+/** 纯函数投影，供协议契约测试复用；空间出生锁与战斗无敌保持独立。 */
+function projectPveEnemySnapshot(enemy, loopStartIndex) {
+    return {
+        entityId: enemy.id,
+        entityKind: enemy.entityKind,
+        bossDefinitionId: enemy.bossDefinitionId,
+        bossName: enemy.bossName,
+        controlResistanceBps: enemy.controlResistanceBps,
+        bossPhase: enemy.bossPhase,
+        activeCast: enemy.activeCast ? {
+            ...enemy.activeCast,
+            targetPlayerIds: [...enemy.activeCast.targetPlayerIds],
+        } : null,
+        glyph: enemy.glyph,
+        waveNumber: enemy.waveNumber,
+        homeLanePlayerId: enemy.laneOwnerPlayerId,
+        homeSlotId: enemy.laneSlot,
+        routeZone: enemy.routeWaypointIndex >= loopStartIndex ? 'public_loop' : 'private_lane',
+        hp: enemy.currentHp,
+        maxHp: enemy.maxHp,
+        armor: enemy.armor,
+        magicResistance: enemy.magicResistance,
+        moveSpeedMilliCellsPerSecond: enemy.moveSpeedMilliCellsPerSecond,
+        pathIndex: enemy.routeWaypointIndex,
+        pathProgressMilli: enemy.pathProgressMilli,
+        lapCount: enemy.lapCount,
+        spawnProtected: enemy.spawnProtected,
+        invulnerable: enemy.invulnerable,
+        x: enemy.xMilli / 1000,
+        y: enemy.yMilli / 1000,
+    };
 }
 class GameEngine {
     config;
@@ -829,7 +862,7 @@ class GameEngine {
         this.pveRuntime.registerPlayer(playerId, slot);
         this.syncPveRuntimeState();
     }
-    createPveRuntime(levelId) {
+    createPveRuntime(levelId, difficulty = 'easy') {
         const seedSuffix = this.matchSequence > 0 ? `:rematch-${this.matchSequence}` : '';
         const stageDefinition = levelId === undefined ? null : (0, pve_stage_config_1.getPveStageDefinition)(levelId);
         const characterTokens = Object.values(hero_v1_1.GENERAL_CATALOG).flatMap((definition) => definition.recipe.glyphs)
@@ -859,10 +892,13 @@ class GameEngine {
         }
         return new pve_v2_1.PveGameRuntime({
             seed: `${this.config.matchId}:pve-v2${seedSuffix}`,
+            levelId: levelId ?? 1,
+            difficulty,
             tickRateMs: this.config.tickRateMs,
             prepDurationMs: pve_v2_1.PVE_WAVE_PREP_DURATION_MS,
             laneRoutes: createPveLaneRouteSnapshots(this.laneRoutes),
             maxWaves: 20,
+            initialWaveNumber: this.config.pveInitialWaveNumber,
             characterTokens,
             waveGlyphPools: stageDefinition?.waveGlyphPools,
             itemLoadoutSnapshots,
@@ -939,6 +975,7 @@ class GameEngine {
                 ...synergy,
                 contributingGeneralIds: [...synergy.contributingGeneralIds],
             })),
+            clearedWaves: [...player.clearedWaves],
             highestCompletedWave: player.clearedWaves.length > 0 ? Math.max(...player.clearedWaves) : 0,
         }));
         const boardPieces = snapshot.players.flatMap((player) => player.boardPieces.map(({ piece, x, y }) => {
@@ -970,26 +1007,7 @@ class GameEngine {
         }));
         const enemies = snapshot.enemies.map((enemy) => {
             const loopStartIndex = this.laneRoutes[enemy.laneSlot]?.loopStartIndex ?? 0;
-            return {
-                entityId: enemy.id,
-                glyph: enemy.glyph,
-                waveNumber: enemy.waveNumber,
-                homeLanePlayerId: enemy.laneOwnerPlayerId,
-                homeSlotId: enemy.laneSlot,
-                routeZone: enemy.routeWaypointIndex >= loopStartIndex ? 'public_loop' : 'private_lane',
-                hp: enemy.currentHp,
-                maxHp: enemy.maxHp,
-                armor: enemy.armor,
-                magicResistance: enemy.magicResistance,
-                moveSpeedMilliCellsPerSecond: enemy.moveSpeedMilliCellsPerSecond,
-                pathIndex: enemy.routeWaypointIndex,
-                pathProgressMilli: enemy.pathProgressMilli,
-                lapCount: enemy.lapCount,
-                spawnProtected: enemy.spawnProtected,
-                invulnerable: enemy.invulnerable,
-                x: enemy.xMilli / 1000,
-                y: enemy.yMilli / 1000,
-            };
+            return projectPveEnemySnapshot(enemy, loopStartIndex);
         });
         const spawningCompleted = snapshot.wave.phase === 'clearing'
             || snapshot.wave.phase === 'complete';
@@ -1032,11 +1050,12 @@ class GameEngine {
                 playerId: lane.playerId,
                 slotId: lane.slot,
                 waveNumber: snapshot.wave.number,
-                plannedSpawnCount: lane.totalCount,
-                spawnedCount: lane.spawnedCount,
+                plannedSpawnCount: lane.totalCount + (lane.bossRequired ? 1 : 0),
+                spawnedCount: lane.spawnedCount + (lane.bossSpawned ? 1 : 0),
                 aliveEnemyCount: snapshot.enemies.filter((enemy) => (enemy.laneOwnerPlayerId === lane.playerId
                     && enemy.waveNumber === snapshot.wave.number)).length,
-                spawningCompleted: spawningCompleted || lane.spawnedCount >= lane.totalCount,
+                spawningCompleted: spawningCompleted || (lane.spawnedCount >= lane.totalCount
+                    && (!lane.bossRequired || lane.bossSpawned)),
                 clearRewardRice: snapshot.wave.number * 5,
                 clearRewardGranted: lane.clearRewardGranted,
             })),
@@ -1295,7 +1314,7 @@ class GameEngine {
      * 新版 PVE 关卡统一为二十波；旧 waves/startingGold 仅用于启动审计，
      * 不再驱动旧怪物、旧塔或覆盖新版初始斋饭。
      */
-    ignite(waves, startingGold, levelId) {
+    ignite(waves, startingGold, levelId, difficulty = 'easy') {
         if (this.state.status !== 'waiting') {
             // 防止重复点火
             return;
@@ -1307,7 +1326,7 @@ class GameEngine {
         this.enemies = [];
         this.overloadTicks = 0;
         this.syncMapCells();
-        this.pveRuntime = this.createPveRuntime(levelId);
+        this.pveRuntime = this.createPveRuntime(levelId, difficulty);
         for (const [playerId, slotId] of this.playerSlots.entries()) {
             this.pveRuntime.registerPlayer(playerId, slotId);
         }
@@ -1318,6 +1337,7 @@ class GameEngine {
             selectedLegacyWaveCount: waves.length,
             ignoredLegacyStartingGold: startingGold ?? null,
             selectedLevelId: levelId ?? null,
+            selectedDifficulty: difficulty,
             runtimeMaxWaves: 20,
             playerCount: this.playerCount,
         });

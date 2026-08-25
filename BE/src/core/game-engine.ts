@@ -10,7 +10,7 @@ import type { PerformanceTelemetry } from './performance-telemetry'
 import type { BuildTowerAction, ClientAction, PlayerIdentity, QueuedAction, UpgradeTowerAction } from '../domain/actions'
 import type { EnemyKind, GameLogEntry, GameState, PlayerState, Position } from '../domain/game-state'
 import type { ServerConfig } from '../config/server-config'
-import type { WaveConfig } from '../../../shared/contracts/game'
+import type { PveEnemyState, WaveConfig } from '../../../shared/contracts/game'
 import { getPveStageDefinition } from '../../../shared/contracts/pve-stage-config'
 import { GENERAL_CATALOG } from './hero-v1'
 import type { TowerCatalogEntry } from '../domain/tower-catalog'
@@ -26,6 +26,7 @@ import {
   type PveRuntimeAction,
   type PveRuntimeSnapshot,
 } from '../pve-v2'
+import type { PveEnemySnapshot } from '../pve-v2/types'
 import {
   WAYPOINTS_MAP,
   createArenaEnemyLanePath,
@@ -147,6 +148,39 @@ function createPveLaneRouteSnapshots(
       loopStartIndex: route.loopStartIndex ?? 0,
     }]
   })) as Record<PveLaneSlot, PveLaneRoute>
+}
+
+/** 纯函数投影，供协议契约测试复用；空间出生锁与战斗无敌保持独立。 */
+export function projectPveEnemySnapshot(enemy: PveEnemySnapshot, loopStartIndex: number): PveEnemyState {
+  return {
+    entityId: enemy.id,
+    entityKind: enemy.entityKind,
+    bossDefinitionId: enemy.bossDefinitionId,
+    bossName: enemy.bossName,
+    controlResistanceBps: enemy.controlResistanceBps,
+    bossPhase: enemy.bossPhase,
+    activeCast: enemy.activeCast ? {
+      ...enemy.activeCast,
+      targetPlayerIds: [...enemy.activeCast.targetPlayerIds],
+    } : null,
+    glyph: enemy.glyph,
+    waveNumber: enemy.waveNumber,
+    homeLanePlayerId: enemy.laneOwnerPlayerId,
+    homeSlotId: enemy.laneSlot,
+    routeZone: enemy.routeWaypointIndex >= loopStartIndex ? 'public_loop' : 'private_lane',
+    hp: enemy.currentHp,
+    maxHp: enemy.maxHp,
+    armor: enemy.armor,
+    magicResistance: enemy.magicResistance,
+    moveSpeedMilliCellsPerSecond: enemy.moveSpeedMilliCellsPerSecond,
+    pathIndex: enemy.routeWaypointIndex,
+    pathProgressMilli: enemy.pathProgressMilli,
+    lapCount: enemy.lapCount,
+    spawnProtected: enemy.spawnProtected,
+    invulnerable: enemy.invulnerable,
+    x: enemy.xMilli / 1000,
+    y: enemy.yMilli / 1000,
+  }
 }
 
 export class GameEngine {
@@ -1091,6 +1125,7 @@ export class GameEngine {
       prepDurationMs: PVE_WAVE_PREP_DURATION_MS,
       laneRoutes: createPveLaneRouteSnapshots(this.laneRoutes),
       maxWaves: 20,
+      initialWaveNumber: this.config.pveInitialWaveNumber,
       characterTokens,
       waveGlyphPools: stageDefinition?.waveGlyphPools,
       itemLoadoutSnapshots,
@@ -1172,6 +1207,7 @@ export class GameEngine {
         ...synergy,
         contributingGeneralIds: [...synergy.contributingGeneralIds],
       })),
+      clearedWaves: [...player.clearedWaves],
       highestCompletedWave: player.clearedWaves.length > 0 ? Math.max(...player.clearedWaves) : 0,
     }))
 
@@ -1209,26 +1245,7 @@ export class GameEngine {
 
     const enemies = snapshot.enemies.map((enemy) => {
       const loopStartIndex = this.laneRoutes[enemy.laneSlot]?.loopStartIndex ?? 0
-      return {
-        entityId: enemy.id,
-        glyph: enemy.glyph,
-        waveNumber: enemy.waveNumber,
-        homeLanePlayerId: enemy.laneOwnerPlayerId,
-        homeSlotId: enemy.laneSlot,
-        routeZone: enemy.routeWaypointIndex >= loopStartIndex ? 'public_loop' as const : 'private_lane' as const,
-        hp: enemy.currentHp,
-        maxHp: enemy.maxHp,
-        armor: enemy.armor,
-        magicResistance: enemy.magicResistance,
-        moveSpeedMilliCellsPerSecond: enemy.moveSpeedMilliCellsPerSecond,
-        pathIndex: enemy.routeWaypointIndex,
-        pathProgressMilli: enemy.pathProgressMilli,
-        lapCount: enemy.lapCount,
-        spawnProtected: enemy.spawnProtected,
-        invulnerable: enemy.invulnerable,
-        x: enemy.xMilli / 1000,
-        y: enemy.yMilli / 1000,
-      }
+      return projectPveEnemySnapshot(enemy, loopStartIndex)
     })
 
     const spawningCompleted = snapshot.wave.phase === 'clearing'
@@ -1273,13 +1290,16 @@ export class GameEngine {
         playerId: lane.playerId,
         slotId: lane.slot,
         waveNumber: snapshot.wave.number,
-        plannedSpawnCount: lane.totalCount,
-        spawnedCount: lane.spawnedCount,
+        plannedSpawnCount: lane.totalCount + (lane.bossRequired ? 1 : 0),
+        spawnedCount: lane.spawnedCount + (lane.bossSpawned ? 1 : 0),
         aliveEnemyCount: snapshot.enemies.filter((enemy) => (
           enemy.laneOwnerPlayerId === lane.playerId
           && enemy.waveNumber === snapshot.wave.number
         )).length,
-        spawningCompleted: spawningCompleted || lane.spawnedCount >= lane.totalCount,
+        spawningCompleted: spawningCompleted || (
+          lane.spawnedCount >= lane.totalCount
+          && (!lane.bossRequired || lane.bossSpawned)
+        ),
         clearRewardRice: snapshot.wave.number * 5,
         clearRewardGranted: lane.clearRewardGranted,
       })),

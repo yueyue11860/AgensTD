@@ -15,11 +15,15 @@ const performance_telemetry_1 = require("./core/performance-telemetry");
 const projected_tick_stream_1 = require("./core/projected-tick-stream");
 const replay_recorder_1 = require("./core/replay-recorder");
 const supabase_competition_store_1 = require("./data/supabase-competition-store");
+const memory_pvp_store_1 = require("./data/memory-pvp-store");
+const supabase_pvp_store_1 = require("./data/supabase-pvp-store");
 const action_rate_limiter_1 = require("./network/action-rate-limiter");
 const agent_api_1 = require("./network/agent-api");
 const rest_api_1 = require("./network/rest-api");
+const pvp_rest_api_1 = require("./network/pvp-rest-api");
 const oauth_routes_1 = require("./network/oauth-routes");
 const socket_gateway_1 = require("./network/socket-gateway");
+const pvp_platform_v1_1 = require("./pvp-platform-v1");
 const progress_store_1 = require("./data/progress-store");
 const supabase_user_store_1 = require("./data/supabase-user-store");
 const account_v1_1 = require("./account-v1");
@@ -77,8 +81,20 @@ const actionLimiter = new action_rate_limiter_1.ActionRateLimiter(config.actionR
 const progressStore = new progress_store_1.ProgressStore();
 const userStore = new supabase_user_store_1.SupabaseUserStore(config);
 progressStore.setUserStore(userStore);
-const gateway = new socket_gateway_1.SocketGateway(httpServer, roomManager, config, performanceTelemetry, actionLimiter, progressStore, projectedTickStream);
+// 本地默认内存，避免仅因 .env 中存在 Supabase 凭据就误写远端。
+// 正式持久化必须显式设置 PVP_STORE=supabase；凭据缺失时直接拒绝启动，不静默丢战绩。
+const pvpStoreMode = (process.env.PVP_STORE ?? 'memory').trim().toLowerCase();
+if (pvpStoreMode !== 'memory' && pvpStoreMode !== 'supabase') {
+    throw new Error(`Unsupported PVP_STORE=${pvpStoreMode}; expected memory or supabase`);
+}
+if (pvpStoreMode === 'supabase' && (!config.supabaseUrl || !config.supabaseServiceRoleKey)) {
+    throw new Error('PVP_STORE=supabase requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY');
+}
+const pvpStore = pvpStoreMode === 'supabase' ? new supabase_pvp_store_1.SupabasePvpStore(config) : new memory_pvp_store_1.MemoryPvpStore();
+const pvpPlatform = new pvp_platform_v1_1.PvpPlatformService({ store: pvpStore });
+const gateway = new socket_gateway_1.SocketGateway(httpServer, roomManager, config, performanceTelemetry, actionLimiter, progressStore, projectedTickStream, accountService);
 app.use('/api', (0, oauth_routes_1.createOAuthRouter)(config, userStore));
+app.use('/api/pvp', (0, pvp_rest_api_1.createPvpRestApiRouter)(config, pvpPlatform));
 app.use('/api', (0, rest_api_1.createRestApiRouter)(engine, roomManager, config, actionLimiter, replayRecorder, competitionStore, progressStore, accountService));
 app.use('/api/agent', (0, agent_api_1.createAgentApiRouter)(projectedTickStream, config, replayRecorder, competitionStore, performanceTelemetry));
 if (hasFrontendBuild) {
@@ -93,6 +109,7 @@ if (hasFrontendBuild) {
 httpServer.listen(config.port, () => {
 });
 const shutdown = () => {
+    pvpPlatform.shutdown();
     void replayRecorder.flushLatest()
         .catch((error) => {
         const details = error instanceof Error ? error.message : String(error);

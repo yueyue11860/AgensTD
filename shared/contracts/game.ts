@@ -320,6 +320,19 @@ export interface PveActiveSynergyState {
 
 export interface PveEnemyState extends GridPosition {
   entityId: string
+  /** 普通小怪默认 ordinary_minion；Boss 必须由服务端显式投影为 boss。 */
+  entityKind: 'ordinary_minion' | 'boss'
+  bossDefinitionId: string | null
+  bossName: string | null
+  controlResistanceBps: number
+  bossPhase: number
+  activeCast: {
+    skillId: string
+    skillName: string
+    startedAtTick: number
+    executeAtTick: number
+    targetPlayerIds: string[]
+  } | null
   glyph: string
   waveNumber: number
   homeLanePlayerId: string
@@ -412,6 +425,8 @@ export interface PvePlayerState {
   generalFormations: PveGeneralFormationState[]
   generalProgress: PveGeneralProgressState[]
   activeSynergies: PveActiveSynergyState[]
+  /** 已实际清完的波次；波次可重叠，不能由最高波次反推。 */
+  clearedWaves: number[]
   highestCompletedWave: number
 }
 

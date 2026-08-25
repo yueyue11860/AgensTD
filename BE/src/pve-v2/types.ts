@@ -115,10 +115,28 @@ export interface PveEnemySnapshot {
   magicResistance: number
   moveSpeedMilliCellsPerSecond: number
   lastDamagePlayerId: string | null
+  /** 普通小怪与 Boss 是互斥实体类型；容量失败只计算 ordinary_minion。 */
+  entityKind: 'ordinary_minion' | 'boss'
+  bossDefinitionId: string | null
+  bossName: string | null
+  /** 0..10000；仅折算控制类状态的持续时间，不影响施加概率。 */
+  controlResistanceBps: number
+  /** Boss 目录定义的单次控制时长上限；普通怪为 0（不设额外上限）。 */
+  controlDurationCapMs: number
+  bossPhase: number
+  activeCast: PveBossActiveCastSnapshot | null
   /** 圆形身体尚未完全离开中央 3×3 出生方格；只会从 true 变为 false。 */
   spawnProtected: boolean
   /** 预留给未来 Boss/技能的战斗无敌，与空间入场锁分离。 */
   invulnerable: boolean
+}
+
+export interface PveBossActiveCastSnapshot {
+  skillId: string
+  skillName: string
+  startedAtTick: number
+  executeAtTick: number
+  targetPlayerIds: string[]
 }
 
 export interface PveEnemyStatusSnapshot {
@@ -237,6 +255,13 @@ export interface PveRuntimeEvent {
     | 'WAVE_STARTED'
     | 'ENEMY_SPAWNED'
     | 'ENEMY_ENTERED_BATTLEFIELD'
+    | 'BOSS_SPAWNED'
+    | 'BOSS_CAST_WARNING'
+    | 'BOSS_SKILL_CAST'
+    | 'BOSS_SKILL_ENDED'
+    | 'BOSS_PHASE_CHANGED'
+    | 'BOSS_SKILL_PLUGIN_ERROR'
+    | 'BOSS_DIED'
     | 'BASIC_ATTACK_STARTED'
     | 'DAMAGE_APPLIED'
     | 'ENEMY_DIED'
@@ -285,6 +310,10 @@ export interface PveRuntimeSnapshot {
       slot: PveLaneSlot
       spawnedCount: number
       totalCount: number
+      /** Boss 波普通怪仍固定 10；Boss 是该计数之外的额外实体。 */
+      bossRequired: boolean
+      bossSpawned: boolean
+      bossEnemyId: string | null
       cleared: boolean
       clearRewardGranted: boolean
       retired: boolean
@@ -295,6 +324,22 @@ export interface PveRuntimeSnapshot {
   statuses: PveEnemyStatusSnapshot[]
   summonedUnits: PveSummonedUnitSnapshot[]
   zones: PveEffectZoneSnapshot[]
+  bossRuntime: {
+    schemaVersion: 1
+    instances: Array<{
+      bossEnemyId: string
+      bossDefinitionId: string
+      laneOwnerPlayerId: string
+      phase: number
+      activeCast: PveBossActiveCastSnapshot | null
+      skillStates: Array<{
+        skillId: string
+        lifecycle: 'ready' | 'warning' | 'active' | 'cooldown' | 'disabled'
+        castCount: number
+        nextTransitionTick: number
+      }>
+    }>
+  }
   recentEvents: PveRuntimeEvent[]
 }
 
@@ -415,6 +460,8 @@ export interface PveGameRuntimeOptions {
   tickRateMs?: number
   prepDurationMs?: number
   maxWaves?: number
+  /** 仅供确定性回放/专项 smoke 从节点波启动；正式房间保持默认 1。 */
+  initialWaveNumber?: number
   laneRoutes?: Partial<Record<PveLaneSlot, PveLaneRoute>>
   isDeployableCell?: (slot: PveLaneSlot, x: number, y: number) => boolean
   characterTokens?: Record<string, number>

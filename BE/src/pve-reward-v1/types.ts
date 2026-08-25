@@ -24,6 +24,12 @@ export interface PveRewardPlayerContext {
 
 export interface RecordWaveMilestoneInput extends PveRewardPlayerContext {
   milestone: PveWaveMilestone
+  bossFragmentBonus?: {
+    chanceBps: number
+    extraCount: 1
+    maxExtraPerBoss: 1
+    qualityPolicy: 'same_quality_random_fragment'
+  }
 }
 
 export interface RecordMatchOutcomeInput extends PveRewardPlayerContext {
@@ -38,7 +44,7 @@ export interface PveWeaponRewardEvent {
   matchId: string
   playerId: string
   stage: PveRewardStageSelection
-  source: 'wave_milestone' | 'hard_victory_exclusive_guarantee'
+  source: 'wave_milestone' | 'boss_fragment_bonus' | 'hard_victory_exclusive_guarantee'
   milestone?: PveWaveMilestone
   dropIndex: number
   weaponId: string

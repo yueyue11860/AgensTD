@@ -3,6 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PlayerAccountService = void 0;
 exports.createDefaultPlayerAccount = createDefaultPlayerAccount;
 exports.settlementRewardTier = settlementRewardTier;
+const pve_stage_config_1 = require("../../../shared/contracts/pve-stage-config");
+const unlock_logic_1 = require("../core/unlock-logic");
 const types_1 = require("./types");
 const DEFAULT_ACTIVE_ITEMS = ['change_character_brush', 'cultivation_pill'];
 const DEFAULT_PASSIVE_ITEMS = [
@@ -46,6 +48,16 @@ function assertNonNegativeInteger(value, field) {
         throw new types_1.AccountDomainError('INVALID_ACCOUNT_MUTATION', `${field} must be a non-negative safe integer`);
     }
 }
+function isPveProgressPayload(value) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value))
+        return false;
+    const candidate = value;
+    return Number.isSafeInteger(candidate.version)
+        && candidate.version >= 1
+        && typeof candidate.clearsByStageKey === 'object'
+        && candidate.clearsByStageKey !== null
+        && !Array.isArray(candidate.clearsByStageKey);
+}
 function createDefaultPlayerAccount(playerId, at = nowIso()) {
     if (!playerId)
         throw new types_1.AccountDomainError('INVALID_ACCOUNT_MUTATION', 'playerId is required');
@@ -78,6 +90,7 @@ function createDefaultPlayerAccount(playerId, at = nowIso()) {
             loadoutsByGeneralId: {},
             extensions: {},
         },
+        pveProgress: (0, unlock_logic_1.createDefaultPveProgress)(),
         createdAt: at,
         updatedAt: at,
     };
@@ -140,16 +153,26 @@ class PlayerAccountService {
     }
     async getOrCreate(playerId) {
         const existing = await this.store.get(playerId);
-        if (existing)
-            return existing;
-        return this.store.createIfAbsent(createDefaultPlayerAccount(playerId));
+        const account = existing ?? await this.store.createIfAbsent(createDefaultPlayerAccount(playerId));
+        return this.migrateAccountIfNeeded(playerId, account);
     }
     async get(playerId) {
-        return this.store.get(playerId);
+        const account = await this.store.get(playerId);
+        return account ? this.migrateAccountIfNeeded(playerId, account) : null;
+    }
+    async getPveProgression(playerId) {
+        const account = await this.getOrCreate(playerId);
+        return (0, unlock_logic_1.derivePveProgressionView)(account.pveProgress);
     }
     async settleMatch(input) {
         if (!input.requestId || !input.matchId || !input.playerId) {
             throw new types_1.AccountDomainError('INVALID_SETTLEMENT', 'requestId, matchId and playerId are required');
+        }
+        if (input.stageSelection !== undefined && !(0, pve_stage_config_1.isPveStageSelection)(input.stageSelection)) {
+            throw new types_1.AccountDomainError('INVALID_SETTLEMENT', 'stageSelection must identify an existing PVE stage and difficulty');
+        }
+        if (input.officialVictory && !input.stageSelection) {
+            throw new types_1.AccountDomainError('INVALID_SETTLEMENT', 'official PVE victory requires the server-locked stageSelection');
         }
         const settlementId = `${input.matchId}:${input.playerId}`;
         const fingerprint = stableStringify({ ...input, retainedWeaponFragments: input.retainedWeaponFragments });
@@ -162,6 +185,7 @@ class PlayerAccountService {
                     && oldSettlement.playerId === input.playerId
                     && oldSettlement.reason === input.reason
                     && oldSettlement.highestCompletedWave === input.highestCompletedWave
+                    && stableStringify(oldSettlement.stageSelection ?? null) === stableStringify(input.stageSelection ?? null)
                     && stableStringify(oldSettlement.retainedWeaponFragments) === stableStringify(input.retainedWeaponFragments);
                 if (!sameSettlement) {
                     throw new types_1.AccountDomainError('INVALID_SETTLEMENT', 'settlementId is already committed with a different payload');
@@ -195,6 +219,23 @@ class PlayerAccountService {
                 next.entitlements[entitlementId] = entitlement;
                 entitlementIds.push(entitlementId);
             });
+            let progressionUpdated = false;
+            if (input.officialVictory && input.stageSelection) {
+                const stageKey = (0, pve_stage_config_1.pveStageKey)(input.stageSelection);
+                const previousClear = next.pveProgress.clearsByStageKey[stageKey];
+                if (previousClear && stableStringify(previousClear.selection) !== stableStringify(input.stageSelection)) {
+                    throw new types_1.AccountDomainError('INVALID_SETTLEMENT', `stored PVE clear ${stageKey} has a conflicting selection`);
+                }
+                next.pveProgress.clearsByStageKey[stageKey] = {
+                    stageKey,
+                    selection: clone(input.stageSelection),
+                    clearCount: (previousClear?.clearCount ?? 0) + 1,
+                    firstClearedAt: previousClear?.firstClearedAt ?? at,
+                    lastClearedAt: at,
+                };
+                next.pveProgress.version += 1;
+                progressionUpdated = true;
+            }
             const settlement = {
                 settlementId,
                 matchId: input.matchId,
@@ -205,6 +246,8 @@ class PlayerAccountService {
                 retainedWeaponFragments: { ...input.retainedWeaponFragments },
                 goldGranted,
                 entitlementIds,
+                ...(input.stageSelection ? { stageSelection: clone(input.stageSelection) } : {}),
+                progressionUpdated,
                 status: 'committed',
                 committedAt: at,
                 accountVersionAfter: current.version + 1,
@@ -390,6 +433,36 @@ class PlayerAccountService {
             throw new types_1.AccountDomainError('STALE_ACCOUNT_VERSION', 'account changed during save');
         }
         return next;
+    }
+    async migrateAccountIfNeeded(playerId, initial) {
+        let current = initial;
+        for (let attempt = 0; attempt < MAX_CAS_RETRIES; attempt++) {
+            const candidate = current;
+            if (candidate.playerId !== playerId || !Number.isSafeInteger(candidate.version)) {
+                throw new types_1.AccountDomainError('INVALID_ACCOUNT_MUTATION', 'stored player account identity or version is invalid');
+            }
+            if (candidate.schemaVersion === types_1.PLAYER_ACCOUNT_SCHEMA_VERSION && isPveProgressPayload(candidate.pveProgress)) {
+                return current;
+            }
+            // V1 关卡进度由客户端自报且关卡语义已变更，故不迁移；
+            // 金币、道具、武器与已提交结算单均原样保留。
+            const next = clone(current);
+            next.schemaVersion = types_1.PLAYER_ACCOUNT_SCHEMA_VERSION;
+            next.pveProgress = (0, unlock_logic_1.createDefaultPveProgress)();
+            for (const settlement of Object.values(next.settlementsById)) {
+                if (typeof settlement.progressionUpdated !== 'boolean')
+                    settlement.progressionUpdated = false;
+            }
+            next.version = current.version + 1;
+            next.updatedAt = nowIso();
+            if (await this.store.compareAndSwap(playerId, current.version, next))
+                return next;
+            const reloaded = await this.store.get(playerId);
+            if (!reloaded)
+                throw new types_1.AccountDomainError('ACCOUNT_NOT_FOUND', 'player account disappeared during migration');
+            current = reloaded;
+        }
+        throw new types_1.AccountDomainError('ACCOUNT_WRITE_CONFLICT', 'account migration CAS retry budget exhausted');
     }
     pickOfferProducts(products, seed, recentActiveGeneralIds) {
         const recent = new Set(recentActiveGeneralIds);

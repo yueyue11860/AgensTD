@@ -20,6 +20,18 @@ export interface BattlefieldPieceState extends BattlefieldGridPosition {
 
 export interface BattlefieldEnemyState extends BattlefieldGridPosition {
   entityId: string
+  entityKind: 'ordinary_minion' | 'boss'
+  bossDefinitionId: string | null
+  bossName: string | null
+  controlResistanceBps: number
+  bossPhase: number
+  activeCast: {
+    skillId: string
+    skillName: string
+    startedAtTick: number
+    executeAtTick: number
+    targetPlayerIds: string[]
+  } | null
   glyph: string
   hp: number
   maxHp: number

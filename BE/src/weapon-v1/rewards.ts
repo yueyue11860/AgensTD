@@ -45,6 +45,13 @@ export interface HardVictoryExclusiveDropInput {
   rewardTableRevision?: string
 }
 
+export interface BossFragmentBonusDropInput extends WaveMilestoneWeaponDropInput {
+  /** 由冻结的局外被动道具快照提供，不能由客户端上报。 */
+  chanceBps: number
+  bonusDropIndex: number
+  quality: WeaponQuality
+}
+
 export const PVE_WEAPON_REWARD_TABLE_REVISION = 'pve-weapon-reward-v1' as const
 
 export const WAVE_MILESTONE_DROP_TABLE: Readonly<Record<PveRewardDifficulty, Readonly<Record<PveWaveMilestone, {
@@ -226,6 +233,44 @@ export function rollHardVictoryExclusiveWeaponDrop(input: HardVictoryExclusiveDr
   if (!candidates.length) throw new Error('No eligible exclusive red weapon drop candidates')
   const weapon = candidates[random.nextInt(candidates.length)]
   return { dropIndex: 0, weaponId: weapon.weaponId, quality: 'red', amount: 1 }
+}
+
+/**
+ * Boss 个人掉落后的同品质额外抽取。概率和候选均由服务端冻结快照决定，
+ * 独立随机流保证是否触发不会改变基础掉落结果。
+ */
+export function rollBossFragmentBonusDrop(
+  input: BossFragmentBonusDropInput,
+): WeaponFragmentDrop | null {
+  validateRewardInput(input)
+  if (!Number.isInteger(input.chanceBps) || input.chanceBps < 0 || input.chanceBps > 10_000) {
+    throw new Error('Boss fragment bonus chanceBps must be an integer in [0, 10000]')
+  }
+  if (!Number.isSafeInteger(input.bonusDropIndex) || input.bonusDropIndex < 0) {
+    throw new Error('Boss fragment bonus drop index must be a non-negative safe integer')
+  }
+  const revision = input.rewardTableRevision ?? PVE_WEAPON_REWARD_TABLE_REVISION
+  const random = new DeterministicRandom([
+    revision,
+    input.matchSeed,
+    input.stageId,
+    input.levelId,
+    input.difficulty,
+    input.playerId,
+    `wave-${input.milestone}`,
+    'boss-fragment-bonus',
+    input.bonusDropIndex,
+  ].join(':'))
+  if (random.nextInt(10_000) >= input.chanceBps) return null
+  const candidates = commonWeaponCandidates(input.quality, input.activatedGeneralIds, input.weaponState)
+  if (!candidates.length) throw new Error(`No eligible common ${input.quality} bonus weapon candidates`)
+  const weapon = candidates[random.nextInt(candidates.length)]
+  return {
+    dropIndex: input.bonusDropIndex,
+    weaponId: weapon.weaponId,
+    quality: input.quality,
+    amount: 1,
+  }
 }
 
 /** @deprecated 仅保留旧调用兼容；新事件语义是波次节点而不是 Boss 击杀。 */

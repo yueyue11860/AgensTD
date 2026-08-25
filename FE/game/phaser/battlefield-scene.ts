@@ -18,6 +18,7 @@ export const BATTLEFIELD_SIZE = BATTLEFIELD_DIMENSION * BATTLEFIELD_CELL_SIZE
 const CELL_GAP = 1
 const ENTITY_INSET = 3
 const ENEMY_BODY_RADIUS_PX = 13
+const BOSS_BODY_RADIUS_PX = 20
 const ENEMY_TWEEN_MS = 220
 const HAN_FONT = '"Noto Serif SC", "Songti SC", "STSong", serif'
 
@@ -48,7 +49,9 @@ interface EnemyView {
   glyph: Phaser.GameObjects.Text
   health: Phaser.GameObjects.Graphics
   status: Phaser.GameObjects.Text
+  bossBadge: Phaser.GameObjects.Text
   glyphValue: string
+  entityKind: 'ordinary_minion' | 'boss'
   hp: number
   maxHp: number
   spawnProtected: boolean
@@ -396,19 +399,21 @@ export class BattlefieldScene extends Phaser.Scene {
           this.tweens.add({ targets: view.container, x: targetX, y: targetY, duration: ENEMY_TWEEN_MS, ease: 'Linear' })
         }
       }
-      if (
+      const presentationChanged = (
         view.glyphValue !== enemy.glyph
+        || view.entityKind !== enemy.entityKind
         || view.spawnProtected !== Boolean(enemy.spawnProtected)
         || view.invulnerable !== Boolean(enemy.invulnerable)
-      ) {
-        this.drawEnemyBody(view, enemy.glyph, Boolean(enemy.spawnProtected), Boolean(enemy.invulnerable))
+      )
+      if (presentationChanged) {
+        this.drawEnemyBody(view, enemy.glyph, enemy.entityKind, Boolean(enemy.spawnProtected), Boolean(enemy.invulnerable))
       }
       const statusSignature = (statusLabelsByEnemyId.get(enemy.entityId) ?? []).slice(0, 3).join('·')
       if (view.statusSignature !== statusSignature) {
         view.status.setText(statusSignature).setVisible(statusSignature.length > 0)
         view.statusSignature = statusSignature
       }
-      if (view.hp !== enemy.hp || view.maxHp !== enemy.maxHp) this.drawEnemyHealth(view, enemy.hp, enemy.maxHp)
+      if (presentationChanged || view.hp !== enemy.hp || view.maxHp !== enemy.maxHp) this.drawEnemyHealth(view, enemy.hp, enemy.maxHp)
     }
   }
 
@@ -416,8 +421,9 @@ export class BattlefieldScene extends Phaser.Scene {
     const body = this.add.graphics()
     const glyph = this.add.text(0, -1, '', { color: '#fecaca', fontFamily: HAN_FONT, fontSize: '20px', fontStyle: 'bold', stroke: '#450a0a', strokeThickness: 2 }).setOrigin(0.5)
     const health = this.add.graphics()
-    const status = this.add.text(0, -20, '', { color: '#fef08a', fontFamily: 'ui-monospace, monospace', fontSize: '7px', fontStyle: 'bold', backgroundColor: '#422006', padding: { x: 2, y: 1 } }).setOrigin(0.5).setVisible(false)
-    const container = this.add.container(x, y, [body, glyph, health, status])
+    const status = this.add.text(0, -22, '', { color: '#fef08a', fontFamily: 'ui-monospace, monospace', fontSize: '7px', fontStyle: 'bold', backgroundColor: '#422006', padding: { x: 2, y: 1 } }).setOrigin(0.5).setVisible(false)
+    const bossBadge = this.add.text(0, -29, 'BOSS', { color: '#fef3c7', fontFamily: 'ui-monospace, monospace', fontSize: '7px', fontStyle: 'bold', backgroundColor: '#991b1b', padding: { x: 3, y: 1 }, stroke: '#451a03', strokeThickness: 1 }).setOrigin(0.5).setVisible(false)
+    const container = this.add.container(x, y, [body, glyph, health, status, bossBadge])
     this.enemyLayer.add(container)
     const view: EnemyView = {
       container,
@@ -425,40 +431,53 @@ export class BattlefieldScene extends Phaser.Scene {
       glyph,
       health,
       status,
+      bossBadge,
       glyphValue: '',
+      entityKind: 'ordinary_minion',
       hp: Number.NaN,
       maxHp: Number.NaN,
       spawnProtected: false,
       invulnerable: false,
       statusSignature: '',
     }
-    this.drawEnemyBody(view, enemy.glyph, Boolean(enemy.spawnProtected), Boolean(enemy.invulnerable))
+    this.drawEnemyBody(view, enemy.glyph, enemy.entityKind, Boolean(enemy.spawnProtected), Boolean(enemy.invulnerable))
     this.drawEnemyHealth(view, enemy.hp, enemy.maxHp)
     return view
   }
 
-  private drawEnemyBody(view: EnemyView, glyph: string, spawnProtected: boolean, invulnerable: boolean) {
+  private drawEnemyBody(view: EnemyView, glyph: string, entityKind: 'ordinary_minion' | 'boss', spawnProtected: boolean, invulnerable: boolean) {
+    const isBoss = entityKind === 'boss'
+    const radius = isBoss ? BOSS_BODY_RADIUS_PX : ENEMY_BODY_RADIUS_PX
     view.body.clear()
-    view.body.fillStyle(invulnerable ? 0x78350f : 0x7f1d1d, 0.62)
-    view.body.fillCircle(0, 0, ENEMY_BODY_RADIUS_PX)
-    view.body.lineStyle(invulnerable ? 2 : 1, invulnerable ? 0xfbbf24 : 0xf87171, 0.9)
-    view.body.strokeCircle(0, 0, ENEMY_BODY_RADIUS_PX)
+    view.body.fillStyle(invulnerable ? 0x78350f : isBoss ? 0x7f1d1d : 0x450a0a, isBoss ? 0.9 : 0.62)
+    view.body.fillCircle(0, 0, radius)
+    view.body.lineStyle(invulnerable ? 3 : isBoss ? 3 : 1, invulnerable ? 0xfef08a : isBoss ? 0xfbbf24 : 0xf87171, 0.95)
+    view.body.strokeCircle(0, 0, radius)
+    if (isBoss) {
+      view.body.lineStyle(1, 0xf97316, 0.8)
+      view.body.strokeCircle(0, 0, radius - 4)
+    }
     view.glyph
       .setText(invulnerable ? `护${glyph}` : glyph)
-      .setFontSize(invulnerable ? '13px' : '20px')
-      .setColor(invulnerable ? '#fde68a' : '#fecaca')
+      .setFontSize(invulnerable ? (isBoss ? '17px' : '13px') : (isBoss ? '28px' : '20px'))
+      .setColor(invulnerable ? '#fde68a' : isBoss ? '#fff7ed' : '#fecaca')
+    view.bossBadge.setVisible(isBoss)
+    view.status.setY(isBoss ? -38 : -20)
     view.glyphValue = glyph
+    view.entityKind = entityKind
     view.spawnProtected = spawnProtected
     view.invulnerable = invulnerable
   }
 
   private drawEnemyHealth(view: EnemyView, hp: number, maxHp: number) {
     const ratio = maxHp > 0 ? Phaser.Math.Clamp(hp / maxHp, 0, 1) : 0
+    const radius = view.entityKind === 'boss' ? BOSS_BODY_RADIUS_PX + 5 : ENEMY_BODY_RADIUS_PX
+    const height = view.entityKind === 'boss' ? 6 : 4
     view.health.clear()
     view.health.fillStyle(0x020617, 0.95)
-    view.health.fillRoundedRect(-ENEMY_BODY_RADIUS_PX, ENEMY_BODY_RADIUS_PX, ENEMY_BODY_RADIUS_PX * 2, 4, 1)
+    view.health.fillRoundedRect(-radius, radius, radius * 2, height, 1)
     view.health.fillStyle(ratio > 0.4 ? 0x22c55e : ratio > 0.2 ? 0xf59e0b : 0xef4444, 1)
-    view.health.fillRoundedRect(-ENEMY_BODY_RADIUS_PX, ENEMY_BODY_RADIUS_PX, ENEMY_BODY_RADIUS_PX * 2 * ratio, 4, 1)
+    view.health.fillRoundedRect(-radius, radius, radius * 2 * ratio, height, 1)
     view.hp = hp
     view.maxHp = maxHp
   }

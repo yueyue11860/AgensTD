@@ -1,5 +1,6 @@
 import {
   PVE_WEAPON_REWARD_TABLE_REVISION,
+  rollBossFragmentBonusDrop,
   rollHardVictoryExclusiveWeaponDrop,
   rollWaveMilestoneWeaponDrops,
   type WeaponRewardAccountState,
@@ -41,7 +42,7 @@ export class PveRewardService {
     const replay = this.ledger.readBatch(batchKey, fingerprint)
     if (replay) return replay
     const weaponState = this.effectiveWeaponState(input)
-    const drops = rollWaveMilestoneWeaponDrops({
+    const dropInput = {
       matchSeed: input.matchSeed,
       stageId: input.stage.stageId,
       levelId: input.stage.levelId,
@@ -51,7 +52,25 @@ export class PveRewardService {
       activatedGeneralIds: input.activatedGeneralIds,
       discoveredGeneralIds: input.discoveredGeneralIds,
       weaponState,
-    })
+    }
+    const baseDrops = rollWaveMilestoneWeaponDrops(dropInput)
+    const drops = [...baseDrops]
+    const bonus = input.bossFragmentBonus
+    if (bonus && baseDrops.length > 0) {
+      if (
+        bonus.extraCount !== 1
+        || bonus.maxExtraPerBoss !== 1
+        || bonus.qualityPolicy !== 'same_quality_random_fragment'
+      ) throw new Error('Unsupported Boss fragment bonus policy')
+      const referenceDrop = baseDrops[baseDrops.length - 1]
+      const bonusDrop = rollBossFragmentBonusDrop({
+        ...dropInput,
+        chanceBps: bonus.chanceBps,
+        bonusDropIndex: baseDrops.length,
+        quality: referenceDrop.quality,
+      })
+      if (bonusDrop) drops.push(bonusDrop)
+    }
     const events = drops.map((drop): PveWeaponRewardEvent => ({
       schemaVersion: 1,
       eventId: [batchKey, `drop-${drop.dropIndex}`].join(':'),
@@ -59,7 +78,7 @@ export class PveRewardService {
       matchId: input.matchId,
       playerId: input.playerId,
       stage: { ...input.stage },
-      source: 'wave_milestone',
+      source: drop.dropIndex < baseDrops.length ? 'wave_milestone' : 'boss_fragment_bonus',
       milestone: input.milestone,
       ...drop,
     }))

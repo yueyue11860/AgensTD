@@ -1,10 +1,19 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PVE_STAGE_BY_LEVEL_ID = exports.PVE_STAGE_DEFINITIONS = exports.PVE_MINION_GLYPHS = void 0;
+exports.PVE_STAGE_SELECTIONS = exports.PVE_STAGE_BY_LEVEL_ID = exports.PVE_STAGE_DEFINITIONS = exports.PVE_DIFFICULTY_LABELS = exports.PVE_DIFFICULTIES = exports.PVE_MINION_GLYPHS = void 0;
 exports.getPveStageDefinition = getPveStageDefinition;
+exports.isPveDifficulty = isPveDifficulty;
+exports.isPveStageSelection = isPveStageSelection;
+exports.pveStageKey = pveStageKey;
 exports.PVE_MINION_GLYPHS = [
     '妖', '魔', '鬼', '怪', '蛛', '蛇', '蝎', '魅', '骨', '虎', '豹', '鹰', '熊', '狮',
 ];
+exports.PVE_DIFFICULTIES = ['easy', 'normal', 'hard'];
+exports.PVE_DIFFICULTY_LABELS = Object.freeze({
+    easy: '简单',
+    normal: '普通',
+    hard: '困难',
+});
 /**
  * 20 波逐步引入关卡的 4 种小怪。每波总数由服务端固定为 10，
  * 此处只决定该波的等概率字池，不改变小怪属性。
@@ -191,3 +200,24 @@ exports.PVE_STAGE_BY_LEVEL_ID = Object.freeze(Object.fromEntries(exports.PVE_STA
 function getPveStageDefinition(levelId) {
     return exports.PVE_STAGE_BY_LEVEL_ID[levelId] ?? null;
 }
+function isPveDifficulty(value) {
+    return typeof value === 'string' && exports.PVE_DIFFICULTIES.includes(value);
+}
+function isPveStageSelection(value) {
+    if (typeof value !== 'object' || value === null)
+        return false;
+    const candidate = value;
+    return Number.isInteger(candidate.levelId)
+        && getPveStageDefinition(candidate.levelId) !== null
+        && isPveDifficulty(candidate.difficulty);
+}
+function pveStageKey(selection) {
+    if (!isPveStageSelection(selection)) {
+        throw new Error('Invalid PVE stage selection');
+    }
+    return `${selection.difficulty}:${selection.levelId}`;
+}
+exports.PVE_STAGE_SELECTIONS = Object.freeze(exports.PVE_DIFFICULTIES.flatMap(difficulty => exports.PVE_STAGE_DEFINITIONS.map(({ levelId }) => ({
+    levelId,
+    difficulty,
+}))));

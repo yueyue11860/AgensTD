@@ -5,7 +5,7 @@ import type { PlayerKind } from '../domain/game-state'
 /**
  * 新版 PVE 关卡只表达场景，不再表达旧版“难度阶梯”。
  * 所有关卡统一使用 20 波；实际普通怪数值由 pve-v2/catalogs.ts 驱动，
- * 第 5/10/15/20 波 Boss 将由 Boss 专项逐步接入。
+ * 第 5/10/15/20 波 Boss 已由 pve-v2/boss-catalog.ts 与 boss-runtime.ts 接入。
  */
 export interface LevelConfig {
   levelId: number

@@ -156,7 +156,8 @@ function createRestApiRouter(engine, roomManager, config, limiter, replayRecorde
             return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' });
         try {
             const account = await accountService.getOrCreate(principal.playerId);
-            response.json({ ok: true, account: publicAccount(account), catalogs: player_account_adapters_1.ACCOUNT_CATALOGS });
+            const pveProgression = await accountService.getPveProgression(principal.playerId);
+            response.json({ ok: true, account: publicAccount(account), pveProgression, catalogs: player_account_adapters_1.ACCOUNT_CATALOGS });
         }
         catch (error) {
             sendAccountError(response, error);

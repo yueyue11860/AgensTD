@@ -86,6 +86,18 @@ interface ServerTrayPieceState {
 
 interface ServerEnemyState {
   entityId: string
+  entityKind: 'ordinary_minion' | 'boss'
+  bossDefinitionId: string | null
+  bossName: string | null
+  controlResistanceBps: number
+  bossPhase: number
+  activeCast: {
+    skillId: string
+    skillName: string
+    startedAtTick: number
+    executeAtTick: number
+    targetPlayerIds: string[]
+  } | null
   glyph: string
   x: number
   y: number
@@ -174,6 +186,7 @@ interface ServerDrivenGameState {
   roomId: string
   phase: RoomPhase
   tick: number
+  tickRateMs: number
   status: MatchStatus
   boardPieces: ServerBoardPieceState[]
   enemies: ServerEnemyState[]
@@ -249,6 +262,31 @@ const COMBAT_EVENT_LABELS: Record<string, string> = {
   SYNERGY_DEACTIVATED: '羁绊解除',
   ACTIVE_ITEM_USED: '主动道具生效',
   ACTIVE_ITEM_REJECTED: '主动道具使用失败',
+  BOSS_SPAWNED: 'Boss 登场',
+  BOSS_CAST_WARNING: 'Boss 技能预警',
+  BOSS_SKILL_CAST: 'Boss 释放技能',
+  BOSS_SKILL_ENDED: 'Boss 技能结束',
+  BOSS_PHASE_CHANGED: 'Boss 进入新阶段',
+  BOSS_SKILL_PLUGIN_ERROR: 'Boss 技能异常',
+  BOSS_DIED: 'Boss 已击败',
+}
+
+function combatEventDisplay(event: ServerCombatEventState) {
+  const base = COMBAT_EVENT_LABELS[event.type] ?? event.type
+  const bossName = typeof event.data.bossName === 'string'
+    ? event.data.bossName
+    : typeof event.data.bossDefinitionId === 'string'
+      ? event.data.bossDefinitionId
+      : ''
+  const skillName = typeof event.data.skillName === 'string'
+    ? event.data.skillName
+    : typeof event.data.skillId === 'string'
+      ? event.data.skillId
+      : ''
+  if (bossName && skillName) return `${base} · ${bossName}「${skillName}」`
+  if (skillName) return `${base} · ${skillName}`
+  if (bossName) return `${base} · ${bossName}`
+  return base
 }
 
 const ACTIVE_ITEM_PRESENTATION: Record<string, { name: string; targetingKind: ServerActiveItemState['targetingKind'] }> = {
@@ -392,8 +430,28 @@ function normalizeEnemy(rawEnemy: unknown): ServerEnemyState | null {
   const rawKind = typeof rawEnemy.kind === 'string' ? rawEnemy.kind : typeof rawEnemy.type === 'string' ? rawEnemy.type : ''
   if (!entityId || x === null || y === null) return null
   const hp = typeof rawEnemy.hp === 'number' ? rawEnemy.hp : 0
+  const rawActiveCast = isObject(rawEnemy.activeCast) ? rawEnemy.activeCast : null
+  const activeCast = rawActiveCast
+    && typeof rawActiveCast.skillId === 'string'
+    && typeof rawActiveCast.executeAtTick === 'number'
+    ? {
+        skillId: rawActiveCast.skillId,
+        skillName: typeof rawActiveCast.skillName === 'string' ? rawActiveCast.skillName : rawActiveCast.skillId,
+        startedAtTick: readNumber(rawActiveCast, 'startedAtTick', rawActiveCast.executeAtTick),
+        executeAtTick: rawActiveCast.executeAtTick,
+        targetPlayerIds: Array.isArray(rawActiveCast.targetPlayerIds)
+          ? rawActiveCast.targetPlayerIds.filter((id): id is string => typeof id === 'string')
+          : [],
+      }
+    : null
   return {
     entityId,
+    entityKind: rawEnemy.entityKind === 'boss' ? 'boss' : 'ordinary_minion',
+    bossDefinitionId: typeof rawEnemy.bossDefinitionId === 'string' ? rawEnemy.bossDefinitionId : null,
+    bossName: typeof rawEnemy.bossName === 'string' ? rawEnemy.bossName : null,
+    controlResistanceBps: Math.max(0, readNumber(rawEnemy, 'controlResistanceBps', 0)),
+    bossPhase: Math.max(0, Math.floor(readNumber(rawEnemy, 'bossPhase', 0))),
+    activeCast,
     glyph: typeof rawEnemy.glyph === 'string'
       ? rawEnemy.glyph
       : typeof rawEnemy.name === 'string' && rawEnemy.name.length <= 2
@@ -650,6 +708,7 @@ function normalizeSyncState(payload: unknown, playerId: string): ServerDrivenGam
     roomId: typeof candidate.roomId === 'string' ? candidate.roomId : DEFAULT_ROOM_ID,
     phase: candidate.phase === 'countdown' || candidate.phase === 'waiting_for_level' || candidate.phase === 'playing' ? candidate.phase : 'lobby',
     tick: candidate.tick,
+    tickRateMs: Math.max(1, readNumber(candidate, 'tickRateMs', 100)),
     status: candidate.status === 'running' || candidate.status === 'finished' ? candidate.status : 'waiting',
     boardPieces,
     enemies,
@@ -1419,7 +1478,12 @@ export function GamingPage() {
       <div className="cyber-background" />
       <div className="cyber-noise" />
       <button type="button" onClick={() => setIsLeaveConfirmOpen(true)} className="gaming-exit-fab"><OctagonX className="h-3.5 w-3.5" /><span>退出</span></button>
-      <CrisisWarning overloadTicks={gameState?.overloadTicks ?? 0} overloadCountdownSec={gameState?.overloadCountdownSec ?? 0} enemyCount={gameState?.enemies.length ?? 0} maxCapacity={gameState?.maxCapacity ?? 10} />
+      <CrisisWarning
+        overloadTicks={gameState?.overloadTicks ?? 0}
+        overloadCountdownSec={gameState?.overloadCountdownSec ?? 0}
+        enemyCount={gameState?.enemies.filter((enemy) => enemy.entityKind === 'ordinary_minion').length ?? 0}
+        maxCapacity={gameState?.maxCapacity ?? 10}
+      />
 
       <section className="gaming-shell">
         <div className="gaming-stage">
@@ -1684,13 +1748,39 @@ export function GamingPage() {
               <div className="gaming-status-stack">
                 <div className="gaming-status-row"><Coins className="h-4 w-4 text-amber-300" /><span>斋饭</span><strong>{gameState?.rice ?? 0}</strong></div>
                 <div className="gaming-status-row"><Users className="h-4 w-4 text-cyan-300" /><span>人口</span><strong>{gameState?.populationUsed ?? 0}/{gameState?.populationCap ?? 10}</strong></div>
-                <div className="gaming-status-row"><Skull className="h-4 w-4 text-red-300" /><span>活跃小怪</span><strong>{gameState?.enemies.length ?? 0}</strong></div>
+                <div className="gaming-status-row"><Skull className="h-4 w-4 text-red-300" /><span>活跃敌人</span><strong>{gameState?.enemies.length ?? 0}</strong></div>
                 <div className="gaming-status-row"><ShieldAlert className="h-4 w-4 text-orange-300" /><span>当前波次</span><strong>{gameState?.currentWave.index ?? 0}{gameState?.maxWaves ? `/${gameState.maxWaves}` : ''}</strong></div>
                 {(gameState?.currentWave.prepCountdownSec ?? 0) > 0 ? (
                   <div className="gaming-status-row"><Timer className="h-4 w-4 text-violet-300" /><span>出怪倒计时</span><strong>{gameState?.currentWave.prepCountdownSec}s</strong></div>
                 ) : null}
               </div>
             </section>
+            {(gameState?.enemies.some((enemy) => enemy.entityKind === 'boss') ?? false) ? (
+              <section className="gaming-panel-card gaming-boss-panel" aria-live="polite">
+                <p className="gaming-section-label">当前 Boss</p>
+                <div className="gaming-boss-list">
+                  {gameState?.enemies.filter((enemy) => enemy.entityKind === 'boss').map((boss) => {
+                    const hpRatio = boss.maxHp > 0 ? Math.max(0, Math.min(1, boss.hp / boss.maxHp)) : 0
+                    const castSeconds = boss.activeCast
+                      ? Math.max(0, Math.ceil((boss.activeCast.executeAtTick - gameState.tick) * gameState.tickRateMs / 1000))
+                      : null
+                    return (
+                      <article className="gaming-boss-entry" key={boss.entityId}>
+                        <header><span className="gaming-boss-seal">BOSS</span><strong>{boss.bossName ?? boss.glyph}</strong><small>阶段 {Math.max(1, boss.bossPhase)}</small></header>
+                        <div className="gaming-boss-hp-copy"><span>{Math.max(0, Math.ceil(boss.hp)).toLocaleString()} / {Math.max(1, Math.ceil(boss.maxHp)).toLocaleString()}</span><small>控制抗性 {(boss.controlResistanceBps / 100).toFixed(0)}%</small></div>
+                        <div className="gaming-boss-hpbar" role="progressbar" aria-label={`${boss.bossName ?? 'Boss'}生命值`} aria-valuemin={0} aria-valuemax={boss.maxHp} aria-valuenow={Math.max(0, boss.hp)}><span style={{ width: `${hpRatio * 100}%` }} /></div>
+                        {boss.activeCast ? (
+                          <div className="gaming-boss-cast-warning">
+                            <ShieldAlert className="h-4 w-4" />
+                            <span><strong>{boss.activeCast.skillName}</strong><small>{castSeconds === 0 ? '立即释放' : `${castSeconds}s 后释放`}</small></span>
+                          </div>
+                        ) : null}
+                      </article>
+                    )
+                  })}
+                </div>
+              </section>
+            ) : null}
             <section className="gaming-panel-card">
               <p className="gaming-section-label">已激活羁绊</p>
               <div className="gaming-synergy-list">
@@ -1723,7 +1813,7 @@ export function GamingPage() {
               {(gameState?.recentEvents.length ?? 0) > 0 ? (
                 <div className="gaming-event-list">
                   {[...(gameState?.recentEvents ?? [])].slice(-4).reverse().map((event) => (
-                    <p key={event.id}><span>{COMBAT_EVENT_LABELS[event.type] ?? event.type}</span><small>T{event.tick}</small></p>
+                    <p key={event.id}><span>{combatEventDisplay(event)}</span><small>T{event.tick}</small></p>
                   ))}
                 </div>
               ) : null}

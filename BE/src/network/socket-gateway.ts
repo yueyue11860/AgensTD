@@ -22,6 +22,7 @@ import {
 import type { PlayerAccountService } from '../account-v1/service'
 import { PveRewardService } from '../pve-reward-v1'
 import type { GameState } from '../domain/game-state'
+import { getPassiveItemDefinition } from '../item-v1'
 
 function readHandshakeValue(socket: Socket, key: string) {
   const queryValue = socket.handshake.query[key]
@@ -607,7 +608,8 @@ export class SocketGateway {
     if (!selection || !state.pve || !this.accountService) return
     const milestones = [5, 10, 15, 20] as const
     const dueMilestones = state.pve.players.flatMap(player => milestones
-      .filter(milestone => milestone <= player.highestCompletedWave)
+      // 波次允许重叠，后续波次先清完不能被误判为前一个 Boss 已死亡。
+      .filter(milestone => player.clearedWaves.includes(milestone))
       .map(milestone => ({ playerId: player.playerId, milestone })))
       .filter(({ playerId, milestone }) => !runtime.scheduledRewardKeys.has(
         `${state.matchId}:${playerId}:wave-${milestone}`,
@@ -670,7 +672,27 @@ export class SocketGateway {
         fragmentBalances: account.weapon.fragmentBalances,
         unlockedWeaponIds: account.weapon.unlockedWeaponIds,
       },
+      bossFragmentBonus: this.resolveBossFragmentBonus(runtime.room, playerId),
     })
+  }
+
+  private resolveBossFragmentBonus(room: Room, playerId: string) {
+    const build = room.getMatchBuildSnapshot(playerId)
+    if (!build) return undefined
+    for (const itemId of build.item.passiveSlots) {
+      if (!itemId) continue
+      const definition = getPassiveItemDefinition(itemId)
+      const modifier = definition?.ruleModifiers.find(candidate => candidate.type === 'boss_fragment_bonus')
+      if (modifier?.type === 'boss_fragment_bonus') {
+        return {
+          chanceBps: modifier.chanceBps,
+          extraCount: modifier.extraCount,
+          maxExtraPerBoss: modifier.maxExtraPerBoss,
+          qualityPolicy: modifier.qualityPolicy,
+        } as const
+      }
+    }
+    return undefined
   }
 
   private async settleFinishedPveMatch(runtime: RoomRuntime, state: GameState) {
@@ -728,7 +750,7 @@ export class SocketGateway {
     const account = await this.accountService.getOrCreate(playerId)
     if (account.settlementsById[`${state.matchId}:${playerId}`]) return
     for (const milestone of [5, 10, 15, 20] as const) {
-      if (milestone <= player.highestCompletedWave) {
+      if (player.clearedWaves.includes(milestone)) {
         await this.recordPveMilestone(runtime, state, playerId, milestone)
       }
     }
