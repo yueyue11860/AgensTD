@@ -101,7 +101,11 @@ app.get('/health', (_request, response) => {
         ok,
         service: 'agenstd-houduan',
         persistence,
-        stores: { auth: 'supabase', pvp: persistencePolicy.pvpStoreMode, pveCheckpoint: checkpointStoreMode },
+        stores: {
+            auth: config.supabaseUrl && config.supabaseServiceRoleKey ? 'supabase' : 'static',
+            pvp: persistencePolicy.pvpStoreMode,
+            pveCheckpoint: checkpointStoreMode,
+        },
         pveCheckpoint: pveCheckpointReadiness,
     });
 });

@@ -4,6 +4,7 @@ import type { PveSceneTheme } from '../../shared/contracts/pve-stage-config'
 import { BATTLEFIELD_SIZE, BattlefieldScene, type BattlefieldCameraViewState, type BattlefieldSceneUiState } from '../game/phaser/battlefield-scene'
 import type { BattlefieldGridPosition, BattlefieldInteractionBridge, BattlefieldSnapshot } from '../game/phaser/battlefield-model'
 import { moveBattlefieldCursor, type BattlefieldCursorDirection } from '../game/accessibility/battlefield-accessibility'
+import type { ClientActionIntent } from '../game/presentation/client-action-intents'
 
 interface PhaserBattlefieldProps extends BattlefieldInteractionBridge {
   snapshot: BattlefieldSnapshot | null
@@ -14,6 +15,7 @@ interface PhaserBattlefieldProps extends BattlefieldInteractionBridge {
   selectedPieceCell?: BattlefieldGridPosition | null
   placementMode: boolean
   canPreviewAtHoveredCell: boolean
+  clientActionIntents?: readonly ClientActionIntent[]
   /** 预留给 HUD 设置；不传时使用安全的轻音量默认值。 */
   muted?: boolean
   masterVolume?: number
@@ -24,12 +26,13 @@ interface PhaserBattlefieldProps extends BattlefieldInteractionBridge {
   onCancelInteraction: () => void
 }
 
-export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hoveredCell, selectedPieceId, selectedPieceCell = null, placementMode, canPreviewAtHoveredCell, muted = false, masterVolume = 0.45, presentationSyncRevision = 0, accessibilitySummaryId, accessibilityLabel, onCancelInteraction, onCellClick, onCellHover, onCellLeave }: PhaserBattlefieldProps) {
+export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hoveredCell, selectedPieceId, selectedPieceCell = null, placementMode, canPreviewAtHoveredCell, clientActionIntents = [], muted = false, masterVolume = 0.45, presentationSyncRevision = 0, accessibilitySummaryId, accessibilityLabel, onCancelInteraction, onCellClick, onCellHover, onCellLeave }: PhaserBattlefieldProps) {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const sceneRef = useRef<BattlefieldScene | null>(null)
   const callbacksRef = useRef<BattlefieldInteractionBridge>({ onCellClick, onCellHover, onCellLeave })
   const cancelInteractionRef = useRef(onCancelInteraction)
   const appliedPresentationSyncRevisionRef = useRef(presentationSyncRevision)
+  const pointerCellKeyRef = useRef<string | null>(null)
   const [cameraView, setCameraView] = useState<BattlefieldCameraViewState>({ mode: 'full', zoom: 1, scrollX: 0, scrollY: 0 })
   callbacksRef.current = { onCellClick, onCellHover, onCellLeave }
   cancelInteractionRef.current = onCancelInteraction
@@ -49,6 +52,7 @@ export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hovered
     const lowEffects = (
       (navigator.hardwareConcurrency > 0 && navigator.hardwareConcurrency <= 4)
       || (typeof navigatorWithMemory.deviceMemory === 'number' && navigatorWithMemory.deviceMemory <= 4)
+      || window.matchMedia('(max-width: 700px)').matches
     )
     const applyPresentationPreferences = () => scene.setPresentationPreferences({
       reducedMotion: reducedMotionQuery.matches,
@@ -81,7 +85,9 @@ export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hovered
       width: BATTLEFIELD_SIZE,
       height: BATTLEFIELD_SIZE,
       backgroundColor: '#0b1121',
-      render: { antialias: true, pixelArt: false, roundPixels: true },
+      // Enemy speed can be below one world pixel per rendered frame. Rounding
+      // positions here quantizes smooth 60 FPS motion into visibly discrete hops.
+      render: { antialias: !lowEffects, pixelArt: false, roundPixels: false, powerPreference: 'high-performance' },
       scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
       input: { activePointers: 3 },
       scene,
@@ -111,8 +117,11 @@ export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hovered
       mountNode.dataset.enemyViews = String(diagnostics.enemyViews)
       mountNode.dataset.seenEnemyCount = String(diagnostics.seenEnemyCount)
       mountNode.dataset.pieceViews = String(diagnostics.pieceViews)
+      mountNode.dataset.compactEnemyTextures = String(diagnostics.compactEnemyTextures)
+      mountNode.dataset.pendingClientActionIntents = String(diagnostics.pendingClientActionIntents)
     }
   }, [presentationSyncRevision, snapshot])
+  useEffect(() => sceneRef.current?.setClientActionIntents(clientActionIntents), [clientActionIntents])
   useEffect(() => sceneRef.current?.setAudioPreferences({ muted, masterVolume }), [masterVolume, muted])
   useEffect(() => {
     const uiState: BattlefieldSceneUiState = { hoveredCell, selectedPieceId, placementMode, canPreviewAtHoveredCell }
@@ -138,7 +147,14 @@ export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hovered
   }
 
   return (
-    <section className="gaming-board-frame" aria-label="29×29西游汉字战场" data-onboarding-anchor="battlefield">
+    <section className="gaming-board-frame" aria-label="29×29西游汉字战场" data-onboarding-anchor="battlefield" data-pending-client-actions={clientActionIntents.length}>
+      {clientActionIntents.length > 0 ? (
+        <div className="gaming-client-intent-status" role="status" aria-live="polite">
+          <span>本地响应</span>
+          <strong>{clientActionIntents.at(-1)?.label}</strong>
+          <small>{clientActionIntents.some(intent => intent.acceptedAtServerTick !== null) ? '服务器已接收 · 等待权威帧' : '正在发送 · 不修改权威数值'}</small>
+        </div>
+      ) : null}
       <div className="gaming-board-viewport">
         <div
           ref={mountRef}
@@ -151,7 +167,10 @@ export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hovered
           onFocus={() => {
             if (!hoveredCell) callbacksRef.current.onCellHover(14, 14)
           }}
-          onBlur={() => callbacksRef.current.onCellLeave()}
+          onBlur={() => {
+            pointerCellKeyRef.current = null
+            callbacksRef.current.onCellLeave()
+          }}
           onKeyDown={(event) => {
             if (event.shiftKey && event.key.startsWith('Arrow')) {
               event.preventDefault()
@@ -210,10 +229,17 @@ export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hovered
           onPointerMove={(event) => {
             if (event.pointerType === 'touch' && event.isPrimary === false) return
             const cell = cellAtClientPoint(event.currentTarget, event.clientX, event.clientY)
+            const nextKey = cell ? `${cell.x}:${cell.y}` : null
+            if (nextKey === pointerCellKeyRef.current) return
+            pointerCellKeyRef.current = nextKey
             if (cell) callbacksRef.current.onCellHover(cell.x, cell.y)
             else callbacksRef.current.onCellLeave()
           }}
-          onPointerLeave={() => callbacksRef.current.onCellLeave()}
+          onPointerLeave={() => {
+            if (pointerCellKeyRef.current === null) return
+            pointerCellKeyRef.current = null
+            callbacksRef.current.onCellLeave()
+          }}
           onClick={(event) => {
             const cell = cellAtClientPoint(event.currentTarget, event.clientX, event.clientY)
             if (cell) callbacksRef.current.onCellClick(cell.x, cell.y)

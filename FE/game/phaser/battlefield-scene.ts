@@ -16,6 +16,7 @@ import {
   enemyVisualStyle,
   type EnemyVisualRole,
 } from '../presentation/enemy-visual-language'
+import type { ClientActionIntent } from '../presentation/client-action-intents'
 import type {
   BattlefieldEffectZoneState,
   BattlefieldEnemyState,
@@ -35,6 +36,8 @@ import {
 } from './battlefield-camera'
 import {
   compactEnemyHealthPixels,
+  enemySnapshotInterpolationDurationMs,
+  enemyTargetChanged,
   interpolateEnemyPosition,
   shouldUseCompactEnemyRendering,
 } from './enemy-render-budget'
@@ -49,9 +52,7 @@ const ENEMY_BODY_RADIUS_PX = 13
 const BOSS_BODY_RADIUS_PX = 20
 const ENEMY_TWEEN_MS = 220
 const HAN_FONT = '"Noto Serif SC", "Songti SC", "STSong", serif'
-const HUAGUOSHAN_BACKGROUND_KEY = 'huaguoshan-celestial-arena-v1'
-const HUAGUOSHAN_BACKGROUND_URL = '/art/backgrounds/huaguoshan-celestial-arena-v1.webp'
-
+const TERRAIN_TEXTURE_KEY = 'battlefield-terrain-static'
 const GATE_LABELS = new Map<string, string>([
   ['13:15', 'P1'],
   ['15:15', 'P2'],
@@ -93,6 +94,12 @@ interface DetailedEnemyView {
   spawnProtected: boolean
   invulnerable: boolean
   statusSignature: string
+  targetX: number
+  targetY: number
+  movementFromX: number
+  movementFromY: number
+  movementStartedAt: number
+  movementDurationMs: number
 }
 
 interface CompactEnemyView {
@@ -191,10 +198,10 @@ export class BattlefieldScene extends Phaser.Scene {
   private readonly presentationState = createCombatPresentationState()
   private readonly combatAudio = new BattlefieldCombatAudio()
   private presentationDirector: BattlefieldPresentationDirector | null = null
-  private backgroundImage: Phaser.GameObjects.Image | null = null
   private terrainLayer!: Phaser.GameObjects.Graphics
   private previewLayer!: Phaser.GameObjects.Graphics
   private zoneLayer!: Phaser.GameObjects.Graphics
+  private intentLayer!: Phaser.GameObjects.Graphics
   private pieceLayer!: Phaser.GameObjects.Container
   private summonLayer!: Phaser.GameObjects.Container
   private enemyLayer!: Phaser.GameObjects.Container
@@ -205,7 +212,11 @@ export class BattlefieldScene extends Phaser.Scene {
   private compactEnemyTextureSequence = 0
   private compactEnemyMode = false
   private readonly seenEnemyIds = new Set<string>()
+  private lastMovementSnapshotTick: number | null = null
+  private lastMovementDurationMs = ENEMY_TWEEN_MS
   private readonly summonedUnitViews = new Map<string, SummonedUnitView>()
+  private latestClientActionIntents: readonly ClientActionIntent[] = []
+  private latestClientActionIntentSignature = ''
   private lastHoveredCellKey: string | null = null
   private pointerDownCell: BattlefieldGridPosition | null = null
   private pointerDownScreen: BattlefieldGridPosition | null = null
@@ -230,23 +241,13 @@ export class BattlefieldScene extends Phaser.Scene {
     this.onCameraViewChange = onCameraViewChange
   }
 
-  preload() {
-    if (this.isHuaguoshanTheme() && !this.textures.exists(HUAGUOSHAN_BACKGROUND_KEY)) {
-      this.load.image(HUAGUOSHAN_BACKGROUND_KEY, HUAGUOSHAN_BACKGROUND_URL)
-    }
-  }
-
   create() {
     this.cameras.main.setBackgroundColor('#0b1121')
     this.cameras.main.setBounds(0, 0, BATTLEFIELD_SIZE, BATTLEFIELD_SIZE)
-    if (this.isHuaguoshanTheme() && this.textures.exists(HUAGUOSHAN_BACKGROUND_KEY)) {
-      this.backgroundImage = this.add.image(BATTLEFIELD_SIZE / 2, BATTLEFIELD_SIZE / 2, HUAGUOSHAN_BACKGROUND_KEY)
-        .setDisplaySize(BATTLEFIELD_SIZE, BATTLEFIELD_SIZE)
-        .setDepth(-5)
-    }
     this.terrainLayer = this.add.graphics()
     this.previewLayer = this.add.graphics().setDepth(10)
     this.zoneLayer = this.add.graphics().setDepth(15)
+    this.intentLayer = this.add.graphics().setDepth(19).setVisible(false)
     this.pieceLayer = this.add.container(0, 0).setDepth(20)
     this.summonLayer = this.add.container(0, 0).setDepth(25)
     this.enemyLayer = this.add.container(0, 0).setDepth(30)
@@ -256,6 +257,7 @@ export class BattlefieldScene extends Phaser.Scene {
     this.presentationDirector.setPreferences(this.presentationPreferences)
     this.inputZone = this.add.zone(0, 0, BATTLEFIELD_SIZE, BATTLEFIELD_SIZE).setOrigin(0).setDepth(100).setInteractive()
     this.drawTerrain()
+    this.bakeTerrainLayer()
     this.bindPointerInput()
     this.setViewMode('full')
     if (this.latestSnapshot) this.renderSnapshot(this.latestSnapshot)
@@ -267,13 +269,15 @@ export class BattlefieldScene extends Phaser.Scene {
       this.presentationDirector = null
       this.combatAudio.destroy()
       this.clearCompactEnemyTextures()
+      if (this.textures.exists(TERRAIN_TEXTURE_KEY)) this.textures.remove(TERRAIN_TEXTURE_KEY)
     })
   }
 
   update(time: number) {
-    if (!this.compactEnemyMode) return
+    if (this.latestClientActionIntents.length > 0) {
+      this.intentLayer.setAlpha(0.72 + Math.sin(time / 105) * 0.28)
+    }
     for (const view of this.enemyViews.values()) {
-      if (view.mode !== 'compact') continue
       if (this.presentationPreferences.reducedMotion || view.movementDurationMs <= 0) {
         view.container.setPosition(view.targetX, view.targetY)
         continue
@@ -287,6 +291,7 @@ export class BattlefieldScene extends Phaser.Scene {
   }
 
   setSnapshot(snapshot: BattlefieldSnapshot | null) {
+    if (this.latestSnapshot === snapshot) return
     this.latestSnapshot = snapshot
     if (this.sys.isActive() && snapshot) this.renderSnapshot(snapshot)
   }
@@ -299,6 +304,14 @@ export class BattlefieldScene extends Phaser.Scene {
   }
 
   setUiState(uiState: BattlefieldSceneUiState) {
+    const current = this.latestUiState
+    if (
+      current.selectedPieceId === uiState.selectedPieceId
+      && current.placementMode === uiState.placementMode
+      && current.canPreviewAtHoveredCell === uiState.canPreviewAtHoveredCell
+      && current.hoveredCell?.x === uiState.hoveredCell?.x
+      && current.hoveredCell?.y === uiState.hoveredCell?.y
+    ) return
     this.latestUiState = uiState
     if (this.sys.isActive()) this.renderUiState()
   }
@@ -309,6 +322,16 @@ export class BattlefieldScene extends Phaser.Scene {
     this.combatAudio.setLowEffects(preferences.lowEffects)
   }
 
+  setClientActionIntents(intents: readonly ClientActionIntent[]) {
+    const signature = intents
+      .map(intent => `${intent.requestId}:${intent.acceptedAtServerTick ?? 'sent'}:${intent.target?.x ?? ''}:${intent.target?.y ?? ''}`)
+      .join('|')
+    if (signature === this.latestClientActionIntentSignature) return
+    this.latestClientActionIntentSignature = signature
+    this.latestClientActionIntents = intents
+    if (this.sys.isActive()) this.renderClientActionIntents()
+  }
+
   diagnostics() {
     const presentation = this.presentationDirector?.diagnostics() ?? { activeVfxObjects: 0, pooledVfxObjects: 0, telegraphLabels: 0 }
     return {
@@ -317,6 +340,8 @@ export class BattlefieldScene extends Phaser.Scene {
       enemyViews: this.enemyViews.size,
       seenEnemyCount: this.seenEnemyIds.size,
       summonedUnitViews: this.summonedUnitViews.size,
+      compactEnemyTextures: this.compactEnemyTextures.size,
+      pendingClientActionIntents: this.latestClientActionIntents.length,
       displayObjects: this.children?.list?.length ?? 0,
     }
   }
@@ -415,10 +440,6 @@ export class BattlefieldScene extends Phaser.Scene {
 
   private notifyCameraViewChange() {
     this.onCameraViewChange?.(this.getCameraViewState())
-  }
-
-  private isHuaguoshanTheme(): boolean {
-    return Boolean(this.sceneTheme?.environment.includes('桃林') || this.sceneTheme?.landmark.includes('水帘'))
   }
 
   private isEnemyPresentationFixtureEnabled(): boolean {
@@ -541,8 +562,7 @@ export class BattlefieldScene extends Phaser.Scene {
     const groundColor = Phaser.Display.Color.HexStringToColor(groundHex).color
     const accentColor = Phaser.Display.Color.HexStringToColor(accentHex).color
     graphics.clear()
-    // 花果山使用可选的美术背景；资源缺失时仍退回完整程序化战场。
-    graphics.fillStyle(backgroundColor, this.backgroundImage ? 0.56 : 1)
+    graphics.fillStyle(backgroundColor, 1)
     graphics.fillRect(0, 0, BATTLEFIELD_SIZE, BATTLEFIELD_SIZE)
     for (let y = 0; y < BATTLEFIELD_DIMENSION; y += 1) {
       for (let x = 0; x < BATTLEFIELD_DIMENSION; x += 1) {
@@ -552,7 +572,7 @@ export class BattlefieldScene extends Phaser.Scene {
         const isGround = this.terrainMatrix[y]?.[x] === 1
         graphics.fillStyle(
           isGround ? groundColor : 0x0f172a,
-          this.backgroundImage ? (isGround ? 0.34 : 0.62) : (isGround ? 0.72 : 0.9),
+          isGround ? 0.72 : 0.9,
         )
         graphics.fillRoundedRect(left, top, size, size, 3)
         if (isGround) {
@@ -573,6 +593,15 @@ export class BattlefieldScene extends Phaser.Scene {
         if (gateLabel) this.add.text(left + size / 2, top + size / 2, gateLabel, { color: accentHex, fontFamily: 'ui-monospace, monospace', fontSize: '10px', fontStyle: 'bold' }).setOrigin(0.5).setAlpha(0.85).setDepth(5)
       }
     }
+  }
+
+  /** Terrain never changes during a match. Baking thousands of rounded-rectangle
+   * commands into one texture turns the per-frame board cost into a single quad. */
+  private bakeTerrainLayer() {
+    if (this.textures.exists(TERRAIN_TEXTURE_KEY)) this.textures.remove(TERRAIN_TEXTURE_KEY)
+    this.terrainLayer.generateTexture(TERRAIN_TEXTURE_KEY, BATTLEFIELD_SIZE, BATTLEFIELD_SIZE)
+    this.terrainLayer.clear().setVisible(false)
+    this.add.image(0, 0, TERRAIN_TEXTURE_KEY).setOrigin(0).setDepth(0)
   }
 
   private bindPointerInput() {
@@ -681,7 +710,17 @@ export class BattlefieldScene extends Phaser.Scene {
     this.drawZones(snapshot.zones)
     this.syncPieces(snapshot.pieces)
     this.syncSummonedUnits(snapshot.summonedUnits)
-    this.syncEnemies(snapshot.enemies, snapshot.statuses)
+    const movementDurationMs = enemySnapshotInterpolationDurationMs({
+      previousTick: this.lastMovementSnapshotTick,
+      currentTick: snapshot.tick,
+      tickRateMs: snapshot.tickRateMs ?? 100,
+      fallbackMs: this.lastMovementDurationMs,
+    })
+    if (this.lastMovementSnapshotTick === null || snapshot.tick > this.lastMovementSnapshotTick) {
+      this.lastMovementSnapshotTick = snapshot.tick
+      this.lastMovementDurationMs = movementDurationMs
+    }
+    this.syncEnemies(snapshot.enemies, snapshot.statuses, movementDurationMs)
     this.combatAudio.play(cues, snapshot.tick, snapshot.tickRateMs)
     this.presentationDirector?.play(cues)
     this.presentationDirector?.syncSynergyLinks(activeSynergyPresentationLinks(this.presentationState))
@@ -732,6 +771,28 @@ export class BattlefieldScene extends Phaser.Scene {
         this.zoneLayer.strokeRoundedRect(centerX - width / 2, centerY - height / 2, width, height, 6)
       }
     }
+  }
+
+  private renderClientActionIntents() {
+    this.intentLayer.clear().setAlpha(1).setVisible(false)
+    const drawnTargets = new Set<string>()
+    for (const intent of this.latestClientActionIntents) {
+      if (!intent.target) continue
+      const key = coordKey(intent.target.x, intent.target.y)
+      if (drawnTargets.has(key)) continue
+      drawnTargets.add(key)
+      const left = gridToPixel(intent.target.x) + 2
+      const top = gridToPixel(intent.target.y) + 2
+      const size = BATTLEFIELD_CELL_SIZE - 4
+      const color = intent.acceptedAtServerTick === null ? 0x22d3ee : 0x34d399
+      this.intentLayer.fillStyle(color, 0.2)
+      this.intentLayer.fillRoundedRect(left, top, size, size, 6)
+      this.intentLayer.lineStyle(2, color, 0.95)
+      this.intentLayer.strokeRoundedRect(left, top, size, size, 6)
+      this.intentLayer.lineBetween(left + 6, top + size / 2, left + size - 6, top + size / 2)
+      this.intentLayer.lineBetween(left + size / 2, top + 6, left + size / 2, top + size - 6)
+    }
+    this.intentLayer.setVisible(drawnTargets.size > 0)
   }
 
   private syncSummonedUnits(units: BattlefieldSummonedUnitState[]) {
@@ -839,7 +900,11 @@ export class BattlefieldScene extends Phaser.Scene {
     view.fixedValue = Boolean(piece.generalFixed)
   }
 
-  private syncEnemies(enemies: BattlefieldEnemyState[], statuses: BattlefieldEnemyStatusState[]) {
+  private syncEnemies(
+    enemies: BattlefieldEnemyState[],
+    statuses: BattlefieldEnemyStatusState[],
+    movementDurationMs: number,
+  ) {
     for (const enemy of enemies) this.seenEnemyIds.add(enemy.entityId)
     const compactMode = shouldUseCompactEnemyRendering(enemies.length)
     if (compactMode !== this.compactEnemyMode) {
@@ -880,15 +945,11 @@ export class BattlefieldScene extends Phaser.Scene {
           view = this.createCompactEnemyView(enemy, statusSignature, textureSignature, targetX, targetY)
           this.enemyViews.set(enemy.entityId, view)
         } else {
-          compact.movementFromX = compact.container.x
-          compact.movementFromY = compact.container.y
-          compact.targetX = targetX
-          compact.targetY = targetY
-          compact.movementStartedAt = this.time.now
-          compact.movementDurationMs = this.presentationPreferences.reducedMotion
-            ? 0
-            : enemyMoveProfile(enemy, this.presentationPreferences).durationMs
-          if (compact.movementDurationMs === 0) compact.container.setPosition(targetX, targetY)
+          if (compact.spawnProtected && !Boolean(enemy.spawnProtected)) {
+            this.snapEnemyPosition(compact, targetX, targetY)
+          } else {
+            this.retargetEnemyPosition(compact, targetX, targetY, movementDurationMs)
+          }
           if (compact.textureSignature !== textureSignature) {
             compact.sprite.setTexture(this.compactEnemyTexture(enemy, statusSignature, textureSignature))
             compact.textureSignature = textureSignature
@@ -905,15 +966,11 @@ export class BattlefieldScene extends Phaser.Scene {
         view = this.createEnemyView(enemy, targetX, targetY)
         this.enemyViews.set(enemy.entityId, view)
       } else if (view.mode === 'detailed') {
-        this.tweens.killTweensOf(view.container)
         if (view.spawnProtected && !Boolean(enemy.spawnProtected)) {
           // 解除攻击锁的同帧对齐到服务端越线位置，避免补间滞后造成“身体还在出生格里就掉血”。
-          view.container.setPosition(targetX, targetY)
-        } else if (this.presentationPreferences.reducedMotion) {
-          view.container.setPosition(targetX, targetY)
+          this.snapEnemyPosition(view, targetX, targetY)
         } else {
-          const movement = enemyMoveProfile(enemy, this.presentationPreferences)
-          this.tweens.add({ targets: view.container, x: targetX, y: targetY, duration: movement.durationMs, ease: movement.ease })
+          this.retargetEnemyPosition(view, targetX, targetY, movementDurationMs)
         }
       }
       if (view.mode !== 'detailed') continue
@@ -941,6 +998,32 @@ export class BattlefieldScene extends Phaser.Scene {
       if (presentationChanged || view.hp !== enemy.hp || view.maxHp !== enemy.maxHp) this.drawEnemyHealth(view, enemy.hp, enemy.maxHp)
     }
     if (compactMode) this.pruneCompactEnemyTextures(activeCompactSignatures)
+  }
+
+  private retargetEnemyPosition(
+    view: EnemyView,
+    targetX: number,
+    targetY: number,
+    movementDurationMs: number,
+  ) {
+    if (!enemyTargetChanged(view.targetX, view.targetY, targetX, targetY)) return
+    view.movementFromX = view.container.x
+    view.movementFromY = view.container.y
+    view.targetX = targetX
+    view.targetY = targetY
+    view.movementStartedAt = this.time.now
+    view.movementDurationMs = this.presentationPreferences.reducedMotion ? 0 : movementDurationMs
+    if (view.movementDurationMs === 0) view.container.setPosition(targetX, targetY)
+  }
+
+  private snapEnemyPosition(view: EnemyView, targetX: number, targetY: number) {
+    view.targetX = targetX
+    view.targetY = targetY
+    view.movementFromX = targetX
+    view.movementFromY = targetY
+    view.movementStartedAt = this.time.now
+    view.movementDurationMs = 0
+    view.container.setPosition(targetX, targetY)
   }
 
   private compactEnemyTextureSignature(enemy: BattlefieldEnemyState, statusSignature: string) {
@@ -1137,6 +1220,12 @@ export class BattlefieldScene extends Phaser.Scene {
       spawnProtected: false,
       invulnerable: false,
       statusSignature: '',
+      targetX: x,
+      targetY: y,
+      movementFromX: x,
+      movementFromY: y,
+      movementStartedAt: this.time.now,
+      movementDurationMs: 0,
     }
     this.drawEnemyBody(view, enemy)
     this.drawEnemyHealth(view, enemy.hp, enemy.maxHp)

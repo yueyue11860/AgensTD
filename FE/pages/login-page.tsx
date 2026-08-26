@@ -27,7 +27,7 @@ function BootLog() {
 }
 
 export function LoginPage() {
-  const { isLoggedIn, isLoading, error: sessionError, login, register } = useAuth()
+  const { isLoggedIn, isLoading, error: sessionError, localTestAccount, login, register } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const [mode, setMode] = useState<'login' | 'register'>('login')
@@ -108,6 +108,21 @@ export function LoginPage() {
           </div>
 
           <form className="w-full space-y-3" onSubmit={(event) => void handleSubmit(event)}>
+            {mode === 'login' && localTestAccount && (
+              <div className="border border-amber-300/25 bg-amber-950/20 px-3 py-2.5 font-mono text-xs text-amber-100/80">
+                <div className="flex items-center justify-between gap-3">
+                  <span>本地测试账号（无需数据库）</span>
+                  <button
+                    type="button"
+                    className="border border-amber-300/30 px-2 py-1 text-[0.65rem] text-amber-200 transition hover:bg-amber-300/10"
+                    onClick={() => { setEmail(localTestAccount.email); setPassword(localTestAccount.password) }}
+                  >
+                    一键填入
+                  </button>
+                </div>
+                <p className="mt-1 text-[0.65rem] text-amber-100/55">{localTestAccount.email} / {localTestAccount.password}</p>
+              </div>
+            )}
             {mode === 'register' && (
               <label className="block">
                 <span className="mb-1.5 block font-mono text-[0.62rem] tracking-widest text-sky-400/55">CALLSIGN / 玩家代号</span>

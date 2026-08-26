@@ -34,6 +34,15 @@ import {
   mergeCombatEventsIntoGameState,
 } from '../game/network/combat-event-stream'
 import { parseCombatTargetGeometry } from '../game/presentation/combat-presentation-adapter'
+import {
+  acceptClientActionIntent,
+  appendClientActionIntent,
+  createClientActionIntent,
+  reconcileClientActionIntents,
+  rejectClientActionIntent,
+  type ClientActionIntent,
+} from '../game/presentation/client-action-intents'
+import type { BattlefieldSnapshot } from '../game/phaser/battlefield-model'
 
 const BOARD_DIMENSION = 29
 const DEFAULT_ROOM_ID = 'public-1'
@@ -146,6 +155,11 @@ interface ServerEnemyState {
   y: number
   hp: number
   maxHp: number
+  enemyRole?: string | null
+  armor?: number
+  magicResistance?: number
+  moveSpeedMilliCellsPerSecond?: number
+  waveNumber?: number
   spawnProtected?: boolean
   invulnerable?: boolean
 }
@@ -526,6 +540,11 @@ function normalizeEnemy(rawEnemy: unknown): ServerEnemyState | null {
     y,
     hp,
     maxHp: typeof rawEnemy.maxHp === 'number' ? rawEnemy.maxHp : Math.max(1, hp),
+    enemyRole: typeof rawEnemy.enemyRole === 'string' ? rawEnemy.enemyRole : null,
+    armor: readNumber(rawEnemy, 'armor', 0),
+    magicResistance: readNumber(rawEnemy, 'magicResistance', 0),
+    moveSpeedMilliCellsPerSecond: Math.max(0, readNumber(rawEnemy, 'moveSpeedMilliCellsPerSecond', 1000)),
+    waveNumber: Math.max(0, Math.floor(readNumber(rawEnemy, 'waveNumber', 0))),
     spawnProtected: rawEnemy.spawnProtected === true,
     invulnerable: rawEnemy.invulnerable === true,
   }
@@ -963,7 +982,7 @@ function TeammateConnectionRow({ slot, selfPlayerId }: { slot: RoomConnectionSlo
   )
 }
 
-function GamingBoard({ gameState, sceneTheme, selectedPieceId, selectedObjectLabel, executableActions, placementMode, allowAnyTargetCell, hoveredCell, audioMuted, audioMasterVolume, presentationSyncRevision, onCellClick, onCellHover, onCellLeave, onCancelInteraction }: {
+function GamingBoard({ gameState, sceneTheme, selectedPieceId, selectedObjectLabel, executableActions, placementMode, allowAnyTargetCell, hoveredCell, clientActionIntents, audioMuted, audioMasterVolume, presentationSyncRevision, onCellClick, onCellHover, onCellLeave, onCancelInteraction }: {
   gameState: ServerDrivenGameState | null
   sceneTheme?: PveSceneTheme | null
   selectedPieceId: string | null
@@ -972,6 +991,7 @@ function GamingBoard({ gameState, sceneTheme, selectedPieceId, selectedObjectLab
   placementMode: boolean
   allowAnyTargetCell?: boolean
   hoveredCell: { x: number; y: number } | null
+  clientActionIntents: readonly ClientActionIntent[]
   audioMuted: boolean
   audioMasterVolume: number
   presentationSyncRevision: number
@@ -981,9 +1001,29 @@ function GamingBoard({ gameState, sceneTheme, selectedPieceId, selectedObjectLab
   onCancelInteraction: () => void
 }) {
   const summaryId = 'pve-battlefield-dom-summary'
-  const bossNames = gameState?.enemies
-    .filter(enemy => enemy.entityKind === 'boss')
-    .map(enemy => enemy.bossName ?? enemy.glyph) ?? []
+  const enemies = gameState?.enemies
+  const battlefieldSnapshot = useMemo<BattlefieldSnapshot | null>(() => gameState ? {
+    tick: gameState.tick,
+    tickRateMs: gameState.tickRateMs,
+    pieces: gameState.boardPieces,
+    enemies: gameState.enemies,
+    statuses: gameState.statuses,
+    summonedUnits: gameState.summonedUnits,
+    zones: gameState.zones,
+    recentEvents: gameState.recentEvents,
+  } : null, [
+    gameState?.boardPieces,
+    gameState?.enemies,
+    gameState?.recentEvents,
+    gameState?.statuses,
+    gameState?.summonedUnits,
+    gameState?.tick,
+    gameState?.tickRateMs,
+    gameState?.zones,
+  ])
+  const bossNames = useMemo(() => enemies
+    ?.filter(enemy => enemy.entityKind === 'boss')
+    .map(enemy => enemy.bossName ?? enemy.glyph) ?? [], [enemies])
   const canPreviewAtHoveredCell = Boolean(
     hoveredCell
     && placementMode
@@ -1002,16 +1042,7 @@ function GamingBoard({ gameState, sceneTheme, selectedPieceId, selectedObjectLab
         executableActions={executableActions}
       />
       <PhaserBattlefield
-        snapshot={gameState ? {
-          tick: gameState.tick,
-          tickRateMs: gameState.tickRateMs,
-          pieces: gameState.boardPieces,
-          enemies: gameState.enemies,
-          statuses: gameState.statuses,
-          summonedUnits: gameState.summonedUnits,
-          zones: gameState.zones,
-          recentEvents: gameState.recentEvents,
-        } : null}
+        snapshot={battlefieldSnapshot}
         terrainMatrix={ARENA_TERRAIN_MATRIX}
         sceneTheme={sceneTheme}
         hoveredCell={hoveredCell}
@@ -1019,6 +1050,7 @@ function GamingBoard({ gameState, sceneTheme, selectedPieceId, selectedObjectLab
         selectedPieceCell={gameState?.boardPieces.find(piece => piece.entityId === selectedPieceId) ?? null}
         placementMode={placementMode}
         canPreviewAtHoveredCell={canPreviewAtHoveredCell}
+        clientActionIntents={clientActionIntents}
         muted={audioMuted}
         masterVolume={audioMasterVolume}
         presentationSyncRevision={presentationSyncRevision}
@@ -1059,6 +1091,7 @@ export function GamingPage() {
   const [targetingItemSlot, setTargetingItemSlot] = useState<0 | 1 | null>(null)
   const [selectedDiscardedTokenId, setSelectedDiscardedTokenId] = useState<string | null>(null)
   const [hoveredCell, setHoveredCell] = useState<{ x: number; y: number } | null>(null)
+  const [clientActionIntents, setClientActionIntents] = useState<ClientActionIntent[]>([])
   const [isLeaveConfirmOpen, setIsLeaveConfirmOpen] = useState(false)
   const [isBuildDockExpanded, setIsBuildDockExpanded] = useState(() => typeof window === 'undefined' || window.innerWidth >= 1080)
   const [error, setError] = useState<string | null>(null)
@@ -1156,6 +1189,14 @@ export function GamingPage() {
   }, [combatAudioPreferences])
 
   useEffect(() => {
+    if (clientActionIntents.length === 0) return
+    const timer = window.setInterval(() => {
+      setClientActionIntents(current => reconcileClientActionIntents(current, gameState?.tick ?? 0, Date.now()))
+    }, 500)
+    return () => window.clearInterval(timer)
+  }, [clientActionIntents.length])
+
+  useEffect(() => {
     if (reconnectRemainingSeconds !== 0 || connectionRecovery.deadlineAt === null || connectionRecovery.phase === 'ready') return
     setConnectionRecovery((current) => reduceConnectionRecovery(current, { type: 'deadline_tick', now: Date.now() }))
   }, [connectionRecovery.deadlineAt, connectionRecovery.phase, reconnectRemainingSeconds])
@@ -1225,6 +1266,9 @@ export function GamingPage() {
       const nextState = normalizeSyncState(networkState, playerId)
       if (nextState) {
         setGameState(nextState)
+        setClientActionIntents(current => isFull
+          ? []
+          : reconcileClientActionIntents(current, nextState.tick, Date.now()))
         if (isFull) {
           awaitingCheckpointRef.current = false
           setConnectionRecovery((current) => reduceConnectionRecovery(current, { type: 'full_snapshot' }))
@@ -1260,6 +1304,10 @@ export function GamingPage() {
     const handleCombatEventReset = () => {
       awaitingCheckpointRef.current = true
       socket.emit('REQUEST_FULL_STATE')
+    }
+    const handleActionAccepted = (payload: unknown) => {
+      if (!isObject(payload) || typeof payload.requestId !== 'string' || typeof payload.serverTick !== 'number') return
+      setClientActionIntents(current => acceptClientActionIntent(current, payload.requestId as string, payload.serverTick as number))
     }
 
     const handleRoomJoined = (payload: unknown) => {
@@ -1311,6 +1359,10 @@ export function GamingPage() {
       setMissionBriefingDismissed(false)
       if (typeof engineError === 'string') setError(engineError)
       else if (isObject(engineError) && typeof engineError.message === 'string') {
+        setClientActionIntents(current => rejectClientActionIntent(
+          current,
+          typeof engineError.requestId === 'string' ? engineError.requestId : null,
+        ))
         if (engineError.code === 'RECONNECT_WINDOW_EXPIRED') {
           setConnectionRecovery((current) => ({ ...current, phase: 'expired', deadlineAt: null, message: engineError.message as string }))
         }
@@ -1328,6 +1380,7 @@ export function GamingPage() {
     const handleDisconnect = (reason: Socket.DisconnectReason) => {
       if (terminalDisconnectRef.current || reason === 'io client disconnect') return
       awaitingCheckpointRef.current = true
+      setClientActionIntents([])
       const deadlineAt = Date.now() + connectionGraceMsRef.current
       setConnectionRecovery((current) => reduceConnectionRecovery(current, {
         type: 'server_reconnecting', deadlineAt, graceMs: connectionGraceMsRef.current,
@@ -1363,6 +1416,7 @@ export function GamingPage() {
     socket.on('TICK_UPDATE', handleTickUpdate)
     socket.on('COMBAT_EVENT_BATCH', handleCombatEventBatch)
     socket.on('COMBAT_EVENT_RESET', handleCombatEventReset)
+    socket.on('ACTION_ACCEPTED', handleActionAccepted)
     socket.on('ROOM_JOINED', handleRoomJoined)
     socket.on('ROOM_SNAPSHOT', handleRoomSnapshot)
     socket.on('PLAYER_CONNECTION_STATE', handlePlayerConnectionState)
@@ -1378,6 +1432,7 @@ export function GamingPage() {
       socket.off('TICK_UPDATE', handleTickUpdate)
       socket.off('COMBAT_EVENT_BATCH', handleCombatEventBatch)
       socket.off('COMBAT_EVENT_RESET', handleCombatEventReset)
+      socket.off('ACTION_ACCEPTED', handleActionAccepted)
       socket.off('ROOM_JOINED', handleRoomJoined)
       socket.off('ROOM_SNAPSHOT', handleRoomSnapshot)
       socket.off('PLAYER_CONNECTION_STATE', handlePlayerConnectionState)
@@ -1418,8 +1473,17 @@ export function GamingPage() {
       setError('权威战局尚未恢复，操作已锁定且不会发送。')
       return false
     }
+    const requestId = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `pve-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    const submittedAt = Date.now()
+    setClientActionIntents(current => appendClientActionIntent(current, createClientActionIntent({
+      requestId,
+      payload,
+      submittedAt,
+      baselineTick: gameState?.tick ?? 0,
+    })))
+    setError(null)
     socket.emit('SEND_ACTION', {
-      requestId: typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `pve-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      requestId,
       clientTick: gameState?.tick,
       payload,
     })
@@ -1861,6 +1925,7 @@ export function GamingPage() {
       data-board-piece-count={gameState?.boardPieces.length ?? 0}
       data-tray-piece-count={gameState?.tray.filter(Boolean).length ?? 0}
       data-match-outcome={gameState?.result?.outcome ?? ''}
+      data-pending-client-actions={clientActionIntents.length}
     >
       <div className="cyber-background" />
       <div className="cyber-noise" />
@@ -2275,12 +2340,13 @@ export function GamingPage() {
             placementMode={selectedTrayIndex !== null || selectedReserveIndex !== null || selectedPieceId !== null || targetingItemSlot !== null}
             allowAnyTargetCell={targetingItemSlot !== null}
             hoveredCell={hoveredCell}
+            clientActionIntents={clientActionIntents}
             audioMuted={combatAudioPreferences.muted}
             audioMasterVolume={combatAudioPreferences.masterVolume}
             presentationSyncRevision={connectionRecovery.syncRevision}
             onCellClick={handleCellClick}
-            onCellHover={(x, y) => setHoveredCell({ x, y })}
-            onCellLeave={() => setHoveredCell(null)}
+            onCellHover={(x, y) => setHoveredCell((current) => current?.x === x && current.y === y ? current : { x, y })}
+            onCellLeave={() => setHoveredCell((current) => current === null ? current : null)}
             onCancelInteraction={cancelBattlefieldInteraction}
           />
 

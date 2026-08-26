@@ -96,8 +96,25 @@ async function firstUiDeploy(page, surface, roomId) {
   await delay(100)
   await page.keyboard.press('ArrowDown'); await delay(100); await page.keyboard.press('ArrowDown'); await delay(100)
   await page.keyboard.press('ArrowDown'); await delay(100); await page.keyboard.press('ArrowDown'); await delay(100)
+  await page.evaluate(() => {
+    window.__clientActionIntentObserved = Number(document.querySelector('.gaming-page')?.dataset.pendingClientActions || 0) > 0
+    window.__clientActionIntentObserver?.disconnect()
+    window.__clientActionIntentObserver = new MutationObserver(() => {
+      if (Number(document.querySelector('.gaming-page')?.dataset.pendingClientActions || 0) > 0) {
+        window.__clientActionIntentObserved = true
+      }
+    })
+    const root = document.querySelector('.gaming-page')
+    if (root) window.__clientActionIntentObserver.observe(root, { attributes: true, attributeFilter: ['data-pending-client-actions'] })
+  })
   await page.keyboard.press('Enter')
   await page.waitForFunction(() => Number(document.querySelector('.gaming-page')?.dataset.boardPieceCount || 0) >= 1, null, { timeout: 5_000 })
+  const clientIntentObserved = await page.evaluate(() => {
+    window.__clientActionIntentObserver?.disconnect()
+    return window.__clientActionIntentObserved === true
+  })
+  assert(clientIntentObserved, 'CLIENT_ACTION_INTENT_FEEDBACK_NOT_OBSERVED_BEFORE_AUTHORITY')
+  await page.waitForFunction(() => Number(document.querySelector('.gaming-page')?.dataset.pendingClientActions || 0) === 0, null, { timeout: 5_000 })
   return 1
 }
 
@@ -231,16 +248,16 @@ async function main() {
     report.mainChain.logicalTickDelta = Math.max(0, lastAuthority.tick - initialAuthority.tick)
     report.mainChain.logicalDurationMs = report.mainChain.logicalTickDelta * 100
     report.mainChain.accelerationRatio = report.mainChain.logicalDurationMs / Math.max(1, report.mainChain.stressWallMs)
-    report.mainChain.accelerationControl = accelerationControl; report.mainChain.initialUiBuildActions = initialUiBuildActions; report.mainChain.initialRestBuildActions = initialRestBuildActions
+    report.mainChain.accelerationControl = accelerationControl; report.mainChain.clientIntentFeedback = true; report.mainChain.initialUiBuildActions = initialUiBuildActions; report.mainChain.initialRestBuildActions = initialRestBuildActions
     report.mainChain.initialAuthority = initialAuthority; report.mainChain.finalAuthority = lastAuthority; report.mainChain.authorityTimeline = authorityTimeline
     report.mainChain.acceptedBuildActions = acceptedBuildActions; report.mainChain.peak = peak; report.mainChain.realtime = realtime
     report.performance.push(await pageMetrics(page, networkEvents, 'stress-end'))
     for (const viewport of viewports) { await page.setViewportSize(viewport); await delay(250); const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1); assert(!overflow, `GAME_OVERFLOW:${viewport.width}x${viewport.height}`); await page.screenshot({ path: path.join(outputRoot, `qa-game-${viewport.width}x${viewport.height}.png`), fullPage: true }); report.viewports.find(item => item.width === viewport.width).gameOverflow = overflow }
     await page.locator('.game-over-panel').waitFor({ state: 'visible', timeout: 45_000 }).catch(() => null)
     report.mainChain.settlementVisible = await page.locator('.game-over-panel').count() > 0
-    report.thresholds = { minHeadlessSoftwareFps: 20, maxHeadlessFrameP95Ms: 55, maxLongTasks: 25, maxDomNodes: 2500, maxActiveVfx: 32, maxPooledVfx: 66, maxHeapGrowthBytes: 64 * 1024 * 1024, minActiveEnemies: 80, minCombatEvents: 300, minLogicalDurationMs: 300_000 }
+    report.thresholds = { minHeadlessSoftwareFps: 50, maxHeadlessFrameP95Ms: 30, maxLongTasks: 0, maxDomNodes: 2500, maxActiveVfx: 32, maxPooledVfx: 66, maxHeapGrowthBytes: 64 * 1024 * 1024, minActiveEnemies: 80, minCombatEvents: 300, minLogicalDurationMs: 300_000 }
     const first = report.performance[0], last = report.performance.at(-1); report.verdicts = {
-      fps: last.fps >= 20, frameP95: last.frameP95Ms <= 55, longTasks: last.longTaskCount <= 25, dom: peak.dom <= 2500,
+      fps: last.fps >= report.thresholds.minHeadlessSoftwareFps, frameP95: last.frameP95Ms <= report.thresholds.maxHeadlessFrameP95Ms, longTasks: last.longTaskCount <= report.thresholds.maxLongTasks, dom: peak.dom <= 2500,
       vfx: peak.activeVfx <= 32 && peak.pooledVfx <= 66, heap: last.jsHeapUsedBytes - first.jsHeapUsedBytes <= 64 * 1024 * 1024,
       deployed: report.mainChain.deployed, settlement: report.mainChain.settlementVisible,
     }
@@ -283,8 +300,8 @@ async function main() {
       duration: report.rendererProtocolStress.logicalDurationMs >= 300_000,
       activeEnemies: stressPeak.activeEnemies >= 80,
       combatEvents: stressRealtime.combatBatchFrames >= 300,
-      fps: stressLast.fps >= 20, frameP95: stressLast.frameP95Ms <= 55,
-      longTasks: stressLast.longTaskCount <= 25, dom: stressPeak.dom <= 2500,
+      fps: stressLast.fps >= report.thresholds.minHeadlessSoftwareFps, frameP95: stressLast.frameP95Ms <= report.thresholds.maxHeadlessFrameP95Ms,
+      longTasks: stressLast.longTaskCount <= report.thresholds.maxLongTasks, dom: stressPeak.dom <= 2500,
       vfx: stressPeak.activeVfx <= 32 && stressPeak.pooledVfx <= 66,
       heap: stressLast.jsHeapUsedBytes - stressFirst.jsHeapUsedBytes <= 64 * 1024 * 1024,
       mobileOverflow: !stressMobileOverflow,

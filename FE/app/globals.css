@@ -2482,6 +2482,7 @@ body.crisis-overload-active {
 }
 
 .gaming-board-frame {
+  position: relative;
   width: var(--gaming-board-size);
   max-width: 100%;
   aspect-ratio: 1;
@@ -2493,6 +2494,40 @@ body.crisis-overload-active {
   border: 1px solid rgba(100, 116, 139, 0.18);
   background: #0b1121;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.9);
+}
+
+.gaming-client-intent-status {
+  position: absolute;
+  z-index: 12;
+  top: 0.9rem;
+  right: 0.9rem;
+  display: grid;
+  gap: 0.1rem;
+  min-width: 10rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid rgba(34, 211, 238, 0.52);
+  border-radius: 0.65rem;
+  background: rgba(2, 12, 24, 0.92);
+  box-shadow: 0 8px 24px rgba(2, 132, 199, 0.18);
+  pointer-events: none;
+}
+
+.gaming-client-intent-status span,
+.gaming-client-intent-status small {
+  font-size: 0.62rem;
+  line-height: 1.2;
+  color: #94a3b8;
+}
+
+.gaming-client-intent-status span {
+  color: #67e8f9;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.gaming-client-intent-status strong {
+  font-size: 0.76rem;
+  color: #ecfeff;
 }
 
 .gaming-board-titlebar {
@@ -4973,14 +5008,34 @@ body.crisis-overload-active {
 
 .gaming-page > .cyber-background {
   background:
-    linear-gradient(180deg, rgba(5, 9, 22, 0.7), rgba(5, 9, 22, 0.94)),
-    url('/art/backgrounds/huaguoshan-celestial-arena-v1.webp') center / cover no-repeat;
-  opacity: 0.72;
-  filter: saturate(0.78);
+    radial-gradient(circle at 50% 42%, rgba(85, 199, 173, 0.1), transparent 34%),
+    radial-gradient(circle at 18% 18%, rgba(216, 173, 84, 0.06), transparent 24%),
+    linear-gradient(180deg, #070d1d 0%, #050916 58%, #02050b 100%);
+  opacity: 1;
 }
 
 .gaming-page > .cyber-noise {
-  opacity: 0.12;
+  display: none;
+}
+
+/* The battlefield canvas changes every frame. Full-screen blending and backdrop
+   filters above it force expensive re-compositing on integrated/mobile GPUs. */
+.gaming-page .gaming-command-mission,
+.gaming-page .gaming-command-metrics,
+.gaming-page .gaming-wave-command,
+.gaming-page .gaming-command-boss,
+.gaming-page .gaming-warning-card,
+.gaming-page .gaming-side-rail-build {
+  backdrop-filter: none;
+}
+
+.gaming-phaser-surface {
+  contain: strict;
+  isolation: isolate;
+}
+
+.gaming-phaser-surface canvas {
+  contain: strict;
 }
 
 .gaming-shell {
@@ -5813,10 +5868,10 @@ body.crisis-overload-active {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(90deg, rgba(7, 13, 29, 0.94), rgba(7, 13, 29, 0.25) 50%, rgba(7, 13, 29, 0.92)),
-    url('/art/backgrounds/huaguoshan-celestial-arena-v1.webp') 50% 55% / min(960px, 76vw) auto no-repeat;
-  opacity: 0.34;
-  filter: saturate(0.62) sepia(0.08);
+    radial-gradient(ellipse 42% 48% at 50% 48%, rgba(85, 199, 173, 0.12), transparent 72%),
+    radial-gradient(circle at 32% 38%, rgba(216, 173, 84, 0.07), transparent 22%),
+    linear-gradient(90deg, rgba(7, 13, 29, 0.94), rgba(7, 13, 29, 0.28) 50%, rgba(7, 13, 29, 0.92));
+  opacity: 0.58;
   mask-image: radial-gradient(ellipse 56% 62% at center, #000 20%, transparent 78%);
   pointer-events: none;
 }

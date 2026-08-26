@@ -3,6 +3,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const migrationDir = path.resolve(__dirname, '../../supabase/migrations')
+const pvpMigration = fs.readFileSync(path.join(migrationDir, '202608250002_pvp_competition.sql'), 'utf8')
+assert.match(
+  pvpMigration,
+  /create table if not exists public\.pvp_matches[\s\S]*?mode_id text not null,[\s\S]*?mode_version text not null,[\s\S]*?foreign key\(mode_id,mode_version\)/i,
+  'pvp_matches must define mode_version before creating its composite mode foreign key',
+)
 const expected = [
   '202608250003_pve_reward_outbox.sql',
   '202608250004_auth_sessions_readiness.sql',

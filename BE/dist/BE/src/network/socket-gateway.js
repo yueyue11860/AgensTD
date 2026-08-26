@@ -402,9 +402,13 @@ class SocketGateway {
         this.handleFullStateRequest(socket);
     }
     async handleActionSubmission(socket, payload) {
+        const requestId = typeof payload === 'object' && payload !== null && 'requestId' in payload
+            && typeof payload.requestId === 'string'
+            ? payload.requestId
+            : null;
         const joinedContext = this.getJoinedContext(socket);
         if (!joinedContext) {
-            this.emitEngineError(socket, 'NOT_IN_ROOM', '请先发送 JOIN_ROOM 加入房间');
+            this.emitEngineError(socket, 'NOT_IN_ROOM', '请先发送 JOIN_ROOM 加入房间', undefined, requestId);
             return;
         }
         let submission;
@@ -419,11 +423,11 @@ class SocketGateway {
                 : (0, action_submission_1.submitAction)({ engine: joinedContext.room.engine, limiter: this.actionLimiter, player: joinedContext.identity, payload });
         }
         catch {
-            this.emitEngineError(socket, 'PVE_PERSISTENCE_UNAVAILABLE', '权威对局持久化暂不可用，请勿重试新 requestId');
+            this.emitEngineError(socket, 'PVE_PERSISTENCE_UNAVAILABLE', '权威对局持久化暂不可用，请勿重试新 requestId', undefined, requestId);
             return;
         }
         if (!submission.ok) {
-            this.emitEngineError(socket, submission.code, submission.message, submission.retryAfterMs);
+            this.emitEngineError(socket, submission.code, submission.message, submission.retryAfterMs, requestId);
             return;
         }
         const acceptedPayload = {
@@ -1092,11 +1096,12 @@ class SocketGateway {
             return;
         this.io.to(runtime.room.id).emit('ROOM_SNAPSHOT', this.serializeRoomSummary(runtime));
     }
-    emitEngineError(socket, code, message, retryAfterMs) {
+    emitEngineError(socket, code, message, retryAfterMs, requestId) {
         socket.emit('engine_error', {
             code,
             message,
             retryAfterMs,
+            ...(requestId ? { requestId } : {}),
         });
     }
     recordOutbound(metricName, payload, recipientCount) {

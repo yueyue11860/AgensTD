@@ -91,6 +91,14 @@ http://192.168.1.23:5173/?playerId=bob&playerName=Bob
 - Human 本地/E2E 默认 token：`human-dev-token`
 - Agent 默认 token：`agent-dev-token`
 
+`pnpm dev` 启动的前端会提供一个仅开发模式生效的无数据库测试账号：
+
+- 邮箱：`dev@agenstd.local`
+- 密码：`dev123456`
+
+该账号在浏览器端换取上述 Human 本地 token，后端使用内存 store；进程重启后数据会重置。生产模式不接受该账号或静态 Human token。
+仓库根目录的 `./dev-stack.sh start` 默认以该纯内存模式启动前后端。
+
 请求示例：
 
 ```bash

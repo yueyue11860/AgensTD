@@ -515,9 +515,13 @@ export class SocketGateway {
   }
 
   private async handleActionSubmission(socket: Socket, payload: unknown) {
+    const requestId = typeof payload === 'object' && payload !== null && 'requestId' in payload
+      && typeof (payload as { requestId?: unknown }).requestId === 'string'
+      ? (payload as { requestId: string }).requestId
+      : null
     const joinedContext = this.getJoinedContext(socket)
     if (!joinedContext) {
-      this.emitEngineError(socket, 'NOT_IN_ROOM', '请先发送 JOIN_ROOM 加入房间')
+      this.emitEngineError(socket, 'NOT_IN_ROOM', '请先发送 JOIN_ROOM 加入房间', undefined, requestId)
       return
     }
 
@@ -533,12 +537,12 @@ export class SocketGateway {
         : submitAction({ engine: joinedContext.room.engine, limiter: this.actionLimiter, player: joinedContext.identity, payload })
     }
     catch {
-      this.emitEngineError(socket, 'PVE_PERSISTENCE_UNAVAILABLE', '权威对局持久化暂不可用，请勿重试新 requestId')
+      this.emitEngineError(socket, 'PVE_PERSISTENCE_UNAVAILABLE', '权威对局持久化暂不可用，请勿重试新 requestId', undefined, requestId)
       return
     }
 
     if (!submission.ok) {
-      this.emitEngineError(socket, submission.code, submission.message, submission.retryAfterMs)
+      this.emitEngineError(socket, submission.code, submission.message, submission.retryAfterMs, requestId)
       return
     }
 
@@ -1282,11 +1286,12 @@ export class SocketGateway {
     this.io.to(runtime.room.id).emit('ROOM_SNAPSHOT', this.serializeRoomSummary(runtime))
   }
 
-  private emitEngineError(socket: Socket, code: string, message: string, retryAfterMs?: number) {
+  private emitEngineError(socket: Socket, code: string, message: string, retryAfterMs?: number, requestId?: string | null) {
     socket.emit('engine_error', {
       code,
       message,
       retryAfterMs,
+      ...(requestId ? { requestId } : {}),
     })
   }
 

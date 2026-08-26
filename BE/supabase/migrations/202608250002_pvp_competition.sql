@@ -102,6 +102,7 @@ create table if not exists public.pvp_matches (
   match_id text primary key,
   season_id text not null references public.pvp_seasons(season_id),
   mode_id text not null,
+  mode_version text not null,
   region text not null,
   map_id text not null,
   map_version text not null,

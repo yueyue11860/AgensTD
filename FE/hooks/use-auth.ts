@@ -1,6 +1,12 @@
 import type { Session, User } from '@supabase/supabase-js'
-import { useCallback, useEffect, useState } from 'react'
-import { clearRuntimeAuthSession, setRuntimeAuthSession } from '../lib/auth-session-bridge'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  clearRuntimeAuthSession,
+  getRuntimeAccessToken,
+  getRuntimeAuthIdentity,
+  setRuntimeAuthSession,
+} from '../lib/auth-session-bridge'
+import { getLocalTestAccount, isLocalTestSession } from '../lib/local-test-auth'
 import { resolveApiBaseUrl } from '../lib/runtime-config'
 import { getSupabaseBrowserClient } from '../lib/supabase-browser'
 
@@ -35,12 +41,11 @@ function userFromSupabase(user: User): AuthUser {
   }
 }
 
-async function verifyWithGameServer(session: Session, apiBase: string | null) {
-  const fallbackUser = userFromSupabase(session.user)
+async function verifyWithGameServer(accessToken: string, fallbackUser: AuthUser, apiBase: string | null) {
   if (!apiBase) return fallbackUser
 
   const response = await fetch(`${apiBase}/auth/me`, {
-    headers: { Authorization: `Bearer ${session.access_token}` },
+    headers: { Authorization: `Bearer ${accessToken}` },
   })
   const payload = await response.json().catch(() => null) as { ok?: boolean; user?: AuthUser; message?: string } | null
   if (!response.ok || !payload?.ok) {
@@ -58,15 +63,26 @@ export function useAuth() {
   })
   const apiBase = resolveApiBaseUrl()
   const supabase = getSupabaseBrowserClient()
+  const localTestAccount = useMemo(() => getLocalTestAccount(), [])
 
   useEffect(() => {
+    if (localTestAccount && isLocalTestSession(localTestAccount, getRuntimeAccessToken(), getRuntimeAuthIdentity())) {
+      setState({
+        user: localTestAccount.identity,
+        sessionToken: localTestAccount.token,
+        isLoading: false,
+        error: null,
+      })
+      return
+    }
+
     if (!supabase) {
       clearRuntimeAuthSession()
       setState({
         user: null,
         sessionToken: null,
         isLoading: false,
-        error: '缺少 VITE_SUPABASE_URL 或 VITE_SUPABASE_ANON_KEY',
+        error: localTestAccount ? null : '缺少 VITE_SUPABASE_URL 或 VITE_SUPABASE_ANON_KEY',
       })
       return
     }
@@ -83,7 +99,7 @@ export function useAuth() {
       }
 
       try {
-        const user = await verifyWithGameServer(session, apiBase)
+        const user = await verifyWithGameServer(session.access_token, userFromSupabase(session.user), apiBase)
         if (cancelled || currentRevision !== revision) return
         setRuntimeAuthSession(session.access_token, user)
         setState({ user, sessionToken: session.access_token, isLoading: false, error: null })
@@ -117,13 +133,27 @@ export function useAuth() {
       cancelled = true
       subscription.subscription.unsubscribe()
     }
-  }, [apiBase, supabase])
+  }, [apiBase, localTestAccount, supabase])
 
   const login = useCallback(async (email: string, password: string): Promise<AuthActionResult> => {
+    if (localTestAccount && email.trim().toLowerCase() === localTestAccount.email.toLowerCase()) {
+      if (password !== localTestAccount.password) return { ok: false, error: '本地测试账号密码错误' }
+
+      try {
+        if (apiBase) await verifyWithGameServer(localTestAccount.token, localTestAccount.identity, apiBase)
+        const user = localTestAccount.identity
+        setRuntimeAuthSession(localTestAccount.token, user)
+        setState({ user, sessionToken: localTestAccount.token, isLoading: false, error: null })
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : '本地测试账号登录失败' }
+      }
+    }
+
     if (!supabase) return { ok: false, error: 'Supabase 登录尚未配置' }
     const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
     return error ? { ok: false, error: error.message } : { ok: true }
-  }, [supabase])
+  }, [apiBase, localTestAccount, supabase])
 
   const register = useCallback(async (name: string, email: string, password: string): Promise<AuthActionResult> => {
     if (!supabase) return { ok: false, error: 'Supabase 登录尚未配置' }
@@ -148,6 +178,7 @@ export function useAuth() {
     isLoading: state.isLoading,
     isLoggedIn: !!state.user,
     error: state.error,
+    localTestAccount,
     login,
     register,
     logout,

@@ -7,20 +7,24 @@ function createSupabaseAuthRouter(config, userStore) {
     const router = (0, express_1.Router)();
     router.get('/auth/me', async (request, response) => {
         const principal = await (0, gateway_auth_1.authenticateGatewayTokenAsync)({ ...config, authRequired: true }, (0, gateway_auth_1.extractHttpToken)(request));
-        if (!principal || principal.playerKind !== 'human' || principal.authSource !== 'supabase') {
-            response.status(401).json({ ok: false, code: 'UNAUTHORIZED', message: 'Missing or invalid Supabase access token' });
+        const acceptedAuthSource = principal?.authSource === 'supabase'
+            || (process.env.NODE_ENV !== 'production' && principal?.authSource === 'static');
+        if (!principal || principal.playerKind !== 'human' || !acceptedAuthSource) {
+            response.status(401).json({ ok: false, code: 'UNAUTHORIZED', message: 'Missing or invalid access token' });
             return;
         }
         const user = {
             userId: principal.playerId,
             name: principal.playerName,
-            email: principal.email ?? '',
-            avatar: principal.avatar ?? '',
+            email: principal.authSource === 'supabase' ? principal.email ?? '' : '',
+            avatar: principal.authSource === 'supabase' ? principal.avatar ?? '' : '',
             bio: '',
             route: '',
         };
-        await userStore.upsertUser(user);
-        await userStore.getOrCreateProgress(user.userId, 'HUMAN');
+        if (principal.authSource === 'supabase') {
+            await userStore.upsertUser(user);
+            await userStore.getOrCreateProgress(user.userId, 'HUMAN');
+        }
         response.json({ ok: true, user });
     });
     return router;

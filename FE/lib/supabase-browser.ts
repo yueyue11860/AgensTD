@@ -1,4 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { getRuntimeAccessToken, getRuntimeAuthIdentity } from './auth-session-bridge'
+import { getLocalTestAccount, isLocalTestSession } from './local-test-auth'
 import { resolveSupabaseAnonKey, resolveSupabaseUrl } from './runtime-config'
 
 let browserClient: SupabaseClient | null | undefined
@@ -28,4 +30,11 @@ export function getSupabaseBrowserClient() {
 }
 
 // Realtime and Auth share one client so refreshed JWTs also reach realtime channels.
-export const getSupabaseRealtimeClient = getSupabaseBrowserClient
+// 本地测试账号仅使用内存后端，不应触发任何 Supabase 连接。
+export function getSupabaseRealtimeClient() {
+  const localTestAccount = getLocalTestAccount()
+  if (localTestAccount && isLocalTestSession(localTestAccount, getRuntimeAccessToken(), getRuntimeAuthIdentity())) {
+    return null
+  }
+  return getSupabaseBrowserClient()
+}
