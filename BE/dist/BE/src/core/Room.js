@@ -5,6 +5,7 @@ exports.createFixedRoomLayout = createFixedRoomLayout;
 const arena_layout_1 = require("../config/arena-layout");
 const grid_map_1 = require("./grid-map");
 const game_engine_1 = require("./game-engine");
+const password_1 = require("../security/password");
 exports.ROOM_SLOT_ORDER = ['P1', 'P2', 'P3', 'P4'];
 const MIN_ROOM_WIDTH = arena_layout_1.ARENA_GRID_SIZE;
 const MIN_ROOM_HEIGHT = arena_layout_1.ARENA_GRID_SIZE;
@@ -53,7 +54,7 @@ class Room {
     // 房间生命周期状态机
     phase = 'lobby';
     displayName;
-    hasPassword;
+    passwordCredential;
     // 第一个加入的玩家为房主
     hostPlayerId = null;
     // 倒计时定时器句柄（idle 时务必清除）
@@ -71,7 +72,11 @@ class Room {
         this.accountRuntime = accountRuntime;
         this.id = id;
         this.displayName = options?.displayName?.trim() || id;
-        this.hasPassword = options?.hasPassword ?? false;
+        if (options?.hasPassword === true && !options.password)
+            throw new Error('ROOM_PASSWORD_REQUIRED');
+        if (options?.password && options.password.length > 128)
+            throw new Error('ROOM_PASSWORD_TOO_LONG');
+        this.passwordCredential = options?.password ? (0, password_1.createPasswordCredential)(options.password) : null;
         this.layout = createFixedRoomLayout(config.mapWidth, config.mapHeight);
         this.engine = new game_engine_1.GameEngine({
             ...config,
@@ -86,6 +91,12 @@ class Room {
             basePoint: this.layout.hub,
             spawnMultiplier: 1,
         });
+    }
+    requiresPassword() {
+        return this.passwordCredential !== null;
+    }
+    verifyJoinPassword(password) {
+        return this.passwordCredential === null || (0, password_1.verifyPassword)(password, this.passwordCredential);
     }
     joinPlayer(playerId) {
         const existingSlot = this.getPlayerSlot(playerId);
@@ -163,7 +174,7 @@ class Room {
         return {
             id: this.id,
             name: this.displayName,
-            hasPassword: this.hasPassword,
+            hasPassword: this.passwordCredential !== null,
             players: this.slotAssignments.size,
             maxPlayers: exports.ROOM_SLOT_ORDER.length,
             phase: this.getPhase(),
@@ -274,6 +285,9 @@ class Room {
             slotAssignments: [...this.slotAssignments.entries()],
             pendingStageSelection: this.pendingStageSelection ? structuredClone(this.pendingStageSelection) : null,
             activeStageSelection: this.activeStageSelection ? structuredClone(this.activeStageSelection) : null,
+            // Checkpoint carries only the salted hash credential so a restarted room can still
+            // enforce its password. Never expose this payload through public room projections.
+            passwordCredential: this.passwordCredential ? structuredClone(this.passwordCredential) : null,
             stageSelectionsByMatchId: [...this.stageSelectionsByMatchId.entries()].map(([matchId, selection]) => [matchId, structuredClone(selection)]),
             matchBuildSnapshots: [...this.matchBuildSnapshots.entries()].map(([playerId, snapshot]) => [playerId, structuredClone(snapshot)]),
             engine: this.engine.exportPveCheckpointPayload(),
@@ -295,6 +309,17 @@ class Room {
             this.slotAssignments.set(slot, playerId);
         this.pendingStageSelection = checkpoint.pendingStageSelection ? structuredClone(checkpoint.pendingStageSelection) : null;
         this.activeStageSelection = checkpoint.activeStageSelection ? structuredClone(checkpoint.activeStageSelection) : null;
+        if (checkpoint.passwordCredential) {
+            const credential = checkpoint.passwordCredential;
+            if (credential.algorithm !== 'scrypt' || credential.version !== 1
+                || typeof credential.saltHex !== 'string' || typeof credential.hashHex !== 'string'
+                || typeof credential.updatedAt !== 'string')
+                throw new Error('PVE_ROOM_CHECKPOINT_PASSWORD_INVALID');
+            this.passwordCredential = structuredClone(credential);
+        }
+        else {
+            this.passwordCredential = null;
+        }
         this.stageSelectionsByMatchId.clear();
         for (const [matchId, selection] of checkpoint.stageSelectionsByMatchId) {
             this.stageSelectionsByMatchId.set(matchId, structuredClone(selection));

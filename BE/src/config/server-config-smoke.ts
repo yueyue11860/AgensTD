@@ -3,7 +3,7 @@ import { createServerConfig } from './server-config'
 import { isE2eControlAvailable } from '../network/e2e-control-api'
 import { stressCombatBatch, stressEnemies, stressFullState, stressPatch } from '../network/e2e-renderer-stress'
 
-const keys = ['NODE_ENV', 'TICK_RATE_MS', 'PVE_E2E_ENABLED', 'HOST_LOOP_INTERVAL_MS'] as const
+const keys = ['NODE_ENV', 'TICK_RATE_MS', 'PVE_E2E_ENABLED', 'HOST_LOOP_INTERVAL_MS', 'PORT', 'BROADCAST_INTERVAL_MS', 'FULL_SNAPSHOT_INTERVAL_MS'] as const
 const original = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
 
 try {
@@ -28,6 +28,16 @@ try {
   assert.equal(stressFullState(0).pve?.enemies.length, 80)
   assert.equal(stressPatch(10).pvePatch?.pveEnemyDelta?.upsert.length, 80)
   assert.equal(stressCombatBatch(300, 3000).toSeq, 300)
+
+  for (const [name, value] of [['PORT', '0'], ['TICK_RATE_MS', '1.5'], ['BROADCAST_INTERVAL_MS', '50'], ['FULL_SNAPSHOT_INTERVAL_MS', '100']] as const) {
+    process.env.NODE_ENV = 'test'
+    process.env.TICK_RATE_MS = name === 'TICK_RATE_MS' ? value : '100'
+    process.env.BROADCAST_INTERVAL_MS = name === 'BROADCAST_INTERVAL_MS' ? value : '200'
+    process.env.FULL_SNAPSHOT_INTERVAL_MS = name === 'FULL_SNAPSHOT_INTERVAL_MS' ? value : '5000'
+    process.env[name] = value
+    assert.throws(() => createServerConfig(), new RegExp(`Invalid configuration ${name}`))
+    delete process.env[name]
+  }
 } finally {
   for (const key of keys) {
     const value = original[key]

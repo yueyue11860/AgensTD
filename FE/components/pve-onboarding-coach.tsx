@@ -42,7 +42,7 @@ function copyForStep(step: PveOnboardingStepId, facts: PveOnboardingFacts): Coac
   return {
     anchor: 'boss', eyebrow: '第六步 · 首领预警', title: 'Boss 信号优先于普通提示',
     body: `当前第 ${facts.currentWave} 波。首领登场或读条时，顶部会显示名称、阶段、生命与技能倒计时。`,
-    note: '预警来自服务器事件；提示不会暂停战斗。',
+    note: '预警来自服务器事件；可跳过提示，先完成当前战术动作。',
   }
 }
 
@@ -149,6 +149,7 @@ export function PveOnboardingCoach({
       <aside className="pve-onboarding-coach" style={position.card} role="region" aria-labelledby="pve-onboarding-title">
         <p className="pve-onboarding-eyebrow">{copy.eyebrow}</p>
         <h2 id="pve-onboarding-title">{copy.title}</h2>
+        <span className="pve-onboarding-state" role="status" aria-live="polite">{paused ? '教学提示已暂停' : '教学中 · 可跳过'}</span>
         <p>{copy.body}</p>
         <small>{copy.note}</small>
         <div className="pve-onboarding-actions">

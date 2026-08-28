@@ -346,6 +346,10 @@ function validateRuntimeOptions(options: PveGameRuntimeOptions): void {
   ) {
     throw new Error('prepDurationMs must be a non-negative integer')
   }
+  if (options.tutorialPrepDurationMs !== undefined
+    && (!Number.isInteger(options.tutorialPrepDurationMs) || options.tutorialPrepDurationMs < 0)) {
+    throw new Error('tutorialPrepDurationMs must be a non-negative integer')
+  }
   if (!Number.isInteger(options.maxWaves ?? 20) || (options.maxWaves ?? 20) < 1 || (options.maxWaves ?? 20) > 20) {
     throw new Error('maxWaves must be an integer between 1 and 20')
   }
@@ -364,6 +368,8 @@ export class PveGameRuntime {
   private readonly prng: DeterministicPrng
 
   private readonly prepDurationTicks: number
+
+  private readonly tutorialPrepDurationTicks: number
 
   private readonly maxWaves: number
 
@@ -480,6 +486,9 @@ export class PveGameRuntime {
     this.prepDurationTicks = Math.ceil(
       (options.prepDurationMs ?? PVE_WAVE_PREP_DURATION_MS) / this.tickRateMs,
     )
+    this.tutorialPrepDurationTicks = options.tutorialPrepDurationMs === undefined
+      ? this.prepDurationTicks
+      : Math.ceil(options.tutorialPrepDurationMs / this.tickRateMs)
     this.maxWaves = options.maxWaves ?? 20
     this.initialWaveNumber = options.initialWaveNumber ?? 1
     this.laneRoutes = createPveLaneRoutes(options.laneRoutes)
@@ -1604,7 +1613,9 @@ export class PveGameRuntime {
       this.pendingWaveNumber = waveNumber
     }
     this.wavePhase = 'prep'
-    this.prepRemainingTicks = this.prepDurationTicks
+    this.prepRemainingTicks = this.currentWaveNumber === waveNumber && this.currentWaveNumber === this.initialWaveNumber
+      ? this.tutorialPrepDurationTicks
+      : this.prepDurationTicks
   }
 
   private beginPreparedWave(): void {

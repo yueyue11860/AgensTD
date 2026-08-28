@@ -471,6 +471,8 @@ export interface PveGameRuntimeOptions {
   difficulty?: import('./balance-catalog').PveDifficulty
   tickRateMs?: number
   prepDurationMs?: number
+  /** Optional first-wave tutorial preparation window; later waves use prepDurationMs. */
+  tutorialPrepDurationMs?: number
   maxWaves?: number
   /** 仅供确定性回放/专项 smoke 从节点波启动；正式房间保持默认 1。 */
   initialWaveNumber?: number

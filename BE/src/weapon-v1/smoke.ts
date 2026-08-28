@@ -47,6 +47,11 @@ const checkCatalog = (): void => {
   assert.deepEqual(qualityCounts, { green: 4, blue: 4, purple: 4, orange: 4, red: 25 })
   assert.deepEqual(new Set(EXCLUSIVE_WEAPONS.map((weapon) => weapon.compatibility.exclusiveGeneralId)), new Set(GENERAL_ROSTER.map((general) => general.generalId)))
   for (const weapon of WEAPON_CATALOG) assert.equal(weapon.fragmentRequirement, WEAPON_FRAGMENT_REQUIREMENT[weapon.quality])
+  const released = WEAPON_CATALOG.filter((weapon) => weapon.status === 'released')
+  assert.ok(released.length > 0 && released.length < WEAPON_CATALOG.length)
+  assert.ok(released.every((weapon) => weapon.parameterPatches.length === 0
+    || weapon.weaponId === 'houyi_sun_shooting_bow'))
+  assert.equal(WEAPON_CATALOG.filter((weapon) => weapon.uniqueGroup === 'control_vulnerability').length, 2)
 
   const invalid = JSON.parse(JSON.stringify(WEAPON_CATALOG)) as WeaponDefinition[]
   invalid[0].fragmentRequirement = 5
@@ -94,6 +99,13 @@ const checkLoadoutsAndSnapshot = (): void => {
   expectCode('STALE_WEAPON_LOADOUT_VERSION', () => accounts.saveLoadout({ requestId: 'stale', playerId, generalId: 'houyi', slots: ['chasing_wind_bow', null], expectedLoadoutVersion: 0 }))
   // 图鉴解锁制：同一通用武器可同时保存在另一名同流派神将方案中。
   accounts.saveLoadout({ requestId: 'save-yangjian', playerId, generalId: 'yangjian', slots: ['qinggang_blade', null], expectedLoadoutVersion: 0 })
+
+  const uniqueAccounts = new InMemoryWeaponAccountService()
+  unlock(uniqueAccounts, 'unique-player', 'boundary_stele', 'boundary')
+  unlock(uniqueAccounts, 'unique-player', 'chaos_umbrella', 'umbrella')
+  expectCode('UNIQUE_GROUP_CONFLICT', () => uniqueAccounts.saveLoadout({ requestId: 'unique-conflict',
+    playerId: 'unique-player', generalId: 'shou_xing', slots: ['boundary_stele', 'chaos_umbrella'],
+    expectedLoadoutVersion: 0 }))
 
   const snapshot = accounts.createMatchSnapshot(playerId)
   assert.ok(Object.isFrozen(snapshot) && Object.isFrozen(snapshot.byGeneralId) && Object.isFrozen(snapshot.byGeneralId.houyi))

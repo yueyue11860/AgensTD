@@ -16,7 +16,7 @@ BACKEND_PORT="${BACKEND_PORT:-3000}"
 FRONTEND_PORT="${FRONTEND_PORT:-5173}"
 # 本地一键启动默认不读写 Supabase，避免开发测试污染远程数据。
 # 需要联调 Supabase 时可显式覆盖 BACKEND_DEV_COMMAND='pnpm dev'。
-BACKEND_DEV_COMMAND="${BACKEND_DEV_COMMAND:-SUPABASE_URL= SUPABASE_SERVICE_ROLE_KEY= PVP_STORE=memory PVE_REWARD_STORE=memory PVE_CHECKPOINT_STORE=memory pnpm dev}"
+BACKEND_DEV_COMMAND="${BACKEND_DEV_COMMAND:-env PORT=${BACKEND_PORT} SUPABASE_URL= SUPABASE_SERVICE_ROLE_KEY= PVP_STORE=memory PVE_REWARD_STORE=memory PVE_CHECKPOINT_STORE=memory pnpm dev}"
 FRONTEND_DEV_COMMAND="${FRONTEND_DEV_COMMAND:-pnpm exec vite --port ${FRONTEND_PORT}}"
 
 mkdir -p "$RUNTIME_DIR"
@@ -178,8 +178,7 @@ wait_for_service() {
     if [[ -n "$pid" ]] && ! pid_is_running "$pid"; then
       printf '%s exited during startup.\n' "$name" >&2
       tail -n 40 "$log_file" >&2 || true
-      cleanup_stale_pid_file "$pid_file"
-      exit 1
+      return 1
     fi
 
     local listener_pid
@@ -196,7 +195,8 @@ wait_for_service() {
   done
 
   printf '%s did not become ready in time. Check %s\n' "$name" "$log_file" >&2
-  exit 1
+  tail -n 40 "$log_file" >&2 || true
+  return 1
 }
 
 start_service() {
@@ -222,7 +222,13 @@ start_service() {
   pid="$!"
   printf '%s\n' "$pid" > "$pid_file"
 
-  wait_for_service "$name" "$pid_file" "$service_dir" "$port" "$log_file"
+  if ! wait_for_service "$name" "$pid_file" "$service_dir" "$port" "$log_file"; then
+    if pid_is_running "$pid"; then
+      kill_pid_group TERM "$pid"
+    fi
+    cleanup_stale_pid_file "$pid_file"
+    return 1
+  fi
 }
 
 stop_service() {

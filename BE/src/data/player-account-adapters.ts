@@ -11,6 +11,9 @@ import { GENERAL_ROSTER } from '../core/hero-v1/roster'
 import { ITEM_DEFINITIONS } from '../item-v1/catalog'
 import { WEAPON_CATALOG } from '../weapon-v1/catalog'
 
+/** Player-facing surfaces may only advertise effects the runtime actually consumes. */
+const RELEASED_WEAPONS = WEAPON_CATALOG.filter((weapon) => weapon.status === 'released')
+
 function toJsonObject(value: unknown): JsonObject {
   return structuredClone(value) as JsonObject
 }
@@ -52,7 +55,7 @@ export class V1AccountShopCatalog implements AccountShopCatalogProvider {
     }
 
     const lowTier = kind === 'low_tier_weapon_fragment'
-    return WEAPON_CATALOG
+    return RELEASED_WEAPONS
       .filter(weapon => lowTier
         ? weapon.quality === 'green' || weapon.quality === 'blue'
         : weapon.quality === 'purple' || weapon.quality === 'orange' || weapon.quality === 'red')
@@ -90,13 +93,13 @@ export class V1MatchBuildDefinitionResolver implements MatchBuildDefinitionResol
   }
 
   resolveWeapon(weaponId: string): JsonObject | null {
-    const definition = WEAPON_CATALOG.find(weapon => weapon.weaponId === weaponId)
+    const definition = RELEASED_WEAPONS.find(weapon => weapon.weaponId === weaponId)
     return definition ? toJsonObject(definition) : null
   }
 }
 
 export const ACCOUNT_CATALOGS = Object.freeze({
   items: ITEM_DEFINITIONS,
-  weapons: WEAPON_CATALOG,
+  weapons: RELEASED_WEAPONS,
   generals: Object.values(GENERAL_CATALOG),
 })

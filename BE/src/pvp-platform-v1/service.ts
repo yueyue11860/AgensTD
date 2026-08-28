@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import type {
   PvpAcceptedMatch,
   PvpAuthorityState,
@@ -37,6 +37,7 @@ import type {
   PvpCustomRoomProjection,
 } from './types'
 import { PvpPlatformError } from './types'
+import { createPasswordCredential, verifyPassword, type PasswordCredential } from '../security/password'
 
 const MODE_VERSION = '1'
 const RULESET_VERSION = 'pvp_rules_v1'
@@ -46,6 +47,8 @@ const REGION = 'auto'
 const CATALOG_VERSION = 'pvp_catalog_v1'
 const EFFECT_SYSTEM_VERSION = 'effect_v1'
 const TICK_RATE_MS = 100
+const ROOM_PASSWORD_ATTEMPT_WINDOW_MS = 60_000
+const ROOM_PASSWORD_ATTEMPT_MAX = 5
 
 interface LiveMatch {
   runtime: PvpMatchRuntime
@@ -74,31 +77,12 @@ interface MatchSubscriber {
 interface CustomRoomRuntime {
   roomId: string
   roomName: string
-  passwordHash: string | null
+  passwordCredential: PasswordCredential | null
   spectatorsAllowed: boolean
   createdAt: string
   hostPlayerId: string
   players: PvpCustomRoomPlayer[]
   matchId: string | null
-}
-
-function hashPassword(value: string): string {
-  const salt = randomBytes(16)
-  const hash = scryptSync(value, salt, 32)
-  return `${salt.toString('hex')}:${hash.toString('hex')}`
-}
-
-function passwordMatches(value: string, encoded: string): boolean {
-  const [saltHex, hashHex, extra] = encoded.split(':')
-  if (!saltHex || !hashHex || extra) return false
-  try {
-    const expected = Buffer.from(hashHex, 'hex')
-    const actual = scryptSync(value, Buffer.from(saltHex, 'hex'), expected.length)
-    return expected.length > 0 && timingSafeEqual(actual, expected)
-  }
-  catch {
-    return false
-  }
 }
 
 function nowIso(): string {
@@ -138,6 +122,8 @@ export class PvpPlatformService {
 
   private readonly liveMatches = new Map<string, LiveMatch>()
   private readonly customRooms = new Map<string, CustomRoomRuntime>()
+  private readonly customRoomReceipts = new Map<string, { fingerprint: string; roomId: string }>()
+  private readonly roomPasswordAttempts = new Map<string, { windowStartedAt: number; count: number; blockedUntil: number }>()
   private readonly matchSubscribers = new Map<string, Set<MatchSubscriber>>()
   private tickTimer: NodeJS.Timeout | null
   private readonly runtimeOptions: Required<Pick<PvpPlatformServiceOptions, 'runtimeTickRateMs' | 'countdownMs'>> & Pick<PvpPlatformServiceOptions, 'roundIntervalMs' | 'disconnectForfeitMs'>
@@ -275,6 +261,9 @@ export class PvpPlatformService {
     const live = this.requireLiveMatchForPlayer(matchId, principal.playerId)
     const result = live.runtime.acknowledgeLoad(principal.playerId, input)
     this.publishMatchState(matchId, live)
+    // A failed ACK moves directly to `voided`; the regular tick loop skips
+    // quiescent runtimes, so settlement must be scheduled from this command.
+    if (result.ok && live.runtime.snapshot().phase === 'voided') void this.settleIfNeeded(live)
     return result
   }
 
@@ -407,13 +396,24 @@ export class PvpPlatformService {
   }
 
   createRoom(principal: HumanGatewayPrincipal, input: CreatePvpCustomRoomInput): PvpCustomRoomProjection {
+    if (input.requestId) {
+      const key = `${principal.playerId}:${input.requestId}`
+      const fingerprint = JSON.stringify({ roomName: input.roomName, password: input.password ?? null, spectatorsAllowed: input.spectatorsAllowed })
+      const previous = this.customRoomReceipts.get(key)
+      if (previous) {
+        if (previous.fingerprint !== fingerprint) throw new PvpPlatformError('REQUEST_ID_CONFLICT', 'requestId was reused with a different room payload', 409)
+        return this.getRoom(previous.roomId)
+      }
+    }
+    this.assertNoActiveMatch(principal.playerId)
     const roomName = input.roomName?.trim()
     if (!roomName || roomName.length > 40) throw new PvpPlatformError('INVALID_ROOM_NAME', '房间名称长度必须为 1–40', 422)
+    if (input.password !== undefined && input.password.length > 128) throw new PvpPlatformError('INVALID_ROOM_PASSWORD', '房间密码长度不能超过 128 个字符', 422)
     const roomId = `PVP-${randomUUID().slice(0, 8).toUpperCase()}`
     const room: CustomRoomRuntime = {
       roomId,
       roomName,
-      passwordHash: input.password ? hashPassword(input.password) : null,
+      passwordCredential: input.password ? createPasswordCredential(input.password) : null,
       spectatorsAllowed: input.spectatorsAllowed === true,
       createdAt: nowIso(),
       hostPlayerId: principal.playerId,
@@ -421,6 +421,12 @@ export class PvpPlatformService {
       matchId: null,
     }
     this.customRooms.set(roomId, room)
+    if (input.requestId) {
+      this.customRoomReceipts.set(`${principal.playerId}:${input.requestId}`, {
+        fingerprint: JSON.stringify({ roomName: input.roomName, password: input.password ?? null, spectatorsAllowed: input.spectatorsAllowed }),
+        roomId,
+      })
+    }
     return this.projectRoom(room)
   }
 
@@ -429,11 +435,30 @@ export class PvpPlatformService {
   }
 
   async joinRoom(principal: HumanGatewayPrincipal, roomId: string, password = ''): Promise<PvpCustomRoomProjection> {
+    this.assertNoActiveMatch(principal.playerId)
     const room = this.requireRoom(roomId)
     if (room.matchId) throw new PvpPlatformError('ROOM_ALREADY_STARTED', '房间已经开始', 409)
     if (room.players.some(player => player.playerId === principal.playerId)) return this.projectRoom(room)
     if (room.players.length >= 2) throw new PvpPlatformError('ROOM_FULL', '房间已满', 409)
-    if (room.passwordHash && !passwordMatches(password, room.passwordHash)) throw new PvpPlatformError('WRONG_PASSWORD', '房间密码错误', 403)
+    if (room.passwordCredential) {
+      const key = `${roomId}:${principal.playerId}`
+      const now = this.nowMs()
+      const current = this.roomPasswordAttempts.get(key)
+      if (current && current.blockedUntil > now) {
+        throw new PvpPlatformError('PASSWORD_ATTEMPTS_EXCEEDED', '密码尝试次数过多，请稍后再试', 429)
+      }
+      const state = !current || now - current.windowStartedAt >= ROOM_PASSWORD_ATTEMPT_WINDOW_MS
+        ? { windowStartedAt: now, count: 0, blockedUntil: 0 }
+        : current
+      if (!password || !verifyPassword(password, room.passwordCredential)) {
+        state.count += 1
+        if (state.count >= ROOM_PASSWORD_ATTEMPT_MAX) state.blockedUntil = now + ROOM_PASSWORD_ATTEMPT_WINDOW_MS
+        this.roomPasswordAttempts.set(key, state)
+        if (state.blockedUntil > now) throw new PvpPlatformError('PASSWORD_ATTEMPTS_EXCEEDED', '密码尝试次数过多，请稍后再试', 429)
+        throw new PvpPlatformError(password ? 'WRONG_PASSWORD' : 'PASSWORD_REQUIRED', password ? '房间密码错误' : '加入密码房必须提供 password', password ? 403 : 401)
+      }
+      this.roomPasswordAttempts.delete(key)
+    }
     room.players.push(this.customRoomPlayer(principal, 'B', false))
     return this.projectRoom(room)
   }
@@ -469,7 +494,13 @@ export class PvpPlatformService {
   tick(): void {
     this.matchmaking.advance()
     for (const live of this.liveMatches.values()) {
-      if (live.runtime.isQuiescent()) continue
+      // `voided` is terminal for simulation but not for persistence. Retry a
+      // failed no-contest settlement on subsequent host ticks until an
+      // immutable detail exists; otherwise the reaper can never reclaim it.
+      if (live.runtime.isQuiescent()) {
+        if (live.runtime.snapshot().phase === 'voided' && !live.settledDetail) void this.settleIfNeeded(live)
+        continue
+      }
       const state = live.runtime.tick()
       this.publishMatchState(state.matchId, live)
       if (state.phase === 'settling' || state.phase === 'voided') void this.settleIfNeeded(live)
@@ -665,7 +696,11 @@ export class PvpPlatformService {
       if (!expired && !overCapacity) continue
       this.liveMatches.delete(matchId)
       if ((this.matchSubscribers.get(matchId)?.size ?? 0) === 0) this.matchSubscribers.delete(matchId)
-      for (const [roomId, room] of this.customRooms) if (room.matchId === matchId) this.customRooms.delete(roomId)
+      for (const [roomId, room] of this.customRooms) {
+        if (room.matchId !== matchId) continue
+        this.customRooms.delete(roomId)
+        for (const key of this.roomPasswordAttempts.keys()) if (key.startsWith(`${roomId}:`)) this.roomPasswordAttempts.delete(key)
+      }
       retained -= 1
     }
   }
@@ -688,6 +723,12 @@ export class PvpPlatformService {
     if (!live) throw new PvpPlatformError('MATCH_NOT_FOUND', 'PVP 对局不存在', 404)
     this.assertParticipant(live.participants.map(player => player.playerId), playerId)
     return live
+  }
+
+  private assertNoActiveMatch(playerId: string): void {
+    const active = [...this.liveMatches.values()].find((live) => !live.runtime.isQuiescent()
+      && live.participants.some((participant) => participant.playerId === playerId))
+    if (active) throw new PvpPlatformError('ALREADY_IN_MATCH', '当前账号已在 PVP 对局中', 409)
   }
 
   private assertParticipant(playerIds: string[], playerId: string): void {
@@ -722,7 +763,7 @@ export class PvpPlatformService {
       status: phase,
       mapId: DUAL_REALM_MAP.mapId,
       mapName: MAP_NAME,
-      hasPassword: room.passwordHash !== null,
+      hasPassword: room.passwordCredential !== null,
       spectatorsAllowed: room.spectatorsAllowed,
       playerCount: room.players.length,
       maxPlayers: 2,

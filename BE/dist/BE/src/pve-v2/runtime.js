@@ -95,6 +95,10 @@ function validateRuntimeOptions(options) {
         || (options.prepDurationMs ?? exports.PVE_WAVE_PREP_DURATION_MS) < 0) {
         throw new Error('prepDurationMs must be a non-negative integer');
     }
+    if (options.tutorialPrepDurationMs !== undefined
+        && (!Number.isInteger(options.tutorialPrepDurationMs) || options.tutorialPrepDurationMs < 0)) {
+        throw new Error('tutorialPrepDurationMs must be a non-negative integer');
+    }
     if (!Number.isInteger(options.maxWaves ?? 20) || (options.maxWaves ?? 20) < 1 || (options.maxWaves ?? 20) > 20) {
         throw new Error('maxWaves must be an integer between 1 and 20');
     }
@@ -109,6 +113,7 @@ class PveGameRuntime {
     seed;
     prng;
     prepDurationTicks;
+    tutorialPrepDurationTicks;
     maxWaves;
     initialWaveNumber;
     laneRoutes;
@@ -170,6 +175,9 @@ class PveGameRuntime {
         this.seed = String(options.seed);
         this.prng = new prng_1.DeterministicPrng(options.seed);
         this.prepDurationTicks = Math.ceil((options.prepDurationMs ?? exports.PVE_WAVE_PREP_DURATION_MS) / this.tickRateMs);
+        this.tutorialPrepDurationTicks = options.tutorialPrepDurationMs === undefined
+            ? this.prepDurationTicks
+            : Math.ceil(options.tutorialPrepDurationMs / this.tickRateMs);
         this.maxWaves = options.maxWaves ?? 20;
         this.initialWaveNumber = options.initialWaveNumber ?? 1;
         this.laneRoutes = (0, arena_1.createPveLaneRoutes)(options.laneRoutes);
@@ -1230,7 +1238,9 @@ class PveGameRuntime {
             this.pendingWaveNumber = waveNumber;
         }
         this.wavePhase = 'prep';
-        this.prepRemainingTicks = this.prepDurationTicks;
+        this.prepRemainingTicks = this.currentWaveNumber === waveNumber && this.currentWaveNumber === this.initialWaveNumber
+            ? this.tutorialPrepDurationTicks
+            : this.prepDurationTicks;
     }
     beginPreparedWave() {
         if (this.pendingWaveNumber !== null) {

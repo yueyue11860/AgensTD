@@ -280,9 +280,10 @@ function validateTerminalReasons(): void {
   for (let index = 0; index < 10; index += 1) dualDisconnect.tick()
   dualDisconnect.markDisconnected('dual-disconnect:b')
   for (let index = 0; index < 590; index += 1) dualDisconnect.tick()
-  assert.equal(dualDisconnect.snapshot().phase, 'playing', 'TCP close ordering must not award a race winner')
+  assert.equal(dualDisconnect.snapshot().result?.reason, 'disconnect_forfeit')
+  assert.equal(dualDisconnect.snapshot().result?.winnerPlayerId, 'dual-disconnect:b', 'the first expired grace period must be immutable')
   for (let index = 0; index < 10; index += 1) dualDisconnect.tick()
-  assert.equal(dualDisconnect.snapshot().result?.reason, 'simultaneous_draw')
+  assert.equal(dualDisconnect.snapshot().result?.winnerPlayerId, 'dual-disconnect:b', 'a later disconnect must not rewrite the result')
 
   const simultaneous = readyRuntime('simultaneous')
   advanceToPlaying(simultaneous)
@@ -361,11 +362,62 @@ function validateHumanLoadAcks(): void {
   assert.equal(timeout.snapshot().result?.reason, 'load_disconnect')
 }
 
+function validateIndependentRecruitBags(): void {
+  const control = readyRuntime('bag-control', 'same-independent-bag-seed')
+  const noisy = readyRuntime('bag-noisy', 'same-independent-bag-seed')
+  advanceToPlaying(control)
+  advanceToPlaying(noisy)
+
+  for (let index = 0; index < 5; index += 1) {
+    const state = noisy.snapshot().sides.A!
+    assert.equal(noisy.recruit('bag-noisy:a', {
+      requestId: `alice-extra-${index}`,
+      expectedTrayRevision: state.privateState.trayRevision,
+    }).ok, true)
+  }
+
+  const controlBob = control.recruit('bag-control:b', {
+    requestId: 'bob-first',
+    expectedTrayRevision: control.snapshot().sides.B!.privateState.trayRevision,
+  })
+  const noisyBob = noisy.recruit('bag-noisy:b', {
+    requestId: 'bob-first',
+    expectedTrayRevision: noisy.snapshot().sides.B!.privateState.trayRevision,
+  })
+  assert.equal(noisyBob.details?.soldierType, controlBob.details?.soldierType, "Alice's extra draws must not advance Bob's bag")
+}
+
+function validateCheckpointRoundTrip(): void {
+  const original = readyRuntime('checkpoint-round-trip', 'checkpoint-seed')
+  advanceToPlaying(original)
+  const own = original.snapshot().sides.A!
+  assert.equal(original.recruit('checkpoint-round-trip:a', {
+    requestId: 'checkpoint-recruit-a', expectedTrayRevision: own.privateState.trayRevision,
+  }).ok, true)
+  const checkpoint = original.checkpoint()
+  assert.doesNotThrow(() => JSON.stringify(checkpoint), 'runtime checkpoint must be JSON serializable')
+  const restored = PvpMatchRuntime.restoreCheckpoint(checkpoint)
+  assert.deepEqual(restored.snapshot(), original.snapshot())
+
+  const originalBob = original.snapshot().sides.B!
+  const restoredBob = restored.snapshot().sides.B!
+  const nextOriginal = original.recruit('checkpoint-round-trip:b', {
+    requestId: 'checkpoint-recruit-b', expectedTrayRevision: originalBob.privateState.trayRevision,
+  })
+  const nextRestored = restored.recruit('checkpoint-round-trip:b', {
+    requestId: 'checkpoint-recruit-b', expectedTrayRevision: restoredBob.privateState.trayRevision,
+  })
+  assert.deepEqual(nextRestored.details?.soldierType, nextOriginal.details?.soldierType)
+  assert.deepEqual(restored.snapshot(), original.snapshot())
+}
+
 export function runPvpV1SmokeChecks(): void {
   validateMap()
   validateRoundsPressureAndProjection()
   validateTerminalReasons()
   validateHumanLoadAcks()
+  validateIndependentRecruitBags()
+  validateCheckpointRoundTrip()
   validateRecruitDeployMergeAndAutoCombat()
   validateDeterministicLoanerDraft()
 }

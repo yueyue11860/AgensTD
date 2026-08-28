@@ -81,7 +81,7 @@ function MetaNav({ mode }: { mode: MetaSystemMode }) {
         const entry = MODE_INFO[key]
         const Icon = entry.icon
         return (
-          <Link key={key} to={entry.path} className={cx('meta-nav-link', key === mode && 'meta-nav-link-active')}>
+          <Link key={key} to={entry.path} aria-label={entry.title} className={cx('meta-nav-link', key === mode && 'meta-nav-link-active')}>
             <Icon className="h-4 w-4" />
             <span>{entry.title}</span>
           </Link>
@@ -260,11 +260,29 @@ function ArsenalView({ account, weapons, generals, busy, onSave, onCraft }: {
   onSave: (generalId: string, slots: [string | null, string | null]) => Promise<unknown>
   onCraft: (weaponId: string) => Promise<unknown>
 }) {
-  const [generalId, setGeneralId] = useState(generals[0]?.generalId ?? '')
+  const selectionStorageKey = `agenstd.arsenal-selection.${encodeURIComponent(account.playerId)}`
+  const [generalId, setGeneralId] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = window.sessionStorage.getItem(selectionStorageKey)
+        if (stored && generals.some((entry) => entry.generalId === stored)) return stored
+      } catch { /* storage can be unavailable in privacy mode */ }
+    }
+    return generals[0]?.generalId ?? ''
+  })
   const [editingSlot, setEditingSlot] = useState<0 | 1>(0)
   const general = generals.find((entry) => entry.generalId === generalId) ?? generals[0]
   const persisted = general ? account.weapon.loadoutsByGeneralId[general.generalId]?.slots ?? [null, null] : [null, null]
   const [slots, setSlots] = useState<[string | null, string | null]>(persisted as [string | null, string | null])
+
+  useEffect(() => {
+    if (!generals.some((entry) => entry.generalId === generalId)) {
+      setGeneralId(generals[0]?.generalId ?? '')
+      return
+    }
+    try { window.sessionStorage.setItem(selectionStorageKey, generalId) }
+    catch { /* storage can be unavailable in privacy mode */ }
+  }, [generalId, generals, selectionStorageKey])
 
   useEffect(() => {
     if (!general) return
@@ -302,10 +320,12 @@ function ArsenalView({ account, weapons, generals, busy, onSave, onCraft }: {
         <div className="meta-panel-heading"><div><span>{ARCHETYPE_LABEL[general.archetype].toUpperCase()} BUILD</span><h2>{general.name}</h2></div><small>账户 v{account.weapon.version}</small></div>
         <div className="meta-weapon-slots">
           {slots.map((weaponId, index) => (
-            <button type="button" key={index} onClick={() => setEditingSlot(index as 0 | 1)} className={cx('meta-weapon-slot', editingSlot === index && 'meta-weapon-slot-editing')}>
-              <span>武器 {index + 1}</span><strong>{weapons.find((weapon) => weapon.weaponId === weaponId)?.name ?? '空槽位'}</strong><small>{weaponId ? '点击选择后可替换' : '从下方选择已解锁武器'}</small>
-              {weaponId ? <i role="button" tabIndex={0} onClick={(event) => { event.stopPropagation(); const next = [...slots] as [string | null, string | null]; next[index] = null; setSlots(next) }}><X className="h-4 w-4" /></i> : null}
-            </button>
+            <div className="meta-weapon-slot-wrap" key={index}>
+              <button type="button" onClick={() => setEditingSlot(index as 0 | 1)} className={cx('meta-weapon-slot', editingSlot === index && 'meta-weapon-slot-editing')}>
+                <span>武器 {index + 1}</span><strong>{weapons.find((weapon) => weapon.weaponId === weaponId)?.name ?? '空槽位'}</strong><small>{weaponId ? '点击选择后可替换' : '从下方选择已解锁武器'}</small>
+              </button>
+              {weaponId ? <button type="button" className="meta-weapon-slot-clear" aria-label={`卸下武器 ${index + 1}`} onClick={() => { const next = [...slots] as [string | null, string | null]; next[index] = null; setSlots(next) }}><X className="h-4 w-4" /></button> : null}
+            </div>
           ))}
           <button type="button" className="meta-primary-button" disabled={busy} onClick={() => void onSave(general.generalId, slots)}><Save className="h-4 w-4" />保存双武器</button>
         </div>
@@ -381,7 +401,7 @@ export function MetaSystemPage({ mode }: { mode: MetaSystemMode }) {
         {service.error && service.data ? <div className="meta-feedback meta-feedback-error">{service.error}</div> : null}
         {service.notice ? <div className="meta-feedback meta-feedback-success">{service.notice}</div> : null}
 
-        {service.isLoading ? <LoadingState /> : !service.data ? <ApiEmptyState error={service.error} onRetry={() => void service.refresh()} /> : (
+        {service.isLoading && !service.data ? <LoadingState /> : !service.data ? <ApiEmptyState error={service.error} onRetry={() => void service.refresh()} /> : (
           <>
             {mode === 'build' ? <ItemBuildView account={service.data.account} items={service.data.catalogs.items} busy={service.isMutating} onSave={service.saveItemLoadout} /> : null}
             {mode === 'arsenal' ? <ArsenalView account={service.data.account} weapons={service.data.catalogs.weapons} generals={service.data.catalogs.generals} busy={service.isMutating} onSave={service.saveWeaponLoadout} onCraft={service.craftWeapon} /> : null}

@@ -986,6 +986,9 @@ class GameEngine {
             difficulty,
             tickRateMs: this.config.tickRateMs,
             prepDurationMs: pve_v2_1.PVE_WAVE_PREP_DURATION_MS,
+            // First-time players receive a protected preparation window long enough
+            // to recruit, deploy, and use an active item before enemies spawn.
+            tutorialPrepDurationMs: 30_000,
             laneRoutes: createPveLaneRouteSnapshots(this.laneRoutes),
             maxWaves: 20,
             initialWaveNumber: this.config.pveInitialWaveNumber,

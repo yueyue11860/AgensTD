@@ -234,6 +234,7 @@ export function createPvpRestApiRouter(config: ServerConfig, platform: PvpPlatfo
   router.post('/rooms', route((request, response, principal) => {
     const body = recordBody(request)
     const room = platform.createRoom(principal, {
+      requestId: optionalString(body.requestId) ?? undefined,
       roomName: requiredString(body.roomName, 'roomName'),
       password: optionalString(body.password),
       spectatorsAllowed: body.spectatorsAllowed === true,

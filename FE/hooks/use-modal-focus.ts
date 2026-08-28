@@ -9,12 +9,13 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(',')
 
-export function useModalFocus(onEscape?: () => void) {
-  const dialogRef = useRef<HTMLDivElement | null>(null)
+export function useModalFocus<T extends HTMLElement = HTMLDivElement>(onEscape?: () => void, active = true) {
+  const dialogRef = useRef<T | null>(null)
   const escapeRef = useRef(onEscape)
   escapeRef.current = onEscape
 
   useEffect(() => {
+    if (!active) return
     const dialog = dialogRef.current
     if (!dialog) return
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -53,7 +54,7 @@ export function useModalFocus(onEscape?: () => void) {
       document.removeEventListener('keydown', handleKeyDown, true)
       if (previouslyFocused?.isConnected) previouslyFocused.focus({ preventScroll: true })
     }
-  }, [])
+  }, [active])
 
   return dialogRef
 }

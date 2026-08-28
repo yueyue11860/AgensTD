@@ -469,6 +469,18 @@ export function runPveV2SmokeChecks(): {
     PVE_WAVE_PREP_DURATION_MS / 100,
   )
 
+  const tutorialRuntime = new PveGameRuntime({
+    seed: 'first-wave-tutorial-prep', tickRateMs: 100, maxWaves: 1,
+    tutorialPrepDurationMs: 30_000,
+  })
+  assert.equal(tutorialRuntime.registerPlayer('tutorial-player', 'P1').ok, true)
+  assert.equal(tutorialRuntime.start().ok, true)
+  assert.equal(tutorialRuntime.snapshot().wave.phase, 'prep')
+  assert.equal(tutorialRuntime.snapshot().wave.prepRemainingTicks, 300)
+  for (let tick = 0; tick < 120; tick += 1) {
+    assert.equal(tutorialRuntime.tick().enemies.length, 0, 'tutorial prep must prevent early enemy pressure')
+  }
+
   const timedWaveRuntime = new PveGameRuntime({
     seed: 'timed-overlapping-waves',
     tickRateMs: 100,

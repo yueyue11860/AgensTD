@@ -46,6 +46,7 @@ interface CommonWeaponInput {
   patches?: readonly WeaponEffectParameterPatch[]
   budget?: WeaponEventBudget
   uniqueGroup?: string
+  status?: WeaponDefinition['status']
 }
 
 const common = (input: CommonWeaponInput): WeaponDefinition => ({
@@ -65,7 +66,10 @@ const common = (input: CommonWeaponInput): WeaponDefinition => ({
     detailDescription: input.description,
     iconKey: `weapon_${input.id}`,
   },
-  status: 'testing',
+  status: input.status ?? ((input.patches?.length ?? 0) === 0
+    && (input.triggers ?? []).every((trigger) => trigger.kind === 'on_basic_attack_hit'
+      && trigger.actions.every((action) => action.type === 'apply_status'))
+    ? 'released' : 'testing'),
 })
 
 export const COMMON_WEAPONS: readonly WeaponDefinition[] = [
@@ -87,12 +91,12 @@ export const COMMON_WEAPONS: readonly WeaponDefinition[] = [
   common({ id: 'sun_piercing_bow', name: '贯日弓', quality: 'orange', archetype: 'physical', description: '普攻穿透 1 个目标，次级 70% 伤害；攻击力 -8%', stats: [modifier('sun_bow_penalty', 'owner_general', 'attack', 'add_ratio', -800)], patches: [patch('sun_bow_target', 'basic_attack', 'additionalTargetLimit', 'add_flat', 1), patch('sun_bow_falloff', 'basic_attack', 'secondaryDamageRatioBps', 'add_flat', 7000)], budget: { ...ZERO_BUDGET, maxExtraTargetsPerCast: 1, maxExtraDamageEventsPerSecond: 5 } }),
   common({ id: 'nine_luminary_wheel', name: '九曜法轮', quality: 'orange', archetype: 'magic', description: '主动技能首次命中生成 3 秒法术区域', triggers: [{ triggerId: 'luminary_zone', kind: 'on_active_skill_hit', perTargetIcdMs: 0, maxTargetsPerCast: 1, actions: [{ type: 'spawn_zone', zoneId: 'nine_luminary_zone', radiusMilliCells: 1500, durationMs: 3000, tickIntervalMs: 1000, coefficientBpsPerTick: 2500, maxOwned: 1 }] }], budget: { ...ZERO_BUDGET, maxExtraDamageEventsPerSecond: 3, maxOwnedZones: 1 } }),
   common({ id: 'command_seal', name: '统御宝印', quality: 'orange', archetype: 'summon', description: '召唤上限 +1、持续 +20%，召唤物最终伤害 -10%', stats: [modifier('seal_limit', 'owned_summons', 'summon_alive_limit', 'add_flat', 1), modifier('seal_duration', 'owned_summons', 'summon_duration', 'add_ratio', 2000), modifier('seal_damage_penalty', 'owned_summons', 'summon_damage', 'add_ratio', -1000)], budget: { ...ZERO_BUDGET, maxExtraSummons: 1 } }),
-  common({ id: 'boundary_stele', name: '镇界碑', quality: 'orange', archetype: 'control', description: '主动技能硬控附加 10% 易损 4 秒', triggers: [{ triggerId: 'stele_vulnerable', kind: 'on_status_applied', statusTags: ['hard_control'], perTargetIcdMs: 8000, actions: [{ type: 'apply_status', statusId: 'all_damage_vulnerable', magnitudeBps: 1000, durationMs: 4000 }] }] }),
+  common({ id: 'boundary_stele', name: '镇界碑', quality: 'orange', archetype: 'control', uniqueGroup: 'control_vulnerability', description: '主动技能硬控附加 10% 易损 4 秒', triggers: [{ triggerId: 'stele_vulnerable', kind: 'on_status_applied', statusTags: ['hard_control'], perTargetIcdMs: 8000, actions: [{ type: 'apply_status', statusId: 'all_damage_vulnerable', magnitudeBps: 1000, durationMs: 4000 }] }] }),
 
   common({ id: 'battle_sky_axe', name: '战天斧', quality: 'red', archetype: 'physical', description: '对 Boss 伤害 +20%，暴伤 +20%；攻速 -10%', stats: [modifier('axe_boss', 'owner_general', 'boss_damage', 'add_ratio', 2000, ['boss']), modifier('axe_crit', 'owner_general', 'crit_damage', 'add_flat', 2000), modifier('axe_speed_penalty', 'owner_general', 'attack_speed', 'add_ratio', -1000)] }),
   common({ id: 'river_chart_luoshu', name: '河图洛书', quality: 'red', archetype: 'magic', description: '主动冷却 -15%，持续效果 +20%；直接技能伤害 -8%', stats: [modifier('chart_cdr', 'owner_general', 'cooldown_reduction', 'add_ratio', 1500), modifier('chart_dot', 'owner_general', 'dot_duration', 'add_ratio', 2000), modifier('chart_zone', 'owner_general', 'zone_duration', 'add_ratio', 2000), modifier('chart_direct_penalty', 'owner_general', 'direct_skill_damage', 'add_ratio', -800)] }),
   common({ id: 'myriad_beast_scroll', name: '万兽图', quality: 'red', archetype: 'summon', description: '召唤物攻击、攻速、暴伤 +30%，持续 +25%；上限 -1', stats: [modifier('scroll_attack', 'owned_summons', 'summon_attack', 'add_ratio', 3000), modifier('scroll_speed', 'owned_summons', 'summon_attack_speed', 'add_ratio', 3000), modifier('scroll_crit', 'owned_summons', 'summon_crit_damage', 'add_flat', 3000), modifier('scroll_duration', 'owned_summons', 'summon_duration', 'add_ratio', 2500), modifier('scroll_limit_penalty', 'owned_summons', 'summon_alive_limit', 'add_flat', -1)] }),
-  common({ id: 'chaos_umbrella', name: '混元伞', quality: 'red', archetype: 'control', description: '硬控 -30%；附加 15% 易损', stats: [modifier('umbrella_control_penalty', 'owner_general', 'control_duration', 'add_ratio', -3000)], triggers: [{ triggerId: 'umbrella_vulnerable', kind: 'on_status_applied', statusTags: ['hard_control'], perTargetIcdMs: 0, actions: [{ type: 'apply_status', statusId: 'all_damage_vulnerable_control_scaled', magnitudeBps: 1500, durationMs: 0 }] }] }),
+  common({ id: 'chaos_umbrella', name: '混元伞', quality: 'red', archetype: 'control', uniqueGroup: 'control_vulnerability', description: '硬控 -30%；附加 15% 易损', stats: [modifier('umbrella_control_penalty', 'owner_general', 'control_duration', 'add_ratio', -3000)], triggers: [{ triggerId: 'umbrella_vulnerable', kind: 'on_status_applied', statusTags: ['hard_control'], perTargetIcdMs: 0, actions: [{ type: 'apply_status', statusId: 'all_damage_vulnerable_control_scaled', magnitudeBps: 1500, durationMs: 0 }] }] }),
 ]
 
 interface ExclusiveWeaponInput {
@@ -104,6 +108,7 @@ interface ExclusiveWeaponInput {
   triggers?: readonly WeaponTriggerDefinition[]
   patches?: readonly WeaponEffectParameterPatch[]
   budget?: WeaponEventBudget
+  status?: WeaponDefinition['status']
 }
 
 const exclusive = (input: ExclusiveWeaponInput): WeaponDefinition => ({
@@ -118,7 +123,7 @@ const exclusive = (input: ExclusiveWeaponInput): WeaponDefinition => ({
   parameterPatches: input.patches ?? [],
   eventBudget: input.budget ?? ZERO_BUDGET,
   ui: { shortDescription: input.description, detailDescription: input.description, iconKey: `weapon_${input.id}` },
-  status: 'testing',
+  status: input.status ?? (input.generalId === 'houyi' ? 'released' : 'testing'),
 })
 
 export const EXCLUSIVE_WEAPONS: readonly WeaponDefinition[] = [

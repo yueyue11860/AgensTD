@@ -21,6 +21,7 @@ import type {
   SettlementReason,
 } from '../account-v1/types'
 import type { PlayerAccountService } from '../account-v1/service'
+import { createPasswordCredential, verifyPassword, type PasswordCredential } from '../security/password'
 
 export type RoomPhase = 'lobby' | 'countdown' | 'waiting_for_level' | 'playing'
 
@@ -28,6 +29,9 @@ export const ROOM_SLOT_ORDER = ['P1', 'P2', 'P3', 'P4'] as const satisfies reado
 
 export interface RoomCreateOptions {
   displayName?: string
+  /** Plaintext is accepted only at the creation boundary and immediately converted to a hash. */
+  password?: string
+  /** @deprecated Use `password`; a boolean cannot secure a room and is rejected when true. */
   hasPassword?: boolean
 }
 
@@ -124,7 +128,7 @@ export class Room {
 
   private readonly displayName: string
 
-  private readonly hasPassword: boolean
+  private passwordCredential: PasswordCredential | null
 
   // 第一个加入的玩家为房主
   private hostPlayerId: string | null = null
@@ -154,7 +158,9 @@ export class Room {
   ) {
     this.id = id
     this.displayName = options?.displayName?.trim() || id
-    this.hasPassword = options?.hasPassword ?? false
+    if (options?.hasPassword === true && !options.password) throw new Error('ROOM_PASSWORD_REQUIRED')
+    if (options?.password && options.password.length > 128) throw new Error('ROOM_PASSWORD_TOO_LONG')
+    this.passwordCredential = options?.password ? createPasswordCredential(options.password) : null
     this.layout = createFixedRoomLayout(config.mapWidth, config.mapHeight)
     this.engine = new GameEngine(
       {
@@ -172,6 +178,14 @@ export class Room {
         spawnMultiplier: 1,
       },
     )
+  }
+
+  requiresPassword(): boolean {
+    return this.passwordCredential !== null
+  }
+
+  verifyJoinPassword(password: string): boolean {
+    return this.passwordCredential === null || verifyPassword(password, this.passwordCredential)
   }
 
   joinPlayer(playerId: string) {
@@ -271,7 +285,7 @@ export class Room {
     return {
       id: this.id,
       name: this.displayName,
-      hasPassword: this.hasPassword,
+      hasPassword: this.passwordCredential !== null,
       players: this.slotAssignments.size,
       maxPlayers: ROOM_SLOT_ORDER.length,
       phase: this.getPhase(),
@@ -411,6 +425,9 @@ export class Room {
       slotAssignments: [...this.slotAssignments.entries()],
       pendingStageSelection: this.pendingStageSelection ? structuredClone(this.pendingStageSelection) : null,
       activeStageSelection: this.activeStageSelection ? structuredClone(this.activeStageSelection) : null,
+      // Checkpoint carries only the salted hash credential so a restarted room can still
+      // enforce its password. Never expose this payload through public room projections.
+      passwordCredential: this.passwordCredential ? structuredClone(this.passwordCredential) : null,
       stageSelectionsByMatchId: [...this.stageSelectionsByMatchId.entries()].map(([matchId, selection]) => [matchId, structuredClone(selection)]),
       matchBuildSnapshots: [...this.matchBuildSnapshots.entries()].map(([playerId, snapshot]) => [playerId, structuredClone(snapshot)]),
       engine: this.engine.exportPveCheckpointPayload(),
@@ -426,6 +443,7 @@ export class Room {
       slotAssignments: Array<[EngineSlotId, string]>
       pendingStageSelection: PveStageSelection | null
       activeStageSelection: PveStageSelection | null
+      passwordCredential?: PasswordCredential | null
       stageSelectionsByMatchId: Array<[string, PveStageSelection]>
       matchBuildSnapshots: Array<[string, MatchBuildSnapshot]>
       engine: Record<string, unknown>
@@ -442,6 +460,15 @@ export class Room {
     for (const [slot, playerId] of checkpoint.slotAssignments) this.slotAssignments.set(slot, playerId)
     this.pendingStageSelection = checkpoint.pendingStageSelection ? structuredClone(checkpoint.pendingStageSelection) : null
     this.activeStageSelection = checkpoint.activeStageSelection ? structuredClone(checkpoint.activeStageSelection) : null
+    if (checkpoint.passwordCredential) {
+      const credential = checkpoint.passwordCredential
+      if (credential.algorithm !== 'scrypt' || credential.version !== 1
+        || typeof credential.saltHex !== 'string' || typeof credential.hashHex !== 'string'
+        || typeof credential.updatedAt !== 'string') throw new Error('PVE_ROOM_CHECKPOINT_PASSWORD_INVALID')
+      this.passwordCredential = structuredClone(credential)
+    } else {
+      this.passwordCredential = null
+    }
     this.stageSelectionsByMatchId.clear()
     for (const [matchId, selection] of checkpoint.stageSelectionsByMatchId) {
       this.stageSelectionsByMatchId.set(matchId, structuredClone(selection))

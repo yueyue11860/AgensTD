@@ -27,6 +27,7 @@ const supabase_auth_routes_1 = require("./network/supabase-auth-routes");
 const e2e_control_api_1 = require("./network/e2e-control-api");
 const socket_gateway_1 = require("./network/socket-gateway");
 const pvp_platform_v1_1 = require("./pvp-platform-v1");
+const outbox_worker_1 = require("./pvp-platform-v1/outbox-worker");
 const progress_store_1 = require("./data/progress-store");
 const supabase_user_store_1 = require("./data/supabase-user-store");
 const account_v1_1 = require("./account-v1");
@@ -149,6 +150,7 @@ if (isProduction && (!supabaseAuthVerifier.isEnabled() || !userStore.isEnabled()
 }
 const pvpStore = persistencePolicy.pvpStoreMode === 'supabase' ? new supabase_pvp_store_1.SupabasePvpStore(config) : new memory_pvp_store_1.MemoryPvpStore();
 const pvpPlatform = new pvp_platform_v1_1.PvpPlatformService({ store: pvpStore });
+const pvpRewardWorker = new outbox_worker_1.PvpRewardOutboxWorker(pvpStore);
 gateway = new socket_gateway_1.SocketGateway(httpServer, roomManager, config, performanceTelemetry, actionLimiter, progressStore, projectedTickStream, accountService, pveRewardService, pveSettlementCoordinator, pveCheckpointCoordinator, true);
 app.use('/api', (0, supabase_auth_routes_1.createSupabaseAuthRouter)(config, userStore));
 app.use('/api/e2e', (0, e2e_control_api_1.createE2eControlRouter)(config, gateway));
@@ -199,6 +201,7 @@ void Promise.all([
         throw new Error(`PVE settlement recovery left ${failed} failed record(s)`);
     gateway.prepareRoomRuntimes();
     gateway.startRoomLoops();
+    void pvpPlatform.ready.then(() => pvpRewardWorker.start());
     httpServer.listen(config.port, () => { });
 })
     .catch((error) => {
@@ -207,10 +210,12 @@ void Promise.all([
     pveCheckpointReadiness = { status: 'not_ready', code: 'BOOTSTRAP_FAILED', recovered: false };
     console.error(`Persistence bootstrap failed; refusing to listen: ${details}`);
     pvpPlatform.shutdown();
+    void pvpRewardWorker.stop();
     gateway.shutdown(() => { process.exitCode = 1; });
 });
 const shutdown = () => {
     pvpPlatform.shutdown();
+    void pvpRewardWorker.stop();
     pveCheckpointCoordinator.shutdown();
     void replayRecorder.flushLatest()
         .catch((error) => {

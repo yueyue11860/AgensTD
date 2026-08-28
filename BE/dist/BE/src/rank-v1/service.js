@@ -24,7 +24,11 @@ function assertIso(value, field) {
     return timestamp;
 }
 function isNoContestReason(reason) {
-    return reason === 'server_void' || reason === 'ruleset_invalid';
+    return reason === 'server_void'
+        || reason === 'ruleset_invalid'
+        || reason === 'load_failed'
+        || reason === 'load_timeout'
+        || reason === 'load_disconnect';
 }
 class PvpRankError extends Error {
     code;

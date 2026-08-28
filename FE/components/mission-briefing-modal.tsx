@@ -112,7 +112,7 @@ export function MissionBriefingModal({
           </div>
         </div>
 
-        {engineError && <div className="mission-briefing-error"><span className="mission-briefing-error-code">军情</span>{engineError}</div>}
+        {engineError && <div className="mission-briefing-error" role="alert"><span className="mission-briefing-error-code">军情</span>{engineError}</div>}
 
         {isHost && (
           <div className="mission-level-list" aria-busy={progressionLoading}>

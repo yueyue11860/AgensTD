@@ -121,7 +121,11 @@ async function main(): Promise<void> {
     assert.equal(aliceProfile.rating.wins, 1)
 
     const room = platform.createRoom(alice, { roomName: '真人约战', password: 'secret', spectatorsAllowed: true })
+    await assert.rejects(() => platform.joinRoom(bob, room.roomId), /密码房必须提供/)
     await assert.rejects(() => platform.joinRoom(bob, room.roomId, 'wrong'), /WRONG_PASSWORD|密码/)
+    await assert.rejects(() => platform.joinRoom(bob, room.roomId, 'wrong-2'), /WRONG_PASSWORD|密码/)
+    await assert.rejects(() => platform.joinRoom(bob, room.roomId, 'wrong-3'), /WRONG_PASSWORD|密码/)
+    assert.equal((await platform.listRooms()).find(candidate => candidate.roomId === room.roomId)?.playerCount, 1)
     const joined = await platform.joinRoom(bob, room.roomId, 'secret')
     assert.equal(joined.playerCount, 2)
     await platform.setRoomReady(alice, room.roomId, true)

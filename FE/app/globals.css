@@ -4754,7 +4754,7 @@ body.crisis-overload-active {
 
 .home-meta-entry button:hover { border-color: rgba(62, 231, 210, .7); background: rgba(34, 211, 238, .1); color: #ecfeff; }
 
-.meta-page { position: relative; min-height: 100vh; overflow: hidden; background: #02050b; color: #ecfeff; }
+.meta-page { position: relative; min-height: 100vh; min-height: 100dvh; overflow-x: hidden; overflow-y: auto; background: #02050b; color: #ecfeff; }
 .meta-shell { position: relative; z-index: 1; width: min(1540px, 100%); min-height: 100vh; margin: 0 auto; padding: clamp(1rem, 2.4vw, 2rem); }
 .meta-header { display: grid; gap: 1.15rem; margin-bottom: 1.2rem; }
 .meta-back-button, .meta-nav-link, .meta-action-button, .meta-clear-button {
@@ -4797,7 +4797,7 @@ body.crisis-overload-active {
 .meta-empty-state { position: relative; display: flex; align-items: center; justify-content: center; gap: 1rem; min-height: 280px; border: 1px dashed rgba(103,232,249,.25); border-radius: 24px; background: rgba(8,15,30,.52); padding: 2rem; }.meta-empty-state strong { display:block; margin-bottom:.35rem; }.meta-empty-state p,.meta-inline-empty { color: rgba(203,232,245,.58); font-size: .82rem; line-height: 1.6; }.meta-empty-state-error { border-color: rgba(251,146,60,.28); }.meta-inline-empty { padding: 1.25rem; text-align: center; }
 .meta-general-list > div:last-child { display: grid; max-height: calc(100vh - 330px); overflow: auto; gap: .32rem; padding-top: .7rem; }
 .meta-general-row { display: grid; grid-template-columns: 2rem 1fr auto; align-items: center; gap: .55rem; border: 1px solid transparent; border-radius: 12px; padding: .48rem; text-align:left; color: #d7f4ff; }.meta-general-row > span { display:grid;place-items:center;width:2rem;height:2rem;border-radius:9px;background:rgba(34,211,238,.08);color:#67e8f9;font-size:1.05rem; }.meta-general-row div { display:grid; }.meta-general-row small { color:rgba(203,232,245,.4);font-size:.6rem; }.meta-general-row-active { border-color:rgba(62,231,210,.45);background:rgba(34,211,238,.08); }
-.meta-weapon-slots { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) auto; gap: .6rem; margin-top: .8rem; }.meta-weapon-slot { min-height: 76px; }.meta-weapon-slot i { position:absolute;right:.5rem;top:.5rem;display:grid;place-items:center;width:1.5rem;height:1.5rem;border-radius:50%;color:rgba(203,232,245,.55); }.meta-weapon-slots .meta-primary-button { margin:0;align-self:stretch; }
+.meta-weapon-slots { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) auto; gap: .6rem; margin-top: .8rem; }.meta-weapon-slot-wrap { position: relative; min-width: 0; }.meta-weapon-slot { width: 100%; min-height: 76px; }.meta-weapon-slot-clear { position:absolute;right:.5rem;top:.5rem;display:grid;place-items:center;width:1.5rem;height:1.5rem;border-radius:50%;color:rgba(203,232,245,.55); }.meta-weapon-slot-clear:hover,.meta-weapon-slot-clear:focus-visible { color:#ecfeff;background:rgba(34,211,238,.15); }.meta-weapon-slots .meta-primary-button { margin:0;align-self:stretch; }
 .meta-compatibility-hint { display:flex;gap:.55rem;margin-top:.8rem;padding:.65rem;border-radius:12px;background:rgba(56,189,248,.06);font-size:.7rem;line-height:1.5;color:rgba(186,230,253,.62); }
 .meta-weapon-card { position:relative;display:grid;gap:.5rem;min-height:198px;padding:.85rem;border:1px solid rgba(148,163,184,.16);border-radius:17px;background:rgba(15,23,42,.5);overflow:hidden; }.meta-weapon-card::before,.meta-offer-card::before { content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--quality,#64748b); }.meta-weapon-card .meta-catalog-art { width:calc(100% + 1.7rem);margin:0 -.85rem .1rem;order:1;border-top:1px solid color-mix(in srgb,var(--quality,#67e8f9) 18%,transparent);border-bottom-color:color-mix(in srgb,var(--quality,#67e8f9) 18%,transparent); }.meta-weapon-card .meta-weapon-quality{order:0}.meta-weapon-card h3{order:2}.meta-weapon-card>p{order:3}.meta-weapon-card .meta-fragment-row{order:4}.meta-weapon-card .meta-card-actions{order:5}.meta-weapon-quality {display:flex;justify-content:space-between;font-size:.62rem;color:var(--quality,#94a3b8);}.meta-weapon-card h3,.meta-offer-card h3{font-size:1rem;font-weight:700;}.meta-weapon-card-incompatible{opacity:.42;}.meta-weapon-card-equipped{box-shadow:inset 0 0 0 1px var(--quality,#67e8f9);}
 .meta-quality-green{--quality:#4ade80}.meta-quality-blue{--quality:#38bdf8}.meta-quality-purple{--quality:#c084fc}.meta-quality-orange{--quality:#fb923c}.meta-quality-red{--quality:#fb7185}
@@ -7634,6 +7634,14 @@ body.crisis-overload-active {
   color: white;
   font-size: 1rem;
   line-height: 1.35;
+}
+
+.pve-onboarding-state {
+  display: block;
+  margin-top: 0.28rem;
+  color: rgb(252 211 77);
+  font-size: 0.64rem;
+  letter-spacing: 0.08em;
 }
 
 .pve-onboarding-coach > p:not(.pve-onboarding-eyebrow) {

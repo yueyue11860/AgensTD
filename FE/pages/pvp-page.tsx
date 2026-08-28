@@ -33,6 +33,7 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { usePvpData } from '../hooks/use-pvp-data'
 import { cx } from '../lib/cx'
 import { resolvePlayerId } from '../lib/runtime-config'
+import { useModalFocus } from '../hooks/use-modal-focus'
 import type { PvpLeaderboardEntry, PvpMatchDetail, PvpMatchPublicState, PvpMatchResult, PvpMatchSummary, PvpMode, PvpProfile, PvpRoomSummary } from '../types/pvp'
 
 const MODE_LABEL: Record<PvpMode, string> = {
@@ -79,7 +80,7 @@ function PvpShell({ children, title, eyebrow, actions }: { children: React.React
           <Link to="/home" className="pvp-back"><ArrowLeft className="h-4 w-4" />返回主页</Link>
           <nav className="pvp-nav" aria-label="PVP 导航">
             {nav.map(({ to, label, icon: Icon }) => (
-              <Link key={to} to={to} className={cx('pvp-nav-link', location.pathname === to && 'pvp-nav-link-active')}>
+              <Link key={to} to={to} aria-label={label} className={cx('pvp-nav-link', location.pathname === to && 'pvp-nav-link-active')}>
                 <Icon className="h-4 w-4" /><span>{label}</span>
               </Link>
             ))}
@@ -100,11 +101,11 @@ function PvpShell({ children, title, eyebrow, actions }: { children: React.React
 }
 
 function ServiceNotice({ error, notice, loading }: { error: string | null; notice: string | null; loading: boolean }) {
-  if (loading) return <div className="pvp-service-state"><LoaderCircle className="h-4 w-4 animate-spin" />正在同步 PVP 权威数据…</div>
+  if (loading) return <div className="pvp-service-state" role="status" aria-live="polite"><LoaderCircle className="h-4 w-4 animate-spin" />正在同步 PVP 权威数据…</div>
   return (
     <>
-      {error ? <div className="pvp-service-state pvp-service-warning"><ShieldAlert className="h-4 w-4" />{error} 当前页保留最后一份权威投影，操作、段位与结算以服务端返回为准。</div> : null}
-      {notice ? <div className="pvp-service-state pvp-service-success"><Check className="h-4 w-4" />{notice}</div> : null}
+      {error ? <div className="pvp-service-state pvp-service-warning" role="alert"><ShieldAlert className="h-4 w-4" />{error} 当前页保留最后一份权威投影，操作、段位与结算以服务端返回为准。</div> : null}
+      {notice ? <div className="pvp-service-state pvp-service-success" role="status" aria-live="polite"><Check className="h-4 w-4" />{notice}</div> : null}
     </>
   )
 }
@@ -226,6 +227,7 @@ function RoomsPage() {
   const [name, setName] = useState('我的斗法房')
   const [password, setPassword] = useState('')
   const [spectatorsAllowed, setSpectatorsAllowed] = useState(true)
+  const createDialogRef = useModalFocus<HTMLFormElement>(() => setIsCreating(false), isCreating)
 
   async function create() {
     const room = await service.createRoom({ roomName: name.trim() || '我的斗法房', password, spectatorsAllowed }).catch(() => null)
@@ -239,7 +241,7 @@ function RoomsPage() {
         <header><div><span className="pvp-kicker">ROOM DIRECTORY</span><h2>公开房间</h2></div><button className="pvp-icon-button" type="button" onClick={() => void service.refresh()}><RefreshCcw className="h-4 w-4" /></button></header>
         {service.data.rooms.length ? service.data.rooms.map((room) => <RoomRow key={room.roomId} room={room} onOpen={() => navigate(`/pvp/rooms/${room.roomId}`)} />) : <EmptyState icon={DoorOpen} title="当前没有公开斗法房" copy="创建一间标准 1v1 房，或稍后刷新。自定义房不会伪装成排位赛。" />}
       </section>
-      {isCreating ? <div className="pvp-modal-backdrop"><form className="pvp-modal" onSubmit={(event) => { event.preventDefault(); void create() }}><button className="pvp-modal-close" type="button" onClick={() => setIsCreating(false)}><X className="h-4 w-4" /></button><span className="pvp-kicker">CREATE CUSTOM ROOM</span><h2>创建自定义房</h2><label>房间名称<input value={name} onChange={(event) => setName(event.target.value)} maxLength={24} /></label><label>密码（可选）<input value={password} onChange={(event) => setPassword(event.target.value)} maxLength={16} type="password" /></label><label className="pvp-checkbox"><input checked={spectatorsAllowed} onChange={(event) => setSpectatorsAllowed(event.target.checked)} type="checkbox" />允许最多 8 名观众</label><div className="pvp-modal-summary"><Map className="h-4 w-4" />两界斗法台 · 标准 1v1 · 不计段位</div><button disabled={service.isMutating} type="submit">{service.isMutating ? '创建中…' : '创建房间'}</button></form></div> : null}
+      {isCreating ? <div className="pvp-modal-backdrop"><form ref={createDialogRef} className="pvp-modal" role="dialog" aria-modal="true" aria-labelledby="create-pvp-room-title" tabIndex={-1} onSubmit={(event) => { event.preventDefault(); void create() }}><button aria-label="关闭创建房间弹窗" className="pvp-modal-close" type="button" onClick={() => setIsCreating(false)}><X className="h-4 w-4" /></button><span className="pvp-kicker">CREATE CUSTOM ROOM</span><h2 id="create-pvp-room-title">创建自定义房</h2><label>房间名称<input value={name} onChange={(event) => setName(event.target.value)} maxLength={24} /></label><label>密码（可选）<input value={password} onChange={(event) => setPassword(event.target.value)} maxLength={16} type="password" /></label><label className="pvp-checkbox"><input checked={spectatorsAllowed} onChange={(event) => setSpectatorsAllowed(event.target.checked)} type="checkbox" />允许最多 8 名观众</label><div className="pvp-modal-summary"><Map className="h-4 w-4" />两界斗法台 · 标准 1v1 · 不计段位</div><button disabled={service.isMutating} type="submit">{service.isMutating ? '创建中…' : '创建房间'}</button></form></div> : null}
     </PvpShell>
   )
 }
@@ -291,6 +293,7 @@ function GamePage({ matchId }: { matchId: string }) {
   const service = usePvpData({ matchId })
   const state = service.gameState
   const [confirmSurrender, setConfirmSurrender] = useState(false)
+  const surrenderDialogRef = useModalFocus<HTMLDivElement>(() => setConfirmSurrender(false), confirmSurrender)
   const terminal = state?.status === 'completed' || state?.status === 'voided'
   const preBattle = !state || state.status === 'ready_check' || state.status === 'loading' || state.status === 'countdown'
   useEffect(() => {
@@ -318,7 +321,7 @@ function GamePage({ matchId }: { matchId: string }) {
       {state ? <PvpPlayableBattlefield state={state} matchId={matchId} service={service} /> : <div className="pvp-game-empty"><LoaderCircle className="h-7 w-7" /><strong>等待 PVP 权威状态</strong><span>这里不会读取或复用 PVE GameState。</span></div>}
       <section className="pvp-pressure-bar"><div><Sparkles className="h-5 w-5" /><span>遣妖</span><small>{service.pressureMessage ?? '消耗 5 真经，向对方安全队列加入压力怪'}</small></div><button type="button" disabled={!state || state.status !== 'playing' || state.self.scripture < 5 || service.isMutating} onClick={() => void service.sendPressure(matchId)}>{service.isMutating ? '发送中…' : '发送压力'}</button></section>
       </> : null}
-      {confirmSurrender ? <div className="pvp-modal-backdrop"><div className="pvp-modal"><span className="pvp-kicker">SURRENDER</span><h2>确认投降？</h2><p>投降将由服务器立即判负；排位照常结算段位，恶意短局不发奖励。</p><div className="pvp-modal-buttons"><button className="pvp-secondary-button" type="button" onClick={() => setConfirmSurrender(false)}>继续战斗</button><button className="pvp-danger-button" type="button" onClick={() => { setConfirmSurrender(false); void service.surrender(matchId) }}>确认投降</button></div></div></div> : null}
+      {confirmSurrender ? <div className="pvp-modal-backdrop"><div ref={surrenderDialogRef} className="pvp-modal" role="dialog" aria-modal="true" aria-labelledby="pvp-surrender-title" tabIndex={-1}><span className="pvp-kicker">SURRENDER</span><h2 id="pvp-surrender-title">确认投降？</h2><p>投降将由服务器立即判负；排位照常结算段位，恶意短局不发奖励。</p><div className="pvp-modal-buttons"><button className="pvp-secondary-button" type="button" onClick={() => setConfirmSurrender(false)}>继续战斗</button><button className="pvp-danger-button" type="button" onClick={() => { setConfirmSurrender(false); void service.surrender(matchId) }}>确认投降</button></div></div></div> : null}
     </PvpShell>
   )
 }

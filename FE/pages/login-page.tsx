@@ -19,8 +19,8 @@ function BootLog() {
   }, [visibleCount])
 
   return (
-    <div className="space-y-0.5 font-mono text-[0.65rem] leading-relaxed text-sky-400/60">
-      {BOOT_LINES.slice(0, visibleCount).map((line) => <p key={line} className="whitespace-pre">{line}</p>)}
+    <div className="min-w-0 max-w-full space-y-0.5 overflow-hidden font-mono text-[0.65rem] leading-relaxed text-sky-400/60">
+      {BOOT_LINES.slice(0, visibleCount).map((line) => <p key={line} className="whitespace-pre-wrap break-all">{line}</p>)}
       {visibleCount < BOOT_LINES.length && <span className="inline-block h-3 w-1.5 animate-pulse bg-sky-400/70" />}
     </div>
   )

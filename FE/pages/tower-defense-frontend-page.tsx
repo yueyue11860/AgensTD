@@ -31,6 +31,7 @@ import { useRoomLobbyData, type RoomPlayerSlot, type RoomSummary } from '../hook
 import { useAuth } from '../hooks/use-auth'
 import { cx } from '../lib/cx'
 import { resolvePlayerId, resolvePlayerKind, resolvePlayerName } from '../lib/runtime-config'
+import { useModalFocus } from '../hooks/use-modal-focus'
 
 type CurrentView = 'HOME' | 'LOBBY' | 'ROOM' | 'LEADERBOARD' | 'HOT_REPLAYS' | 'SKILL_DOC'
 
@@ -320,15 +321,7 @@ function CreateRoomModal({
   onChangePassword: (value: string) => void
   onCreate: () => void
 }) {
-  useEffect(() => {
-    if (!open) return
-    function handleKey(event: KeyboardEvent) {
-      if (event.key === 'Escape') onClose()
-      if (event.key === 'Enter' && !isCreating) onCreate()
-    }
-    window.addEventListener('keydown', handleKey)
-    return () => window.removeEventListener('keydown', handleKey)
-  }, [isCreating, open, onClose, onCreate])
+  const dialogRef = useModalFocus<HTMLDivElement>(onClose, open)
 
   if (!open) {
     return null
@@ -336,11 +329,11 @@ function CreateRoomModal({
 
   return (
     <div className="term-modal-backdrop" onClick={onClose}>
-      <div className="term-modal" onClick={(e) => e.stopPropagation()}>
+      <div ref={dialogRef} className="term-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="create-room-title" tabIndex={-1}>
 
         {/* 头部 */}
         <div className="term-modal-head">
-          <span className="term-modal-title">立下守关战旗</span>
+          <span id="create-room-title" className="term-modal-title">立下守关战旗</span>
           <small className="term-modal-subtitle">为同行者建立一支西游守关队伍</small>
         </div>
         <div className="term-divider" />
@@ -459,12 +452,7 @@ function PlayerCard({
 
   return (
     <article
-      role="button"
-      tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick() }
-      }}
+      aria-labelledby={`mode-card-${side.toLowerCase()}-title`}
       className={cx(
         'celestial-mode-card outline-none',
         isPve ? 'celestial-mode-pve split-side-human' : 'celestial-mode-pvp split-side-agent',
@@ -476,7 +464,7 @@ function PlayerCard({
       </div>
       <div className="celestial-mode-content">
         <span className="celestial-mode-kicker">{isPve ? '西行卷 · 四人同守' : '斗法卷 · 真人对阵'}</span>
-        <h2>{title}</h2>
+        <h2 id={`mode-card-${side.toLowerCase()}-title`}>{title}</h2>
         <p>
           {description}
         </p>
@@ -486,7 +474,7 @@ function PlayerCard({
         <button
           type="button"
           className="celestial-mode-cta split-side-cta"
-          onClick={(event) => { event.stopPropagation(); onClick() }}
+          onClick={onClick}
         >
           {actionLabel}
         </button>
@@ -956,9 +944,9 @@ export function TowerDefenseFrontendPage() {
         </div>
 
         <nav className="home-meta-entry" aria-label="局外构筑">
-          <button type="button" onClick={() => navigate('/build')}><Backpack className="h-4 w-4" /><span>道具构筑</span></button>
-          <button type="button" onClick={() => navigate('/arsenal')}><Swords className="h-4 w-4" /><span>神将武库</span></button>
-          <button type="button" onClick={() => navigate('/shop')}><ShoppingBag className="h-4 w-4" /><span>金币商店</span></button>
+          <button type="button" aria-label="道具构筑" onClick={() => navigate('/build')}><Backpack className="h-4 w-4" /><span>道具构筑</span></button>
+          <button type="button" aria-label="神将武库" onClick={() => navigate('/arsenal')}><Swords className="h-4 w-4" /><span>神将武库</span></button>
+          <button type="button" aria-label="金币商店" onClick={() => navigate('/shop')}><ShoppingBag className="h-4 w-4" /><span>金币商店</span></button>
         </nav>
 
         <section className="celestial-mode-grid split-container">

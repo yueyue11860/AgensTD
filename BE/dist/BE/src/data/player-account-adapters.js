@@ -5,6 +5,8 @@ const catalog_1 = require("../core/hero-v1/catalog");
 const roster_1 = require("../core/hero-v1/roster");
 const catalog_2 = require("../item-v1/catalog");
 const catalog_3 = require("../weapon-v1/catalog");
+/** Player-facing surfaces may only advertise effects the runtime actually consumes. */
+const RELEASED_WEAPONS = catalog_3.WEAPON_CATALOG.filter((weapon) => weapon.status === 'released');
 function toJsonObject(value) {
     return structuredClone(value);
 }
@@ -40,7 +42,7 @@ class V1AccountShopCatalog {
             }));
         }
         const lowTier = kind === 'low_tier_weapon_fragment';
-        return catalog_3.WEAPON_CATALOG
+        return RELEASED_WEAPONS
             .filter(weapon => lowTier
             ? weapon.quality === 'green' || weapon.quality === 'blue'
             : weapon.quality === 'purple' || weapon.quality === 'orange' || weapon.quality === 'red')
@@ -77,13 +79,13 @@ class V1MatchBuildDefinitionResolver {
         return definition ? toJsonObject(definition) : null;
     }
     resolveWeapon(weaponId) {
-        const definition = catalog_3.WEAPON_CATALOG.find(weapon => weapon.weaponId === weaponId);
+        const definition = RELEASED_WEAPONS.find(weapon => weapon.weaponId === weaponId);
         return definition ? toJsonObject(definition) : null;
     }
 }
 exports.V1MatchBuildDefinitionResolver = V1MatchBuildDefinitionResolver;
 exports.ACCOUNT_CATALOGS = Object.freeze({
     items: catalog_2.ITEM_DEFINITIONS,
-    weapons: catalog_3.WEAPON_CATALOG,
+    weapons: RELEASED_WEAPONS,
     generals: Object.values(catalog_1.GENERAL_CATALOG),
 });

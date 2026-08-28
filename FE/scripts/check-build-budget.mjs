@@ -1,6 +1,7 @@
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { extname, join, relative, resolve } from 'node:path'
 import { gzipSync } from 'node:zlib'
+import { collectConcreteImageReferences, isDynamicImageReference } from './build-budget-image-references.mjs'
 
 const DIST_DIR = resolve('dist')
 const MANIFEST_PATH = join(DIST_DIR, '.vite', 'manifest.json')
@@ -71,6 +72,11 @@ async function walkFiles(directory) {
 
 async function checkImage(relativePath) {
   const normalized = relativePath.replace(/^\.\//, '').replace(/^\//, '')
+  // Runtime template references (for example `art/equipment/${iconKey}.webp`)
+  // are resolved against the catalog at runtime and are not literal files that
+  // can be checked by the static scanner. Keep the reference in the emitted
+  // bundle while validating concrete paths discovered from the build output.
+  if (isDynamicImageReference(normalized)) return
   if (!imageExtensions.has(extname(normalized).toLowerCase()) || checkedImages.has(normalized)) return
   checkedImages.add(normalized)
   try {
@@ -95,10 +101,9 @@ for (const criticalDirectory of ['assets', join('art', 'backgrounds')]) {
 // archive a false-positive build blocker, but gate every public image path that
 // the emitted JS/CSS can actually request (including /sprites/**).
 const emittedCodeFiles = (await walkFiles(DIST_DIR)).filter(file => ['.css', '.js'].includes(extname(file)))
-const publicImageReference = /(?:\/|\.\/)?(?:art|assets|sprites)\/[^'"`()\s?#]+\.(?:avif|gif|jpe?g|png|svg|webp)/gi
 for (const emittedFile of emittedCodeFiles) {
   const code = await readFile(emittedFile, 'utf8')
-  for (const match of code.matchAll(publicImageReference)) await checkImage(match[0])
+  for (const reference of collectConcreteImageReferences(code)) await checkImage(reference)
 }
 
 const largestImages = [...imageSizes]

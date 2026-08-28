@@ -26,6 +26,8 @@ function readHandshakeValue(socket, key) {
 const DEFAULT_ROOM_ID = 'public-1';
 const COUNTDOWN_DURATION_MS = 3000;
 const COMBAT_PROTOCOL_ROOM_PREFIX = '__combat-event-v1__:';
+const ROOM_PASSWORD_ATTEMPT_WINDOW_MS = 60_000;
+const ROOM_PASSWORD_ATTEMPT_MAX = 5;
 function combatProtocolRoom(roomId) {
     return `${COMBAT_PROTOCOL_ROOM_PREFIX}${roomId}`;
 }
@@ -73,6 +75,8 @@ class SocketGateway {
     settlementCoordinator;
     roomLoopsStarted;
     e2eRendererStressTimers = new Map();
+    /** Per-room/player guard for password brute-force attempts. Values are never persisted or exposed. */
+    roomPasswordAttempts = new Map();
     setE2eHostLoopInterval(roomId, playerId, requestedIntervalMs) {
         if (!this.config.pveE2eEnabled || process.env.NODE_ENV === 'production') {
             return { ok: false, code: 'PVE_E2E_DISABLED' };
@@ -281,6 +285,15 @@ class SocketGateway {
         }
         const runtime = this.ensureRoomRuntime(nextRoomId);
         const existingSlot = runtime.room.getPlayerSlot(identity.playerId);
+        if (!existingSlot && runtime.room.requiresPassword()) {
+            const password = typeof payload.password === 'string' ? payload.password : '';
+            const principal = socket.data.principal;
+            const passwordResult = this.checkRoomPassword(nextRoomId, principal?.playerId ?? identity.playerId, socket.handshake.address, password, runtime.room);
+            if (!passwordResult.ok) {
+                this.emitEngineError(socket, passwordResult.code, passwordResult.message, passwordResult.retryAfterMs);
+                return;
+            }
+        }
         if (!existingSlot && !runtime.room.isAcceptingNewPlayers()) {
             this.emitEngineError(socket, 'MATCH_IN_PROGRESS', '对局构筑已锁定，只允许原玩家重连');
             return;
@@ -310,6 +323,46 @@ class SocketGateway {
         this.emitJoinSnapshot(socket, runtime, assignedSlot, attachment.reconnected);
         this.emitPlayerConnectionState(runtime, identity.playerId, 'connected', null);
         this.emitRoomSnapshot(runtime);
+    }
+    checkRoomPassword(roomId, playerId, address, password, room) {
+        const key = `${roomId}:${playerId}:${address}`;
+        const now = Date.now();
+        const current = this.roomPasswordAttempts.get(key);
+        if (current && current.blockedUntil > now) {
+            this.telemetry.incrementCounter('room.password.rate_limited');
+            return {
+                ok: false,
+                code: 'PASSWORD_ATTEMPTS_EXCEEDED',
+                message: '密码尝试次数过多，请稍后再试',
+                retryAfterMs: current.blockedUntil - now,
+            };
+        }
+        const state = !current || now - current.windowStartedAt >= ROOM_PASSWORD_ATTEMPT_WINDOW_MS
+            ? { windowStartedAt: now, count: 0, blockedUntil: 0 }
+            : current;
+        if (!password || !room.verifyJoinPassword(password)) {
+            state.count += 1;
+            if (state.count >= ROOM_PASSWORD_ATTEMPT_MAX)
+                state.blockedUntil = now + ROOM_PASSWORD_ATTEMPT_WINDOW_MS;
+            this.roomPasswordAttempts.set(key, state);
+            this.telemetry.incrementCounter('room.password.rejected');
+            if (state.blockedUntil > now) {
+                return {
+                    ok: false,
+                    code: 'PASSWORD_ATTEMPTS_EXCEEDED',
+                    message: '密码尝试次数过多，请稍后再试',
+                    retryAfterMs: state.blockedUntil - now,
+                };
+            }
+            return {
+                ok: false,
+                code: password ? 'WRONG_PASSWORD' : 'PASSWORD_REQUIRED',
+                message: password ? '房间密码错误' : '加入密码房必须提供 password',
+            };
+        }
+        this.roomPasswordAttempts.delete(key);
+        this.telemetry.incrementCounter('room.password.accepted');
+        return { ok: true };
     }
     configureCombatProtocol(socket, roomId, enabled) {
         socket.data.combatEventBatchEnabled = enabled;

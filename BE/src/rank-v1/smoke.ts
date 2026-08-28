@@ -163,6 +163,16 @@ async function main(): Promise<void> {
   assert.ok(noContest.settlements.every(settlement => settlement.rewardStatus === 'not_applicable'))
   assert.deepEqual(await store.getRating('season-ranked_1v1', 'ranked_1v1', 'alice'), beforeNoContest)
 
+  // A failed asset load is also a no-contest: it must not create a rated
+  // result or reward outbox even when the caller's integrity flag is valid.
+  const beforeLoadFailure = await store.getRating('season-ranked_1v1', 'ranked_1v1', 'alice')
+  const loadFailure = await service.settleMatch(matchInput({
+    matchId: 'ranked-load-failed', winner: null, endReason: 'load_failed', integrityStatus: 'valid', endedOffsetMinutes: 7,
+  }))
+  assert.equal(loadFailure.match.status, 'no_contest')
+  assert.ok(loadFailure.settlements.every(settlement => settlement.outcome === 'no_contest' && settlement.rewardStatus === 'not_applicable'))
+  assert.deepEqual(await store.getRating('season-ranked_1v1', 'ranked_1v1', 'alice'), beforeLoadFailure)
+
   const casual = await service.settleMatch(matchInput({ matchId: 'casual-1', modeId: 'casual_1v1', left: 'casual-a', right: 'casual-b' }))
   assert.equal(casual.participants[0].ratingDelta, 0)
   assert.equal(casual.settlements[0].reward.rewardScaleBps, 5000)

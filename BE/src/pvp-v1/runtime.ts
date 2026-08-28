@@ -68,6 +68,29 @@ interface RuntimeSide {
   lastAttackAtTick: Map<string, number>
 }
 
+/** Serializable runtime image used by a host to persist/recover an active match. */
+export interface PvpRuntimeCheckpoint {
+  schemaVersion: 1
+  options: Required<Pick<PvpRuntimeOptions, 'matchId' | 'mode' | 'seed' | 'rulesetVersion' | 'tickRateMs' | 'countdownMs' | 'roundIntervalMs' | 'eventHistoryLimit' | 'loadTimeoutMs' | 'disconnectForfeitMs' | 'assetsVersion'>>
+  phase: PvpAuthorityState['phase']
+  currentTick: number
+  countdownRemainingTicks: number
+  loadDeadlineAtTick: number | null
+  roundNumber: number
+  nextRoundAtTick: number | null
+  playingStartedAtTick: number | null
+  result: PvpMatchResult | null
+  eventSequence: number
+  enemySequence: number
+  pressureSequence: number
+  spawnSequence: number
+  unitSequence: number
+  sides: Record<PvpSide, (Omit<RuntimeSide, 'lastAttackAtTick'> & { lastAttackAtTick: Array<[string, number]> }) | null>
+  sidePrng: Record<PvpSide, number | null>
+  commandReceipts: Array<[string, { fingerprint: string, result: PvpCommandResult }]>
+  recentEvents: PvpRuntimeEvent[]
+}
+
 export interface PvpRuntimeOptions {
   matchId: string
   mode: PvpMode
@@ -125,7 +148,8 @@ export class PvpMatchRuntime {
   private readonly assetsVersion: string
   private readonly rulesSnapshot = structuredClone(PVP_V1_RULES_SNAPSHOT)
   private readonly disconnectForfeitTicks: number
-  private readonly prng: DeterministicPrng
+  /** Independent deterministic recruit streams; A's draws never advance B. */
+  private readonly sidePrng: Record<PvpSide, DeterministicPrng | null> = { A: null, B: null }
   private readonly sides: Record<PvpSide, RuntimeSide | null> = { A: null, B: null }
   private readonly commandReceipts = new Map<string, { fingerprint: string, result: PvpCommandResult }>()
   private readonly recentEvents: PvpRuntimeEvent[] = []
@@ -158,7 +182,6 @@ export class PvpMatchRuntime {
     this.loadTimeoutTicks = Math.max(1, Math.ceil((options.loadTimeoutMs ?? DEFAULT_LOAD_TIMEOUT_MS) / this.tickRateMs))
     this.disconnectForfeitTicks = Math.max(1, Math.ceil((options.disconnectForfeitMs ?? DISCONNECT_FORFEIT_MS) / this.tickRateMs))
     this.assetsVersion = options.assetsVersion ?? PVP_ASSETS_VERSION
-    this.prng = new DeterministicPrng(`${this.seed}:pvp-runtime`)
     this.transitionTo('waiting_players')
   }
 
@@ -224,6 +247,9 @@ export class PvpMatchRuntime {
       lastPressureAtTick: null,
       lastAttackAtTick: new Map(),
     }
+    // The platform seed already includes matchId. Deriving by side produces
+    // stable, independent bags without trusting any client-provided seed.
+    this.sidePrng[side] = new DeterministicPrng(`${this.seed}:recruit:${side}`)
     if (this.sides.A && this.sides.B) {
       this.transitionTo('ready_check')
       if (this.sides.A.state.ready && this.sides.B.state.ready) this.enterLoading()
@@ -300,7 +326,9 @@ export class PvpMatchRuntime {
       if (trayIndex < 0 && reserveIndex < 0) return this.command(false, 'RECRUIT_STORAGE_FULL', input.requestId)
       const cost = this.rulesSnapshot.recruitCost
       if (runtime.state.rations < cost) return this.command(false, 'INSUFFICIENT_RATIONS', input.requestId)
-      const soldierType = PVP_SOLDIER_TYPES[this.prng.nextInt(PVP_SOLDIER_TYPES.length)]!
+      const sidePrng = this.sidePrng[side]
+      if (!sidePrng) return this.command(false, 'RNG_CONTEXT_NOT_READY', input.requestId)
+      const soldierType = PVP_SOLDIER_TYPES[sidePrng.nextInt(PVP_SOLDIER_TYPES.length)]!
       const definition = pvpSoldier(soldierType)
       this.unitSequence += 1
       const unit = { unitId: `pvp-unit-${this.unitSequence}`, soldierType, glyph: definition.glyph, level: 1 as const }
@@ -564,6 +592,93 @@ export class PvpMatchRuntime {
     if (this.phase !== 'settling' || !this.result) return this.command(false, 'WRONG_PHASE')
     this.transitionTo('completed')
     return this.command(true, 'SETTLEMENT_COMPLETED')
+  }
+
+  /**
+   * Capture all mutable authority state, including command receipts and RNG
+   * cursors. The returned value is JSON-safe (Map instances are represented as
+   * arrays) and can therefore be written to a checkpoint/journal store.
+   */
+  checkpoint(): PvpRuntimeCheckpoint {
+    const sides = {} as PvpRuntimeCheckpoint['sides']
+    for (const side of SIDES) {
+      const runtime = this.sides[side]
+      sides[side] = runtime
+        ? {
+            ...structuredClone(runtime),
+            lastAttackAtTick: [...runtime.lastAttackAtTick.entries()],
+          }
+        : null
+    }
+    return structuredClone({
+      schemaVersion: 1 as const,
+      options: {
+        matchId: this.matchId,
+        mode: this.mode,
+        seed: this.seed,
+        rulesetVersion: this.rulesetVersion,
+        tickRateMs: this.tickRateMs,
+        countdownMs: this.countdownTicks * this.tickRateMs,
+        roundIntervalMs: this.roundIntervalTicks * this.tickRateMs,
+        eventHistoryLimit: this.eventHistoryLimit,
+        loadTimeoutMs: this.loadTimeoutTicks * this.tickRateMs,
+        disconnectForfeitMs: this.disconnectForfeitTicks * this.tickRateMs,
+        assetsVersion: this.assetsVersion,
+      },
+      phase: this.phase,
+      currentTick: this.currentTick,
+      countdownRemainingTicks: this.countdownRemainingTicks,
+      loadDeadlineAtTick: this.loadDeadlineAtTick,
+      roundNumber: this.roundNumber,
+      nextRoundAtTick: this.nextRoundAtTick,
+      playingStartedAtTick: this.playingStartedAtTick,
+      result: this.result,
+      eventSequence: this.eventSequence,
+      enemySequence: this.enemySequence,
+      pressureSequence: this.pressureSequence,
+      spawnSequence: this.spawnSequence,
+      unitSequence: this.unitSequence,
+      sides,
+      sidePrng: { A: this.sidePrng.A?.snapshot() ?? null, B: this.sidePrng.B?.snapshot() ?? null },
+      commandReceipts: [...this.commandReceipts.entries()],
+      recentEvents: this.recentEvents,
+    })
+  }
+
+  static restoreCheckpoint(checkpoint: PvpRuntimeCheckpoint): PvpMatchRuntime {
+    if (checkpoint.schemaVersion !== 1) throw new Error('PVP_CHECKPOINT_SCHEMA_UNSUPPORTED')
+    const runtime = new PvpMatchRuntime(checkpoint.options)
+    runtime.phase = checkpoint.phase
+    runtime.currentTick = checkpoint.currentTick
+    runtime.countdownRemainingTicks = checkpoint.countdownRemainingTicks
+    runtime.loadDeadlineAtTick = checkpoint.loadDeadlineAtTick
+    runtime.roundNumber = checkpoint.roundNumber
+    runtime.nextRoundAtTick = checkpoint.nextRoundAtTick
+    runtime.playingStartedAtTick = checkpoint.playingStartedAtTick
+    runtime.result = structuredClone(checkpoint.result)
+    runtime.eventSequence = checkpoint.eventSequence
+    runtime.enemySequence = checkpoint.enemySequence
+    runtime.pressureSequence = checkpoint.pressureSequence
+    runtime.spawnSequence = checkpoint.spawnSequence
+    runtime.unitSequence = checkpoint.unitSequence
+    for (const side of SIDES) {
+      const saved = checkpoint.sides[side]
+      runtime.sides[side] = saved
+        ? {
+            ...structuredClone(saved),
+            lastAttackAtTick: new Map(saved.lastAttackAtTick),
+          }
+        : null
+      const rngState = checkpoint.sidePrng[side]
+      if (rngState !== null) {
+        runtime.sidePrng[side] = new DeterministicPrng(`${runtime.seed}:recruit:${side}`)
+        runtime.sidePrng[side]!.restore(rngState)
+      }
+    }
+    runtime.commandReceipts.clear()
+    for (const [requestId, receipt] of checkpoint.commandReceipts) runtime.commandReceipts.set(requestId, structuredClone(receipt))
+    runtime.recentEvents.splice(0, runtime.recentEvents.length, ...structuredClone(checkpoint.recentEvents))
+    return runtime
   }
 
   snapshot(): PvpAuthorityState {
@@ -903,21 +1018,14 @@ export class PvpMatchRuntime {
   }
 
   private evaluateDisconnectForfeits(): void {
-    const disconnected = SIDES.filter((side) => {
-      const state = this.sides[side]!.state
-      return !state.connected && state.disconnectedAtTick !== null
-    })
     const timedOut = SIDES.filter((side) => {
       const state = this.sides[side]!.state
       return !state.connected && state.disconnectedAtTick !== null
         && this.currentTick - state.disconnectedAtTick >= this.disconnectForfeitTicks
     })
-    // 两端在同一断线窗口内离场时，TCP close 到达的先后不应决定胜负。
-    // 等两侧各自完成超时；若一方提前重连，则另一方按正常断线判负。
-    if (disconnected.length === 2) {
-      if (timedOut.length === 2) this.finishDraw('simultaneous_draw')
-      return
-    }
+    // The first expired grace period is authoritative. Waiting for the other
+    // connection allowed a later disconnect to rewrite a loss into a draw.
+    // Only exact same-tick expiry remains a simultaneous draw.
     if (timedOut.length === 2) this.finishDraw('simultaneous_draw')
     else if (timedOut.length === 1) this.finishWithWinner(oppositeSide(timedOut[0]!), 'disconnect_forfeit')
   }
@@ -1025,7 +1133,7 @@ export class PvpMatchRuntime {
       matchId: this.matchId,
       tick: this.currentTick,
       roundNumber: this.roundNumber,
-      rngState: this.prng.snapshot(),
+      rngState: SIDES.map((side) => ({ side, state: this.sidePrng[side]?.snapshot() ?? null })),
       sides: SIDES.map((side) => {
         const runtime = this.sides[side]
         return runtime ? {

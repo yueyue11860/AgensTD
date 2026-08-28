@@ -39,7 +39,11 @@ function assertIso(value: string, field: string): number {
 }
 
 function isNoContestReason(reason: PvpEndReason): boolean {
-  return reason === 'server_void' || reason === 'ruleset_invalid'
+  return reason === 'server_void'
+    || reason === 'ruleset_invalid'
+    || reason === 'load_failed'
+    || reason === 'load_timeout'
+    || reason === 'load_disconnect'
 }
 
 export interface SettlePvpParticipantInput {

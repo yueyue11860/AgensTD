@@ -22,6 +22,7 @@ import { createSupabaseAuthRouter } from './network/supabase-auth-routes'
 import { createE2eControlRouter } from './network/e2e-control-api'
 import { SocketGateway } from './network/socket-gateway'
 import { PvpPlatformService } from './pvp-platform-v1'
+import { PvpRewardOutboxWorker } from './pvp-platform-v1/outbox-worker'
 import { ProgressStore } from './data/progress-store'
 import { SupabaseUserStore } from './data/supabase-user-store'
 import { PlayerAccountService } from './account-v1'
@@ -158,6 +159,7 @@ if (isProduction && (!supabaseAuthVerifier.isEnabled() || !userStore.isEnabled()
 }
 const pvpStore = persistencePolicy.pvpStoreMode === 'supabase' ? new SupabasePvpStore(config) : new MemoryPvpStore()
 const pvpPlatform = new PvpPlatformService({ store: pvpStore })
+const pvpRewardWorker = new PvpRewardOutboxWorker(pvpStore)
 gateway = new SocketGateway(
   httpServer,
   roomManager,
@@ -235,6 +237,7 @@ void Promise.all([
     if (isProduction && failed > 0) throw new Error(`PVE settlement recovery left ${failed} failed record(s)`)
     gateway!.prepareRoomRuntimes()
     gateway!.startRoomLoops()
+    void pvpPlatform.ready.then(() => pvpRewardWorker.start())
     httpServer.listen(config.port, () => {})
   })
   .catch((error: unknown) => {
@@ -243,11 +246,13 @@ void Promise.all([
     pveCheckpointReadiness = { status: 'not_ready', code: 'BOOTSTRAP_FAILED', recovered: false }
     console.error(`Persistence bootstrap failed; refusing to listen: ${details}`)
     pvpPlatform.shutdown()
+    void pvpRewardWorker.stop()
     gateway!.shutdown(() => { process.exitCode = 1 })
   })
 
 const shutdown = () => {
   pvpPlatform.shutdown()
+  void pvpRewardWorker.stop()
   pveCheckpointCoordinator.shutdown()
   void replayRecorder.flushLatest()
     .catch((error: unknown) => {

@@ -40,6 +40,7 @@ export interface PvpCustomRoomProjection {
 }
 
 export interface CreatePvpCustomRoomInput {
+  requestId?: string
   roomName: string
   password?: string
   spectatorsAllowed: boolean

@@ -299,6 +299,13 @@ export function createRestApiRouter(
       const expectedLoadoutVersion = requireVersion(payload, 'expectedLoadoutVersion')
       const slots = asNullableStringSlots(payload.slots, 2, 'slots') as [string | null, string | null]
       const generalId = request.params.generalId
+      for (const weaponId of slots) {
+        if (!weaponId) continue
+        const definition = getWeaponDefinition(weaponId)
+        if (!definition || definition.status !== 'released') {
+          throw new WeaponDomainError('WEAPON_NOT_FOUND', `Unknown weapon ${weaponId}`)
+        }
+      }
       const current = await accountService.getOrCreate(principal.playerId)
       if (current.idempotencyByRequestId[requestId]) {
         readStoredSubsystemReplay(current, requestId, 'save_weapon_payload', expectedAccountVersion, {
@@ -352,7 +359,9 @@ export function createRestApiRouter(
       const expectedAccountVersion = requireVersion(payload, 'expectedAccountVersion')
       const weaponId = request.params.weaponId
       const definition = getWeaponDefinition(weaponId)
-      if (!definition) throw new WeaponDomainError('WEAPON_NOT_FOUND', `Unknown weapon ${weaponId}`)
+      if (!definition || definition.status !== 'released') {
+        throw new WeaponDomainError('WEAPON_NOT_FOUND', `Unknown weapon ${weaponId}`)
+      }
       const current = await accountService.getOrCreate(principal.playerId)
       if (current.idempotencyByRequestId[requestId]) {
         const replay = readStoredSubsystemReplay(current, requestId, 'save_weapon_payload', expectedAccountVersion, {
@@ -511,9 +520,13 @@ export function createRestApiRouter(
     const requestedName = typeof payload.name === 'string' ? payload.name.trim().slice(0, 12) : ''
     const password = typeof payload.password === 'string' ? payload.password : ''
     const roomId = generateRoomId(roomManager)
+    if (password.length > 128) {
+      response.status(422).json({ ok: false, code: 'INVALID_ROOM_PASSWORD', message: '房间密码长度不能超过 128 个字符' })
+      return
+    }
     const room = roomManager.createRoom(roomId, {
       displayName: requestedName || roomId,
-      hasPassword: password.length > 0,
+      password: password || undefined,
     })
     // REST 建房人必须在返回前成为房主；否则路由切换后的 GET /rooms 会过滤空房，
     // 前端将在 Socket 来得及 join 前丢失 activeRoom 并退回大厅。
@@ -664,38 +677,22 @@ export function createRestApiRouter(
     })
   })
 
-  // ── POST /replays — 仅存储胜利录像 ─────────────────────────────────────────
-  // 收到失败数据包时，直接丢弃并返回 200 OK，不占用数据库空间。
+  // ── POST /replays — legacy endpoint retired ──────────────────────────────
+  // 客户端上传的 isVictory/level 从来都不是权威结算，绝不能继续修改进度、解锁
+  // 或排行榜。录像由服务端 ReplayRecorder 在 authoritative match 结算时持久化。
   router.post('/replays', async (request, response) => {
     const principal = await resolvePrincipal(request, config)
     if (!principal) {
       rejectUnauthorized(response)
       return
     }
-
-    const body: unknown = request.body
-    if (
-      typeof body !== 'object'
-      || body === null
-      || !(body as Record<string, unknown>).isVictory
-    ) {
-      // 非胜利数据直接丢弃，返回 200 OK
-      response.status(200).json({ ok: true, stored: false, reason: 'defeat_discarded' })
-      return
-    }
-
-    const payload = body as Record<string, unknown>
-    const level = typeof payload.level === 'number' ? payload.level : null
-
-    if (level === null || !Number.isFinite(level)) {
-      response.status(400).json({ ok: false, code: 'MISSING_LEVEL', message: 'level (number) is required' })
-      return
-    }
-
-    const playerType: PlayerType = principal.playerKind === 'human' ? 'HUMAN' : 'AGENT'
-    const progress = progressStore.recordLevelClear(principal.playerId, level, playerType)
-
-    response.status(201).json({ ok: true, stored: true, progress })
+    response.setHeader('Deprecation', 'true')
+    response.setHeader('Sunset', '2026-09-30')
+    response.status(410).json({
+      ok: false,
+      code: 'LEGACY_REPLAY_DISABLED',
+      message: 'legacy replay uploads cannot affect progression; submit an authoritative match settlement instead',
+    })
   })
 
   router.get('/replays/current', async (request, response) => {
