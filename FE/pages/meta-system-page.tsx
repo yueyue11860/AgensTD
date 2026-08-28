@@ -113,9 +113,31 @@ function ApiEmptyState({ error, onRetry }: { error: string | null; onRetry: () =
   )
 }
 
+function CatalogArt({ iconKey, label }: { iconKey: string; label: string }) {
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => setFailed(false), [iconKey])
+
+  return (
+    <div className="meta-catalog-art" aria-hidden="true">
+      <span>{label.slice(0, 1)}</span>
+      {!failed && iconKey ? (
+        <img
+          src={`/art/equipment/${iconKey}.webp`}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          onError={() => setFailed(true)}
+        />
+      ) : null}
+    </div>
+  )
+}
+
 function ItemCard({ item, unlocked, selected, onSelect }: { item: ItemCatalogEntry; unlocked: boolean; selected: boolean; onSelect: () => void }) {
   return (
     <button type="button" disabled={!unlocked} onClick={onSelect} className={cx('meta-catalog-card', selected && 'meta-catalog-card-selected', !unlocked && 'meta-catalog-card-locked')}>
+      <CatalogArt iconKey={item.iconKey} label={item.name} />
       <div className="meta-card-title"><span>{item.name}</span>{unlocked ? selected ? <Check className="h-4 w-4" /> : null : <LockKeyhole className="h-4 w-4" />}</div>
       <p>{item.shortDescription || item.detailDescription || '暂无效果说明'}</p>
       <div className="meta-card-tags">
@@ -218,6 +240,7 @@ function WeaponCard({ weapon, account, general, equipped, busy, onEquip, onCraft
   return (
     <article className={cx('meta-weapon-card', `meta-quality-${weapon.quality}`, equipped && 'meta-weapon-card-equipped', !compatible && 'meta-weapon-card-incompatible')}>
       <div className="meta-weapon-quality"><span>{QUALITY_LABEL[weapon.quality]}品</span>{weapon.exclusiveGeneralId ? <strong>专属</strong> : <strong>{weapon.allowedArchetypes.map((entry) => ARCHETYPE_LABEL[entry]).join('/') || '通用'}</strong>}</div>
+      <CatalogArt iconKey={weapon.iconKey} label={weapon.name} />
       <h3>{weapon.name}</h3>
       <p>{weapon.shortDescription || weapon.detailDescription || '暂无效果说明'}</p>
       <div className="meta-fragment-row"><span>碎片</span><strong>{fragments}/{weapon.fragmentRequirement}</strong><i><b style={{ width: `${Math.min(100, fragments / Math.max(1, weapon.fragmentRequirement) * 100)}%` }} /></i></div>

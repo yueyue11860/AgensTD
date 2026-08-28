@@ -19,6 +19,7 @@ export interface ItemCatalogEntry {
   itemId: string
   name: string
   itemKind: ItemKind
+  iconKey: string
   shortDescription: string
   detailDescription: string
   targetingKind: string
@@ -30,6 +31,7 @@ export interface WeaponCatalogEntry {
   weaponId: string
   name: string
   quality: WeaponQuality
+  iconKey: string
   fragmentRequirement: number
   shortDescription: string
   detailDescription: string
@@ -129,6 +131,7 @@ function fixedSlots(value: unknown, length: number): Array<string | null> {
 function readUi(record: Record<string, unknown>) {
   const ui = isRecord(record.ui) ? record.ui : null
   return {
+    iconKey: typeof ui?.iconKey === 'string' ? ui.iconKey : '',
     shortDescription: typeof ui?.shortDescription === 'string' ? ui.shortDescription : '',
     detailDescription: typeof ui?.detailDescription === 'string' ? ui.detailDescription : '',
   }
@@ -321,15 +324,20 @@ export function usePlayerAccount() {
 
   const call = useCallback(async (path: string, init?: RequestInit) => {
     if (!apiBase) throw new Error('未配置 API 地址。')
-    const response = await fetch(`${apiBase}${path}`, {
-      ...init,
-      headers: {
-        Accept: 'application/json',
-        ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...init?.headers,
-      },
-    })
+    let response: Response
+    try {
+      response = await fetch(`${apiBase}${path}`, {
+        ...init,
+        headers: {
+          Accept: 'application/json',
+          ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...init?.headers,
+        },
+      })
+    } catch {
+      throw new Error(`无法连接账户服务（${apiBase}）。本地开发请在项目根目录运行 ./dev-stack.sh start。`)
+    }
     const payload = await response.json().catch(() => null) as unknown
     if (!response.ok || (isRecord(payload) && payload.ok === false)) {
       const message = isRecord(payload) && typeof payload.message === 'string'
