@@ -8,7 +8,31 @@ const principal = (playerId: string): HumanGatewayPrincipal => ({
   token: `token-${playerId}`, playerId, playerName: playerId, playerKind: 'human',
 })
 
+async function runActiveCheckpointSmoke(): Promise<void> {
+  const store = new MemoryPvpStore()
+  const platform = new PvpPlatformService({ store, autoTick: false })
+  try {
+    await platform.ready
+    const alice = principal('checkpoint-a')
+    const bob = principal('checkpoint-b')
+    const room = platform.createRoom(alice, { roomName: 'checkpoint-room', password: 'secret', spectatorsAllowed: false })
+    await platform.joinRoom(bob, room.roomId, 'secret')
+    await platform.setRoomReady(alice, room.roomId, true)
+    const ready = await platform.setRoomReady(bob, room.roomId, true)
+    assert.ok(ready.matchId)
+    let checkpoint = null
+    for (let attempt = 0; attempt < 20 && !checkpoint; attempt += 1) {
+      await new Promise<void>(resolve => setImmediate(resolve))
+      checkpoint = await store.loadActiveMatchCheckpoint(ready.matchId!)
+    }
+    assert.ok(checkpoint, 'active match checkpoint must be persisted')
+    assert.equal(checkpoint?.metadata.room?.roomName, 'checkpoint-room')
+    assert.equal(checkpoint?.metadata.room?.passwordCredential !== null, true)
+  } finally { platform.shutdown() }
+}
+
 async function main(): Promise<void> {
+  await runActiveCheckpointSmoke()
   const platform = new PvpPlatformService({ store: new MemoryPvpStore(), autoTick: false })
   try {
     await platform.ready

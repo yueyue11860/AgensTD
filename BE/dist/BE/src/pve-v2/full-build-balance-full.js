@@ -64,10 +64,16 @@ function runFullBuildBalanceMatrix() {
     const fullSeedsPerArchetypePerPrefix = parsePositiveInteger('FULL_BUILD_SEEDS_PER_ARCHETYPE', 4);
     const pureRuns = parsePositiveInteger('PURE_SOLDIER_MATRIX_RUNS', 128);
     const seedPrefixes = parseSeedPrefixes();
-    const matrix = MATRIX_POINTS.map(({ difficulty, levelId }) => ({
-        pureSoldier: (0, full_build_simulator_1.runPureSoldierMatrixPoint)(levelId, difficulty, pureRuns, 'full-matrix-pure'),
-        fullBuild: (0, full_build_simulator_1.summarizeRuntimeFullBuildRuns)(levelId, difficulty, seedPrefixes.flatMap(prefix => (0, full_build_simulator_1.runRuntimeFullBuildMatrixRuns)(levelId, difficulty, fullSeedsPerArchetypePerPrefix, prefix))),
-    }));
+    const matrix = MATRIX_POINTS.map(({ difficulty, levelId }, index) => {
+        process.stderr.write(`[balance] point ${index + 1}/${MATRIX_POINTS.length} ${difficulty}:L${levelId} `
+            + `(fullSeeds=${fullSeedsPerArchetypePerPrefix}, pureRuns=${pureRuns})\n`);
+        const result = {
+            pureSoldier: (0, full_build_simulator_1.runPureSoldierMatrixPoint)(levelId, difficulty, pureRuns, 'full-matrix-pure'),
+            fullBuild: (0, full_build_simulator_1.summarizeRuntimeFullBuildRuns)(levelId, difficulty, seedPrefixes.flatMap(prefix => (0, full_build_simulator_1.runRuntimeFullBuildMatrixRuns)(levelId, difficulty, fullSeedsPerArchetypePerPrefix, prefix))),
+        };
+        process.stderr.write(`[balance] complete ${difficulty}:L${levelId} clear=${result.fullBuild.clearRateBps}bps\n`);
+        return result;
+    });
     const failures = matrix.flatMap(entry => validateTarget(entry.fullBuild));
     const report = { grossRice: economy_1.PVE_FULL_MATCH_BASE_GROSS_RICE,
         fullSeedsPerArchetypePerPrefix, seedPrefixes, pureRuns, matrix, failures };

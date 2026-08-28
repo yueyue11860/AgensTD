@@ -73,6 +73,7 @@ order by table_name, ordinal_position;
 - `202608250006_pve_settlement_detail.sql`
 - `202608250007_pve_match_checkpoint.sql`
 - `202608250008_supabase_auth_identity.sql`
+- `202608280009_pvp_match_checkpoint.sql`
 
 ## 4. Supabase Auth 身份核验
 
@@ -101,6 +102,7 @@ curl --fail --silent --show-error https://<host>/health
 7. 恢复后 `recentEvents` 必须为空，客户端不能收到历史 VFX；奖励 ledger 与 settlement outbox 仍分别幂等/exactly-once。
 8. 尝试让进程 A 再次 renew/save/reserve，必须返回 `PVE_LEASE_FENCED`；如果旧进程仍可写，立即停止发布。
 9. 对新 action 采集 ACK P50/P95/P99、`reserve_pve_match_action` 数据库耗时和错误率；确认每个新 action 只有一次同步数据库往返，同进程 duplicate 可由内存命中，关键动作 checkpoint 在 ACK 后异步完成。
+10. PVP 对局使用 `pvp_match_leases`/`pvp_match_checkpoints` 做跨进程恢复；旧 holder 的 renew/save 必须被 `PVP_LEASE_FENCED` 拒绝，候选实例只在 lease 到期后以 `generation+1` 接管。
 
 只读观察 SQL：
 
@@ -121,6 +123,12 @@ select l.match_id, l.room_id, l.holder_id, l.generation, l.lease_expires_at,
 from public.pve_match_leases l
 left join public.pve_match_checkpoints c using (match_id)
 order by l.updated_at desc;
+
+select l.match_id, l.holder_id, l.generation, l.lease_expires_at,
+       c.checkpoint_tick, c.updated_at
+from public.pvp_match_leases l
+left join public.pvp_match_checkpoints c using (match_id)
+order by l.updated_at desc;
 ```
 
 存在持续 `failed`、非预期 fingerprint 冲突、recovery scan 失败、action reserve 延迟异常或 backlog 不下降时停止放量。部署编排必须为 30 秒 lease TTL 留出过期/重试窗口；候选实例因 `PVE_LEASE_HELD` 启动失败是安全行为，不能绕过 fencing 强行放流。
@@ -134,5 +142,6 @@ order by l.updated_at desc;
 - 006：`detail_json` 可空，旧应用可忽略；保留列和已有结算事实。
 - 007：不可在活跃战局中回滚到不识别 checkpoint/action inbox 的应用。先停止新局并排空或完成所有结算；保留 lease/checkpoint/action 表供审计，使用 forward-fix。
 - 008：触发器或资料同步异常时 forward-fix；不得删除已生成的玩家资料或进度。
+- 009：不可在活跃 PVP 战局中回滚到不识别 checkpoint/fencing 的应用；保留 lease/checkpoint 表，使用 forward-fix。
 
 完成回滚后重新执行 readiness、checkpoint hash/fencing、outbox backlog、账户 exactly-once 核验。只有 staging 已验证 007 的版本可以在活跃战局下执行进程替换；降级到旧版仍必须先排空。

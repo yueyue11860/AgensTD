@@ -31,7 +31,7 @@ export interface PvpCustomRoomProjection {
   mapId: string
   mapName: string
   hasPassword: boolean
-  spectatorsAllowed: boolean
+  spectatorsAllowed?: boolean
   playerCount: number
   maxPlayers: 2
   players: PvpCustomRoomPlayer[]

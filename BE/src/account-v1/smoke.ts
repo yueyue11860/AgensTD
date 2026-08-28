@@ -98,9 +98,27 @@ async function main(): Promise<void> {
   }
   let account = await service.getOrCreate('static-agent:alpha')
   assert.equal(account.wallet.gold, 10)
+  assert.equal(account.wallet.honor, 0)
   assert.equal(account.weapon.fragmentBalances.green_blade, 1)
   assert.equal(account.weapon.version, 1, '结算写入碎片时必须推进武器子版本')
   assert.equal(Object.keys(account.entitlements).length, 1)
+
+  const pvpReward = {
+    eventId: 'reward:match-pvp:static-agent:pvp',
+    matchId: 'match-pvp',
+    playerId: 'static-agent:pvp',
+    honor: 20,
+    gold: 10,
+  }
+  const firstPvpCredit = await service.applyPvpReward(pvpReward)
+  assert.equal(firstPvpCredit.duplicate, false)
+  const duplicatePvpCredit = await service.applyPvpReward(pvpReward)
+  assert.equal(duplicatePvpCredit.duplicate, true)
+  const pvpAccount = await service.getOrCreate('static-agent:pvp')
+  assert.equal(pvpAccount.wallet.gold, 10, 'PVP gold must be credited exactly once')
+  assert.equal(pvpAccount.wallet.honor, 20, 'PVP honor must be credited exactly once')
+  await expectCode(service.applyPvpReward({ ...pvpReward, gold: 11 }), 'REQUEST_ID_CONFLICT')
+  account = await service.getOrCreate('static-agent:alpha')
 
   const entitlementId = firstSettlement.entitlementIds[0]
   const offersA = await service.generateFixedOffers({
@@ -207,6 +225,7 @@ async function main(): Promise<void> {
   const migrated = await new PlayerAccountService(migrationStore, catalog).getOrCreate('legacy-player')
   assert.equal(migrated.schemaVersion, 2)
   assert.equal(migrated.wallet.gold, 77)
+  assert.equal(migrated.wallet.honor, 0, 'legacy accounts gain an explicit honor wallet during migration')
   assert.deepEqual(migrated.pveProgress.clearsByStageKey, {}, '不迁移旧版可伪造的关卡进度')
 
   console.log('account-v1 smoke passed')

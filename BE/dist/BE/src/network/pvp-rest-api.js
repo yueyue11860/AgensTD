@@ -88,6 +88,12 @@ function createPvpRestApiRouter(config, platform) {
     }, config));
     router.get('/matches/:matchId/events', route((request, response, principal) => {
         const matchId = requiredString(request.params.matchId, 'matchId');
+        // Validate match existence and participant access before committing the
+        // HTTP response.  `subscribeMatchState` performs the same check, but doing
+        // it first prevents a late 403/404 after SSE headers have already flushed
+        // (which otherwise produces `Cannot set headers after they are sent`).
+        platform.matchState(principal, matchId);
+        platform.assertRealtimeCapacity(principal, matchId);
         response.status(200);
         response.setHeader('Content-Type', 'text/event-stream');
         response.setHeader('Cache-Control', 'no-cache, no-transform');

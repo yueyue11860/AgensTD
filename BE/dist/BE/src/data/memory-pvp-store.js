@@ -50,6 +50,8 @@ class MemoryPvpStore {
     replayChunks = new Map();
     playerNames = new Map();
     settlementRequests = new Map();
+    activeLeases = new Map();
+    activeCheckpoints = new Map();
     isEnabled() {
         return true;
     }
@@ -300,6 +302,69 @@ class MemoryPvpStore {
         event.updatedAt = retryAt;
         this.updateSettlementRewardStatus(event.matchId, event.playerId, 'pending');
         return true;
+    }
+    async claimActiveMatchLease(input) {
+        if (!input.matchId || !input.holderId || !Number.isFinite(input.ttlMs) || input.ttlMs < 5_000) {
+            throw new pvp_store_1.PvpStoreError('LEASE_FENCED', 'invalid PVP active-match lease');
+        }
+        const previous = this.activeLeases.get(input.matchId);
+        const now = Date.now();
+        const previousExpires = previous ? Date.parse(previous.leaseExpiresAt) : 0;
+        const sameOwner = previous?.holderId === input.holderId;
+        if (previous && previousExpires > now && !sameOwner)
+            throw new pvp_store_1.PvpStoreError('LEASE_FENCED', 'PVP active match lease is held');
+        const lease = {
+            matchId: input.matchId,
+            holderId: input.holderId,
+            generation: previous ? (sameOwner && previousExpires > now ? previous.generation : previous.generation + 1) : 1,
+            leaseExpiresAt: new Date(now + Math.trunc(input.ttlMs)).toISOString(),
+        };
+        this.activeLeases.set(input.matchId, clone(lease));
+        return clone(lease);
+    }
+    async renewActiveMatchLease(lease, ttlMs) {
+        this.assertActiveLease(lease);
+        const renewed = { ...lease, leaseExpiresAt: new Date(Date.now() + Math.trunc(ttlMs)).toISOString() };
+        this.activeLeases.set(lease.matchId, clone(renewed));
+        return clone(renewed);
+    }
+    async loadActiveMatchCheckpoint(matchId) {
+        const checkpoint = this.activeCheckpoints.get(matchId);
+        return checkpoint ? clone(checkpoint) : null;
+    }
+    async listActiveMatchCheckpoints(limit = 1000) {
+        return [...this.activeCheckpoints.values()]
+            .sort((left, right) => right.checkpointTick - left.checkpointTick || right.createdAt.localeCompare(left.createdAt))
+            .slice(0, Math.max(1, Math.min(1000, Math.trunc(limit))))
+            .map(clone);
+    }
+    async saveActiveMatchCheckpoint(lease, checkpoint) {
+        this.assertActiveLease(lease);
+        if (checkpoint.matchId !== lease.matchId || checkpoint.runtime.options.matchId !== lease.matchId) {
+            throw new pvp_store_1.PvpStoreError('CHECKPOINT_CONFLICT', 'PVP checkpoint identity does not match lease');
+        }
+        const previous = this.activeCheckpoints.get(checkpoint.matchId);
+        if (previous && previous.generation === lease.generation && previous.checkpointTick > checkpoint.checkpointTick) {
+            throw new pvp_store_1.PvpStoreError('CHECKPOINT_CONFLICT', 'PVP checkpoint moved backwards');
+        }
+        const stored = { ...clone(checkpoint), generation: lease.generation };
+        this.activeCheckpoints.set(checkpoint.matchId, stored);
+        return clone(stored);
+    }
+    async deleteActiveMatchCheckpoint(lease) {
+        // Terminal GC may run after the lease naturally expires.  Generation and
+        // holder fencing still prevent an older process from deleting a newer
+        // checkpoint, so expiry itself must not strand the retained blob.
+        this.assertActiveLease(lease, true);
+        this.activeCheckpoints.delete(lease.matchId);
+        return true;
+    }
+    assertActiveLease(candidate, allowExpired = false) {
+        const current = this.activeLeases.get(candidate.matchId);
+        if (!current || current.holderId !== candidate.holderId || current.generation !== candidate.generation
+            || (!allowExpired && Date.parse(current.leaseExpiresAt) <= Date.now())) {
+            throw new pvp_store_1.PvpStoreError('LEASE_FENCED', 'PVP active match lease fenced');
+        }
     }
     async createReplayManifest(manifest) {
         const existing = this.replayManifests.get(manifest.matchId);

@@ -167,6 +167,21 @@ async function main(): Promise<void> {
   assert.equal(timerProbe.diagnostics().tickTimerActive, 1)
   timerProbe.shutdown()
   assert.equal(timerProbe.diagnostics().tickTimerActive, 0, 'shutdown must clear the host tick timer')
+
+  let roomClock = 0
+  const roomLifecycle = new PvpPlatformService({
+    store: new MemoryPvpStore(), autoTick: false, maxRoomsPerPlayer: 1,
+    waitingRoomTtlMs: 60_000, nowMs: () => roomClock,
+  })
+  await roomLifecycle.ready
+  roomLifecycle.createRoom(alice, { roomName: 'quota-room', spectatorsAllowed: false })
+  assert.throws(() => roomLifecycle.createRoom(alice, { roomName: 'quota-room-2', spectatorsAllowed: false }), (error: unknown) => (
+    error instanceof Error && (error as { code?: string }).code === 'ROOM_QUOTA_EXCEEDED'
+  ))
+  roomClock = 60_001
+  roomLifecycle.tick()
+  assert.equal((await roomLifecycle.listRooms()).length, 0, 'idle waiting rooms must be reclaimed by TTL')
+  roomLifecycle.shutdown()
 }
 
 void main().catch((error) => {

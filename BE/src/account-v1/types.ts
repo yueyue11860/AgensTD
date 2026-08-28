@@ -179,7 +179,8 @@ export interface PlayerAccountRecord {
   schemaVersion: typeof PLAYER_ACCOUNT_SCHEMA_VERSION
   playerId: string
   version: number
-  wallet: { gold: number }
+  /** Persistent out-of-match currencies. Honor is the PVP reward currency. */
+  wallet: { gold: number; honor: number }
   entitlements: Record<string, PurchaseEntitlement>
   fixedOffersByEntitlementId: Record<string, FixedShopOfferSet>
   settlementsById: Record<string, MatchPlayerSettlement>

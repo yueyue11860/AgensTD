@@ -156,6 +156,21 @@ function throwError(operation, error) {
     if (error)
         throw new Error(`Supabase PVP ${operation} failed: ${error.code ?? ''} ${error.message}`.trim());
 }
+function mapPvpLease(row) {
+    return { matchId: requiredString(row, 'match_id'), holderId: requiredString(row, 'holder_id'), generation: numberValue(row, 'generation'), leaseExpiresAt: requiredString(row, 'lease_expires_at') };
+}
+function mapActiveCheckpoint(row) {
+    return {
+        schemaVersion: 1,
+        matchId: requiredString(row, 'match_id'),
+        generation: numberValue(row, 'generation'),
+        checkpointTick: numberValue(row, 'checkpoint_tick'),
+        stateHash: requiredString(row, 'state_hash'),
+        runtime: structuredClone(row.runtime_json),
+        metadata: structuredClone(row.metadata_json),
+        createdAt: requiredString(row, 'created_at'),
+    };
+}
 class SupabasePvpStore {
     client;
     constructor(config) {
@@ -372,6 +387,71 @@ class SupabasePvpStore {
         });
         throwError('failRewardOutbox', error);
         return data === true;
+    }
+    async claimActiveMatchLease(input) {
+        const { data, error } = await this.requireClient().rpc('claim_pvp_match_lease', {
+            p_match_id: input.matchId, p_holder_id: input.holderId, p_ttl_ms: input.ttlMs,
+        }).single();
+        if (error) {
+            if (/PVP_LEASE_HELD/.test(error.message))
+                throw new pvp_store_1.PvpStoreError('LEASE_FENCED', error.message);
+            throwError('claimActiveMatchLease', error);
+        }
+        return mapPvpLease(data);
+    }
+    async renewActiveMatchLease(lease, ttlMs) {
+        const { data, error } = await this.requireClient().rpc('renew_pvp_match_lease', {
+            p_match_id: lease.matchId, p_holder_id: lease.holderId, p_generation: lease.generation, p_ttl_ms: ttlMs,
+        }).maybeSingle();
+        if (error)
+            throwError('renewActiveMatchLease', error);
+        if (!data)
+            throw new pvp_store_1.PvpStoreError('LEASE_FENCED', 'PVP active match lease expired or superseded');
+        return mapPvpLease(data);
+    }
+    async loadActiveMatchCheckpoint(matchId) {
+        const { data, error } = await this.requireClient().from('pvp_match_checkpoints').select('*').eq('match_id', matchId).maybeSingle();
+        throwError('loadActiveMatchCheckpoint', error);
+        return data ? mapActiveCheckpoint(data) : null;
+    }
+    async listActiveMatchCheckpoints(limit = 1000) {
+        const { data, error } = await this.requireClient().from('pvp_match_checkpoints').select('*').order('checkpoint_tick', { ascending: false }).limit(Math.max(1, Math.min(1000, Math.trunc(limit))));
+        throwError('listActiveMatchCheckpoints', error);
+        return (data ?? []).map(row => mapActiveCheckpoint(row));
+    }
+    async saveActiveMatchCheckpoint(lease, checkpoint) {
+        const { error } = await this.requireClient().rpc('save_pvp_match_checkpoint', {
+            p_match_id: checkpoint.matchId, p_holder_id: lease.holderId, p_generation: lease.generation,
+            p_checkpoint_tick: checkpoint.checkpointTick, p_state_hash: checkpoint.stateHash, p_runtime_json: checkpoint.runtime, p_metadata_json: checkpoint.metadata,
+            p_created_at: checkpoint.createdAt,
+        });
+        if (error) {
+            if (/PVP_LEASE_FENCED/.test(error.message))
+                throw new pvp_store_1.PvpStoreError('LEASE_FENCED', error.message);
+            if (/PVP_CHECKPOINT_CONFLICT/.test(error.message))
+                throw new pvp_store_1.PvpStoreError('CHECKPOINT_CONFLICT', error.message);
+            throwError('saveActiveMatchCheckpoint', error);
+        }
+        const stored = await this.loadActiveMatchCheckpoint(checkpoint.matchId);
+        if (!stored || stored.generation !== lease.generation || stored.checkpointTick !== checkpoint.checkpointTick || stored.stateHash !== checkpoint.stateHash)
+            throw new pvp_store_1.PvpStoreError('CHECKPOINT_CONFLICT', 'PVP checkpoint write verification failed');
+        return stored;
+    }
+    async deleteActiveMatchCheckpoint(lease) {
+        // Settlement history is the durable audit fact; once the in-memory
+        // terminal-retention window expires, remove the bulky runtime image while
+        // fencing by holder/generation so a stale process cannot delete a newer
+        // owner's checkpoint.
+        const client = this.requireClient();
+        const { data: removed, error } = await client.from('pvp_match_checkpoints')
+            .delete().eq('match_id', lease.matchId).eq('generation', lease.generation).select('match_id');
+        throwError('deleteActiveMatchCheckpoint.checkpoint', error);
+        if (!removed?.length)
+            return false;
+        const { error: leaseError } = await client.from('pvp_match_leases')
+            .delete().eq('match_id', lease.matchId).eq('holder_id', lease.holderId).eq('generation', lease.generation);
+        throwError('deleteActiveMatchCheckpoint.lease', leaseError);
+        return true;
     }
     async createReplayManifest(manifest) {
         const fingerprint = hashJson(manifest);

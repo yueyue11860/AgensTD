@@ -150,7 +150,7 @@ if (isProduction && (!supabaseAuthVerifier.isEnabled() || !userStore.isEnabled()
 }
 const pvpStore = persistencePolicy.pvpStoreMode === 'supabase' ? new supabase_pvp_store_1.SupabasePvpStore(config) : new memory_pvp_store_1.MemoryPvpStore();
 const pvpPlatform = new pvp_platform_v1_1.PvpPlatformService({ store: pvpStore });
-const pvpRewardWorker = new outbox_worker_1.PvpRewardOutboxWorker(pvpStore);
+const pvpRewardWorker = new outbox_worker_1.PvpRewardOutboxWorker(pvpStore, { accountService });
 gateway = new socket_gateway_1.SocketGateway(httpServer, roomManager, config, performanceTelemetry, actionLimiter, progressStore, projectedTickStream, accountService, pveRewardService, pveSettlementCoordinator, pveCheckpointCoordinator, true);
 app.use('/api', (0, supabase_auth_routes_1.createSupabaseAuthRouter)(config, userStore));
 app.use('/api/e2e', (0, e2e_control_api_1.createE2eControlRouter)(config, gateway));
@@ -213,21 +213,35 @@ void Promise.all([
     void pvpRewardWorker.stop();
     gateway.shutdown(() => { process.exitCode = 1; });
 });
+let shuttingDown = false;
 const shutdown = () => {
+    if (shuttingDown)
+        return;
+    shuttingDown = true;
     pvpPlatform.shutdown();
     void pvpRewardWorker.stop();
-    pveCheckpointCoordinator.shutdown();
-    void replayRecorder.flushLatest()
-        .catch((error) => {
-        const details = error instanceof Error ? error.message : String(error);
-        console.error(`Final replay persistence failed during shutdown: ${details}`);
-    })
-        .finally(() => {
-        gateway.shutdown(() => {
-            httpServer.close(() => {
+    // Close gateway/http ingress first so no new actions can race the final
+    // checkpoint.  Existing keep-alive/SSE sockets are force-closed after the
+    // listener stops accepting, then durable state is flushed in order.
+    gateway.shutdown(() => {
+        try {
+            httpServer.close();
+        }
+        catch { /* server may not have started */ }
+        httpServer.closeAllConnections?.();
+        void (async () => {
+            try {
+                await pveCheckpointCoordinator.flushAndShutdown();
+                await replayRecorder.flushLatest();
                 process.exit(0);
-            });
-        });
+            }
+            catch (error) {
+                const details = error instanceof Error ? error.message : String(error);
+                console.error(`Final persistence failed during shutdown: ${details}`);
+                process.exitCode = 1;
+                process.exit(1);
+            }
+        })();
     });
 };
 process.on('SIGINT', shutdown);

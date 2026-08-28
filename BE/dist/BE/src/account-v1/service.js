@@ -65,7 +65,7 @@ function createDefaultPlayerAccount(playerId, at = nowIso()) {
         schemaVersion: types_1.PLAYER_ACCOUNT_SCHEMA_VERSION,
         playerId,
         version: 0,
-        wallet: { gold: 0 },
+        wallet: { gold: 0, honor: 0 },
         entitlements: {},
         fixedOffersByEntitlementId: {},
         settlementsById: {},
@@ -159,6 +159,50 @@ class PlayerAccountService {
     async get(playerId) {
         const account = await this.store.get(playerId);
         return account ? this.migrateAccountIfNeeded(playerId, account) : null;
+    }
+    /**
+     * Applies one durable PVP reward event to the player account.
+     *
+     * The outbox event id is stored in the account's existing idempotency ledger,
+     * so a worker crash after the account CAS but before outbox acknowledgement
+     * cannot grant the same reward twice. The CAS loop also makes concurrent
+     * workers safe when they race on the same account.
+     */
+    async applyPvpReward(input) {
+        if (!input.eventId || !input.matchId || !input.playerId) {
+            throw new types_1.AccountDomainError('INVALID_ACCOUNT_MUTATION', 'eventId, matchId and playerId are required');
+        }
+        assertNonNegativeInteger(input.honor, 'honor');
+        assertNonNegativeInteger(input.gold, 'gold');
+        const fingerprint = stableStringify({
+            eventId: input.eventId,
+            matchId: input.matchId,
+            playerId: input.playerId,
+            honor: input.honor,
+            gold: input.gold,
+        });
+        for (let attempt = 0; attempt < MAX_CAS_RETRIES; attempt += 1) {
+            const current = await this.getOrCreate(input.playerId);
+            const existing = this.readIdempotent(current, input.eventId, 'pvp_reward', fingerprint);
+            if (existing)
+                return { ...existing, duplicate: true };
+            const next = clone(current);
+            next.wallet.gold += input.gold;
+            next.wallet.honor += input.honor;
+            const result = {
+                eventId: input.eventId,
+                matchId: input.matchId,
+                playerId: input.playerId,
+                honorGranted: input.honor,
+                goldGranted: input.gold,
+                accountVersionAfter: current.version + 1,
+                duplicate: false,
+            };
+            this.finishMutation(next, current.version, input.eventId, 'pvp_reward', fingerprint, result);
+            if (await this.store.compareAndSwap(input.playerId, current.version, next))
+                return result;
+        }
+        throw new types_1.AccountDomainError('ACCOUNT_WRITE_CONFLICT', 'PVP reward account CAS retry budget exhausted');
     }
     async getPveProgression(playerId) {
         const account = await this.getOrCreate(playerId);
@@ -441,14 +485,27 @@ class PlayerAccountService {
             if (candidate.playerId !== playerId || !Number.isSafeInteger(candidate.version)) {
                 throw new types_1.AccountDomainError('INVALID_ACCOUNT_MUTATION', 'stored player account identity or version is invalid');
             }
-            if (candidate.schemaVersion === types_1.PLAYER_ACCOUNT_SCHEMA_VERSION && isPveProgressPayload(candidate.pveProgress)) {
+            const wallet = candidate.wallet;
+            const hasValidPveProgress = isPveProgressPayload(candidate.pveProgress);
+            if (candidate.schemaVersion === types_1.PLAYER_ACCOUNT_SCHEMA_VERSION
+                && hasValidPveProgress
+                && Number.isSafeInteger(wallet?.gold)
+                && Number.isSafeInteger(wallet?.honor)
+                && wallet?.gold >= 0
+                && wallet?.honor >= 0) {
                 return current;
             }
             // V1 关卡进度由客户端自报且关卡语义已变更，故不迁移；
             // 金币、道具、武器与已提交结算单均原样保留。
             const next = clone(current);
             next.schemaVersion = types_1.PLAYER_ACCOUNT_SCHEMA_VERSION;
-            next.pveProgress = (0, unlock_logic_1.createDefaultPveProgress)();
+            const legacyWallet = (next.wallet ?? { gold: 0 });
+            next.wallet = {
+                gold: Number.isSafeInteger(legacyWallet.gold) && legacyWallet.gold >= 0 ? legacyWallet.gold : 0,
+                honor: Number.isSafeInteger(legacyWallet.honor) && legacyWallet.honor >= 0 ? legacyWallet.honor : 0,
+            };
+            if (!hasValidPveProgress)
+                next.pveProgress = (0, unlock_logic_1.createDefaultPveProgress)();
             for (const settlement of Object.values(next.settlementsById)) {
                 if (typeof settlement.progressionUpdated !== 'boolean')
                     settlement.progressionUpdated = false;

@@ -397,6 +397,7 @@ export function usePvpData(options: UsePvpDataOptions = {}) {
     let active = true
     let reconnectTimer: number | null = null
     let controller: AbortController | null = null
+    let connecting = false
     let lastSeq = 0
     let fullRefreshInFlight: Promise<void> | null = null
     let gapRecoveryPending = false
@@ -424,8 +425,13 @@ export function usePvpData(options: UsePvpDataOptions = {}) {
       return fullRefreshInFlight
     }
     const connect = async () => {
-      if (!active || document.visibilityState === 'hidden') return
-      controller?.abort()
+      // Background tabs must not intentionally tear down the only authoritative
+      // connection: the server treats an actual disconnect as a grace-period
+      // event and may eventually forfeit the player.  Only create a new stream
+      // when the previous one is gone, avoiding duplicate SSE consumers during
+      // visibility changes or reconnect races.
+      if (!active || connecting || (controller && !controller.signal.aborted)) return
+      connecting = true
       const streamController = new AbortController()
       controller = streamController
       setRealtimeStatus('connecting')
@@ -444,7 +450,7 @@ export function usePvpData(options: UsePvpDataOptions = {}) {
           if (next) setGameState(next)
           lastSeq = seq
         }, streamController.signal)
-        if (active && !document.hidden) {
+        if (active) {
           setRealtimeStatus('fallback')
           await refreshFull('stream_end')
           reconnectTimer = window.setTimeout(() => void connect(), 1_000)
@@ -454,11 +460,18 @@ export function usePvpData(options: UsePvpDataOptions = {}) {
         setRealtimeStatus('fallback')
         await refreshFull('stream_error')
         reconnectTimer = window.setTimeout(() => void connect(), 1_000)
+      } finally {
+        if (controller === streamController) controller = null
+        connecting = false
       }
     }
     const onVisibility = () => {
-      if (document.visibilityState === 'hidden') { controller?.abort(); setRealtimeStatus('idle') }
-      else { void refreshFull('visibility'); void connect() }
+      if (document.visibilityState === 'hidden') return
+      // A live stream continues across backgrounding.  On return, reconcile a
+      // full state only once and reconnect only if the browser already closed
+      // the stream.
+      void refreshFull('visibility')
+      void connect()
     }
     void refreshFull('initial')
     void connect()

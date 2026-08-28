@@ -1,5 +1,6 @@
 import type { PvpRewardOutboxEvent } from '../../../shared/contracts/pvp-competition'
 import type { PvpStore } from '../data/pvp-store'
+import type { PlayerAccountService } from '../account-v1/service'
 
 /**
  * Durable PVP reward outbox consumer. The store owns the lease and idempotency
@@ -11,6 +12,8 @@ export interface PvpRewardOutboxWorkerOptions {
   pollIntervalMs?: number
   leaseMs?: number
   batchSize?: number
+  /** Account projection used by the built-in exactly-once applier. */
+  accountService?: PlayerAccountService
   apply?: (event: PvpRewardOutboxEvent) => Promise<void>
   now?: () => Date
 }
@@ -30,7 +33,21 @@ export class PvpRewardOutboxWorker {
     this.pollIntervalMs = Math.max(50, Math.floor(options.pollIntervalMs ?? 1_000))
     this.leaseMs = Math.max(1_000, Math.floor(options.leaseMs ?? 30_000))
     this.batchSize = Math.max(1, Math.min(100, Math.floor(options.batchSize ?? 20)))
-    this.apply = options.apply ?? (async () => undefined)
+    this.apply = options.apply ?? (options.accountService
+      ? async (event) => {
+        const honor = rewardAmount(event, 'honor')
+        const gold = rewardAmount(event, 'gold')
+        await options.accountService!.applyPvpReward({
+          eventId: event.eventId,
+          matchId: event.matchId,
+          playerId: event.playerId,
+          honor,
+          gold,
+        })
+      }
+      : async () => {
+        throw new Error('PVP_REWARD_APPLIER_NOT_CONFIGURED')
+      })
     this.now = options.now ?? (() => new Date())
   }
 
@@ -76,4 +93,14 @@ export class PvpRewardOutboxWorker {
     const message = error instanceof Error ? error.message : String(error)
     console.error(`PVP reward outbox poll failed: ${message}`)
   }
+}
+
+function rewardAmount(event: PvpRewardOutboxEvent, key: 'honor' | 'gold'): number {
+  const value = event.payload[key]
+  // Reward policies may grant only one currency; an omitted field means zero.
+  if (value === undefined) return 0
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new Error(`PVP_REWARD_INVALID_${key.toUpperCase()}`)
+  }
+  return value as number
 }

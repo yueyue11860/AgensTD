@@ -87,6 +87,25 @@ export interface CreateBuildSnapshotInput {
   expectedAccountVersion: number
 }
 
+export interface ApplyPvpRewardInput {
+  /** Outbox event id; this is the account idempotency key. */
+  eventId: string
+  matchId: string
+  playerId: string
+  honor: number
+  gold: number
+}
+
+export interface PvpRewardCreditResult {
+  eventId: string
+  matchId: string
+  playerId: string
+  honorGranted: number
+  goldGranted: number
+  accountVersionAfter: number
+  duplicate: boolean
+}
+
 function nowIso(): string {
   return new Date().toISOString()
 }
@@ -142,7 +161,7 @@ export function createDefaultPlayerAccount(playerId: string, at = nowIso()): Pla
     schemaVersion: PLAYER_ACCOUNT_SCHEMA_VERSION,
     playerId,
     version: 0,
-    wallet: { gold: 0 },
+    wallet: { gold: 0, honor: 0 },
     entitlements: {},
     fixedOffersByEntitlementId: {},
     settlementsById: {},
@@ -241,6 +260,51 @@ export class PlayerAccountService {
   async get(playerId: string): Promise<PlayerAccountRecord | null> {
     const account = await this.store.get(playerId)
     return account ? this.migrateAccountIfNeeded(playerId, account) : null
+  }
+
+  /**
+   * Applies one durable PVP reward event to the player account.
+   *
+   * The outbox event id is stored in the account's existing idempotency ledger,
+   * so a worker crash after the account CAS but before outbox acknowledgement
+   * cannot grant the same reward twice. The CAS loop also makes concurrent
+   * workers safe when they race on the same account.
+   */
+  async applyPvpReward(input: ApplyPvpRewardInput): Promise<PvpRewardCreditResult> {
+    if (!input.eventId || !input.matchId || !input.playerId) {
+      throw new AccountDomainError('INVALID_ACCOUNT_MUTATION', 'eventId, matchId and playerId are required')
+    }
+    assertNonNegativeInteger(input.honor, 'honor')
+    assertNonNegativeInteger(input.gold, 'gold')
+    const fingerprint = stableStringify({
+      eventId: input.eventId,
+      matchId: input.matchId,
+      playerId: input.playerId,
+      honor: input.honor,
+      gold: input.gold,
+    })
+
+    for (let attempt = 0; attempt < MAX_CAS_RETRIES; attempt += 1) {
+      const current = await this.getOrCreate(input.playerId)
+      const existing = this.readIdempotent<PvpRewardCreditResult>(current, input.eventId, 'pvp_reward', fingerprint)
+      if (existing) return { ...existing, duplicate: true }
+
+      const next = clone(current)
+      next.wallet.gold += input.gold
+      next.wallet.honor += input.honor
+      const result: PvpRewardCreditResult = {
+        eventId: input.eventId,
+        matchId: input.matchId,
+        playerId: input.playerId,
+        honorGranted: input.honor,
+        goldGranted: input.gold,
+        accountVersionAfter: current.version + 1,
+        duplicate: false,
+      }
+      this.finishMutation(next, current.version, input.eventId, 'pvp_reward', fingerprint, result as unknown as JsonValue)
+      if (await this.store.compareAndSwap(input.playerId, current.version, next)) return result
+    }
+    throw new AccountDomainError('ACCOUNT_WRITE_CONFLICT', 'PVP reward account CAS retry budget exhausted')
   }
 
   async getPveProgression(playerId: string): Promise<PveProgressionView> {
@@ -540,11 +604,19 @@ export class PlayerAccountService {
         schemaVersion?: unknown
         pveProgress?: unknown
         version?: unknown
+        wallet?: unknown
       }
       if (candidate.playerId !== playerId || !Number.isSafeInteger(candidate.version)) {
         throw new AccountDomainError('INVALID_ACCOUNT_MUTATION', 'stored player account identity or version is invalid')
       }
-      if (candidate.schemaVersion === PLAYER_ACCOUNT_SCHEMA_VERSION && isPveProgressPayload(candidate.pveProgress)) {
+      const wallet = candidate.wallet as { gold?: unknown; honor?: unknown } | undefined
+      const hasValidPveProgress = isPveProgressPayload(candidate.pveProgress)
+      if (candidate.schemaVersion === PLAYER_ACCOUNT_SCHEMA_VERSION
+        && hasValidPveProgress
+        && Number.isSafeInteger(wallet?.gold)
+        && Number.isSafeInteger(wallet?.honor)
+        && (wallet?.gold as number) >= 0
+        && (wallet?.honor as number) >= 0) {
         return current
       }
 
@@ -552,7 +624,17 @@ export class PlayerAccountService {
       // 金币、道具、武器与已提交结算单均原样保留。
       const next = clone(current)
       next.schemaVersion = PLAYER_ACCOUNT_SCHEMA_VERSION
-      next.pveProgress = createDefaultPveProgress()
+      const legacyWallet = (next.wallet ?? { gold: 0 }) as { gold?: unknown; honor?: unknown }
+      next.wallet = {
+        gold: Number.isSafeInteger(legacyWallet.gold) && (legacyWallet.gold as number) >= 0 ? legacyWallet.gold as number : 0,
+        honor: Number.isSafeInteger(legacyWallet.honor) && (legacyWallet.honor as number) >= 0 ? legacyWallet.honor as number : 0,
+      }
+      // Older schema progress was client-authored and is intentionally not
+      // trusted; only preserve a valid payload when upgrading the current
+      // schema for the additive honor-wallet field.
+      if (candidate.schemaVersion !== PLAYER_ACCOUNT_SCHEMA_VERSION || !hasValidPveProgress) {
+        next.pveProgress = createDefaultPveProgress()
+      }
       for (const settlement of Object.values(next.settlementsById)) {
         if (typeof settlement.progressionUpdated !== 'boolean') settlement.progressionUpdated = false
       }

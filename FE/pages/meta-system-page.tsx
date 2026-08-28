@@ -395,7 +395,7 @@ export function MetaSystemPage({ mode }: { mode: MetaSystemMode }) {
         <header className="meta-header">
           <button type="button" className="meta-back-button" onClick={() => navigate('/home')}><ArrowLeft className="h-4 w-4" />返回主页</button>
           <MetaNav mode={mode} />
-          <div className="meta-title-row"><div className="meta-title-icon"><Icon className="h-7 w-7" /></div><div><span>OUT-OF-MATCH SYSTEM</span><h1>{info.title}</h1><p>{info.subtitle}</p></div>{service.data ? <div className="meta-account-summary"><Coins className="h-4 w-4" /><strong>{service.data.account.gold}</strong><span>局外金币</span></div> : null}</div>
+          <div className="meta-title-row"><div className="meta-title-icon"><Icon className="h-7 w-7" /></div><div><span>OUT-OF-MATCH SYSTEM</span><h1>{info.title}</h1><p>{info.subtitle}</p></div>{service.data ? <div className="meta-account-summary"><span><Coins className="h-4 w-4" /><strong>{service.data.account.gold}</strong><small>金币</small></span><span><Sparkles className="h-4 w-4" /><strong>{service.data.account.honor}</strong><small>荣誉</small></span></div> : null}</div>
         </header>
 
         {service.error && service.data ? <div className="meta-feedback meta-feedback-error">{service.error}</div> : null}

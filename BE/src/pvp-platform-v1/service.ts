@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type {
   PvpAcceptedMatch,
   PvpAuthorityState,
@@ -24,7 +24,7 @@ import type {
   PvpSeason,
 } from '../../../shared/contracts/pvp-competition'
 import { MemoryPvpStore } from '../data/memory-pvp-store'
-import type { PvpStore } from '../data/pvp-store'
+import type { PvpStore, PvpMatchLease, PvpActiveMatchCheckpoint } from '../data/pvp-store'
 import { InMemoryPvpMatchmakingService } from '../matchmaking-v1/service'
 import { DUAL_REALM_MAP } from '../pvp-v1/map'
 import { PvpMatchRuntime, type AuthoritativePvpDamageInput } from '../pvp-v1/runtime'
@@ -67,6 +67,8 @@ interface LiveMatch {
   settledAtMs: number | null
   realtimeSeq: number
   realtimeConnections: Map<string, number>
+  lease: PvpMatchLease | null
+  checkpointSave: Promise<void>
 }
 
 interface MatchSubscriber {
@@ -80,6 +82,7 @@ interface CustomRoomRuntime {
   passwordCredential: PasswordCredential | null
   spectatorsAllowed: boolean
   createdAt: string
+  createdAtMs: number
   hostPlayerId: string
   players: PvpCustomRoomPlayer[]
   matchId: string | null
@@ -87,6 +90,10 @@ interface CustomRoomRuntime {
 
 function nowIso(): string {
   return new Date().toISOString()
+}
+
+function activeCheckpointHash(runtime: unknown, metadata: unknown): string {
+  return createHash('sha256').update(JSON.stringify({ runtime, metadata })).digest('hex')
 }
 
 function clampLimit(value: number | undefined, fallback: number): number {
@@ -107,8 +114,17 @@ export interface PvpPlatformServiceOptions {
   terminalRetentionMs?: number
   /** 宽限期内终局对局的最大内存数，超限时优先回收最旧无连接对局。 */
   maxRetainedTerminalMatches?: number
+  activeMatchLeaseTtlMs?: number
+  holderId?: string
   /** 仅供可控时钟 smoke。 */
   nowMs?: () => number
+  /** 未开始自定义房的内存索引 TTL。 */
+  waitingRoomTtlMs?: number
+  /** 单个玩家同时持有的未开始自定义房配额。 */
+  maxRoomsPerPlayer?: number
+  /** SSE 连接配额，避免恶意重连令订阅索引无界增长。 */
+  maxSubscribersPerMatch?: number
+  maxConnectionsPerPlayer?: number
 }
 
 /**
@@ -122,20 +138,28 @@ export class PvpPlatformService {
 
   private readonly liveMatches = new Map<string, LiveMatch>()
   private readonly customRooms = new Map<string, CustomRoomRuntime>()
-  private readonly customRoomReceipts = new Map<string, { fingerprint: string; roomId: string }>()
+  private readonly customRoomReceipts = new Map<string, { fingerprint: string; roomId: string; createdAtMs: number }>()
   private readonly roomPasswordAttempts = new Map<string, { windowStartedAt: number; count: number; blockedUntil: number }>()
   private readonly matchSubscribers = new Map<string, Set<MatchSubscriber>>()
   private tickTimer: NodeJS.Timeout | null
   private readonly runtimeOptions: Required<Pick<PvpPlatformServiceOptions, 'runtimeTickRateMs' | 'countdownMs'>> & Pick<PvpPlatformServiceOptions, 'roundIntervalMs' | 'disconnectForfeitMs'>
   private readonly terminalRetentionMs: number
   private readonly maxRetainedTerminalMatches: number
+  private readonly waitingRoomTtlMs: number
+  private readonly maxRoomsPerPlayer: number
+  private readonly maxSubscribersPerMatch: number
+  private readonly maxConnectionsPerPlayer: number
   private readonly nowMs: () => number
+  private readonly holderId: string
+  private readonly activeMatchLeaseTtlMs: number
 
   constructor(options: PvpPlatformServiceOptions = {}) {
     this.store = options.store ?? new MemoryPvpStore()
     this.matchmaking = new InMemoryPvpMatchmakingService()
     this.rank = new PvpRankService(this.store)
-    this.ready = this.bootstrapCatalog()
+    this.holderId = options.holderId ?? `pvp-worker-${randomUUID()}`
+    this.activeMatchLeaseTtlMs = Math.max(5_000, Math.trunc(options.activeMatchLeaseTtlMs ?? 30_000))
+    this.ready = this.bootstrapCatalog().then(() => this.restoreActiveMatches())
     this.runtimeOptions = {
       runtimeTickRateMs: Math.max(10, Math.trunc(options.runtimeTickRateMs ?? TICK_RATE_MS)),
       countdownMs: Math.max(0, Math.trunc(options.countdownMs ?? 5000)),
@@ -144,6 +168,10 @@ export class PvpPlatformService {
     }
     this.terminalRetentionMs = Math.max(0, Math.trunc(options.terminalRetentionMs ?? 5 * 60_000))
     this.maxRetainedTerminalMatches = Math.max(0, Math.trunc(options.maxRetainedTerminalMatches ?? 500))
+    this.waitingRoomTtlMs = Math.max(60_000, Math.trunc(options.waitingRoomTtlMs ?? 30 * 60_000))
+    this.maxRoomsPerPlayer = Math.max(1, Math.trunc(options.maxRoomsPerPlayer ?? 3))
+    this.maxSubscribersPerMatch = Math.max(1, Math.trunc(options.maxSubscribersPerMatch ?? 100))
+    this.maxConnectionsPerPlayer = Math.max(1, Math.trunc(options.maxConnectionsPerPlayer ?? 3))
     this.nowMs = options.nowMs ?? Date.now
     this.tickTimer = options.autoTick === false ? null : setInterval(() => this.tick(), Math.max(1, Math.trunc(options.timerIntervalMs ?? TICK_RATE_MS)))
     this.tickTimer?.unref()
@@ -289,6 +317,18 @@ export class PvpPlatformService {
     }
   }
 
+  /** Validate the SSE quota before the HTTP handler flushes response headers. */
+  assertRealtimeCapacity(principal: HumanGatewayPrincipal, matchId: string): void {
+    const live = this.requireLiveMatchForPlayer(matchId, principal.playerId)
+    const subscribers = this.matchSubscribers.get(matchId)
+    if ((subscribers?.size ?? 0) >= this.maxSubscribersPerMatch) {
+      throw new PvpPlatformError('REALTIME_CAPACITY_EXCEEDED', '该对局实时连接数已达上限', 429)
+    }
+    if ((live.realtimeConnections.get(principal.playerId) ?? 0) >= this.maxConnectionsPerPlayer) {
+      throw new PvpPlatformError('REALTIME_PLAYER_CONNECTION_LIMIT', '该玩家实时连接数已达上限', 429)
+    }
+  }
+
   async joinQueue(principal: HumanGatewayPrincipal, request: PvpQueueJoinRequest) {
     await this.ready
     if (request.mode === 'ranked_1v1' && process.env.NODE_ENV === 'production' && process.env.PVP_RANKED_ENABLED !== 'true') {
@@ -337,7 +377,7 @@ export class PvpPlatformService {
     await this.ready
     const result = this.matchmaking.accept(principal.playerId, proposalId, requestId)
     if (!result.ok || !result.value) throw new PvpPlatformError(result.code, result.code, result.code === 'PROPOSAL_NOT_FOUND' ? 404 : 409)
-    if ('matchId' in result.value) this.activateAcceptedMatch(result.value)
+    if ('matchId' in result.value) await this.activateAcceptedMatch(result.value)
     const ticket = this.findPlayerTicket(principal.playerId, proposalId)
     return {
       ticket,
@@ -401,11 +441,20 @@ export class PvpPlatformService {
       const fingerprint = JSON.stringify({ roomName: input.roomName, password: input.password ?? null, spectatorsAllowed: input.spectatorsAllowed })
       const previous = this.customRoomReceipts.get(key)
       if (previous) {
-        if (previous.fingerprint !== fingerprint) throw new PvpPlatformError('REQUEST_ID_CONFLICT', 'requestId was reused with a different room payload', 409)
-        return this.getRoom(previous.roomId)
+        if (!this.customRooms.has(previous.roomId)) {
+          this.customRoomReceipts.delete(key)
+        } else {
+          if (previous.fingerprint !== fingerprint) throw new PvpPlatformError('REQUEST_ID_CONFLICT', 'requestId was reused with a different room payload', 409)
+          return this.getRoom(previous.roomId)
+        }
       }
     }
     this.assertNoActiveMatch(principal.playerId)
+    const ownedOpenRooms = [...this.customRooms.values()].filter(room => !room.matchId
+      && room.players.some(player => player.playerId === principal.playerId)).length
+    if (ownedOpenRooms >= this.maxRoomsPerPlayer) {
+      throw new PvpPlatformError('ROOM_QUOTA_EXCEEDED', '同时创建的未开始房间已达上限', 429)
+    }
     const roomName = input.roomName?.trim()
     if (!roomName || roomName.length > 40) throw new PvpPlatformError('INVALID_ROOM_NAME', '房间名称长度必须为 1–40', 422)
     if (input.password !== undefined && input.password.length > 128) throw new PvpPlatformError('INVALID_ROOM_PASSWORD', '房间密码长度不能超过 128 个字符', 422)
@@ -416,6 +465,7 @@ export class PvpPlatformService {
       passwordCredential: input.password ? createPasswordCredential(input.password) : null,
       spectatorsAllowed: input.spectatorsAllowed === true,
       createdAt: nowIso(),
+      createdAtMs: this.nowMs(),
       hostPlayerId: principal.playerId,
       players: [this.customRoomPlayer(principal, 'A', true)],
       matchId: null,
@@ -425,6 +475,7 @@ export class PvpPlatformService {
       this.customRoomReceipts.set(`${principal.playerId}:${input.requestId}`, {
         fingerprint: JSON.stringify({ roomName: input.roomName, password: input.password ?? null, spectatorsAllowed: input.spectatorsAllowed }),
         roomId,
+        createdAtMs: this.nowMs(),
       })
     }
     return this.projectRoom(room)
@@ -473,7 +524,7 @@ export class PvpPlatformService {
       const matchId = `pvp-custom-${Date.now()}-${randomUUID().slice(0, 6)}`
       room.matchId = matchId
       const acceptedAt = Date.now()
-      this.activateMatch({
+      await this.activateMatch({
         matchId,
         mode: 'custom_1v1',
         region: REGION,
@@ -493,7 +544,11 @@ export class PvpPlatformService {
   /** 供 smoke 与可控时钟宿主主动推进；生产默认由 100ms 定时器调用。 */
   tick(): void {
     this.matchmaking.advance()
+    this.matchmaking.prune()
     for (const live of this.liveMatches.values()) {
+      // A fenced/expired owner must stop advancing authority immediately;
+      // only a successor holding the lease may tick this match.
+      if (!live.lease || Date.parse(live.lease.leaseExpiresAt) <= this.nowMs()) continue
       // `voided` is terminal for simulation but not for persistence. Retry a
       // failed no-contest settlement on subsequent host ticks until an
       // immutable detail exists; otherwise the reaper can never reclaim it.
@@ -503,6 +558,7 @@ export class PvpPlatformService {
       }
       const state = live.runtime.tick()
       this.publishMatchState(state.matchId, live)
+      void this.queueCheckpoint(live)
       if (state.phase === 'settling' || state.phase === 'voided') void this.settleIfNeeded(live)
     }
     this.reapTerminalMatches()
@@ -548,6 +604,111 @@ export class PvpPlatformService {
     }
   }
 
+  private async restoreActiveMatches(): Promise<void> {
+    let checkpoints: readonly PvpActiveMatchCheckpoint[] = []
+    try { checkpoints = await this.store.listActiveMatchCheckpoints(500) }
+    catch (error) { console.error('PVP active checkpoint discovery failed:', error); return }
+    for (const checkpoint of checkpoints) {
+      if (checkpoint.runtime.phase === 'completed' || checkpoint.runtime.phase === 'voided') continue
+      try {
+        if (checkpoint.schemaVersion !== 1 || checkpoint.runtime.schemaVersion !== 1
+          || checkpoint.runtime.options.rulesetVersion !== RULESET_VERSION
+          || activeCheckpointHash(checkpoint.runtime, checkpoint.metadata) !== checkpoint.stateHash) throw new Error('PVP_CHECKPOINT_INTEGRITY_INVALID')
+        const lease = await this.store.claimActiveMatchLease({ matchId: checkpoint.matchId, holderId: this.holderId, ttlMs: this.activeMatchLeaseTtlMs })
+        const runtime = PvpMatchRuntime.restoreCheckpoint(checkpoint.runtime)
+        const metadata = checkpoint.metadata
+        const live: LiveMatch = {
+          runtime,
+          mode: metadata.mode as PvpMode,
+          region: metadata.region,
+          seasonId: metadata.seasonId,
+          createdAt: metadata.createdAt,
+          participants: metadata.participants.map(player => ({ ...player })),
+          settling: false,
+          settledDetail: null,
+          settledAtMs: null,
+          realtimeSeq: 1,
+          realtimeConnections: new Map(),
+          lease,
+          checkpointSave: Promise.resolve(),
+        }
+        this.liveMatches.set(checkpoint.matchId, live)
+        const savedRoom = metadata.room
+        if (savedRoom && !this.customRooms.has(savedRoom.roomId)) {
+          this.customRooms.set(savedRoom.roomId, {
+            roomId: savedRoom.roomId,
+            roomName: savedRoom.roomName,
+            passwordCredential: savedRoom.passwordCredential as unknown as PasswordCredential | null,
+            spectatorsAllowed: savedRoom.spectatorsAllowed,
+            createdAt: savedRoom.createdAt,
+            createdAtMs: Date.parse(savedRoom.createdAt),
+            hostPlayerId: savedRoom.hostPlayerId,
+            players: savedRoom.players as unknown as PvpCustomRoomPlayer[],
+            matchId: savedRoom.matchId,
+          })
+        }
+        await this.queueCheckpoint(live)
+      }
+      catch (error) { console.error(`PVP active checkpoint recovery failed for ${checkpoint.matchId}:`, error) }
+    }
+  }
+
+  private queueCheckpoint(live: LiveMatch): Promise<void> {
+    live.checkpointSave = live.checkpointSave.then(async () => {
+      if (!live.lease) return
+      live.lease = await this.store.renewActiveMatchLease(live.lease, this.activeMatchLeaseTtlMs)
+      const runtime = live.runtime.checkpoint()
+      await this.store.saveActiveMatchCheckpoint(live.lease, {
+        schemaVersion: 1,
+        matchId: runtime.options.matchId,
+        checkpointTick: runtime.currentTick,
+        stateHash: activeCheckpointHash(runtime, {
+          mode: live.mode,
+          region: live.region,
+          seasonId: live.seasonId,
+          createdAt: live.createdAt,
+          participants: live.participants.map(player => ({ ...player })),
+          room: (() => {
+            const room = [...this.customRooms.values()].find(candidate => candidate.matchId === runtime.options.matchId)
+            return room ? {
+              roomId: room.roomId,
+              roomName: room.roomName,
+              passwordCredential: room.passwordCredential ? structuredClone(room.passwordCredential) as unknown as Record<string, unknown> : null,
+              spectatorsAllowed: room.spectatorsAllowed,
+              createdAt: room.createdAt,
+              hostPlayerId: room.hostPlayerId,
+              players: structuredClone(room.players) as unknown as Array<Record<string, unknown>>,
+              matchId: room.matchId,
+            } : undefined
+          })(),
+        }),
+        runtime,
+        metadata: {
+          mode: live.mode,
+          region: live.region,
+          seasonId: live.seasonId,
+          createdAt: live.createdAt,
+          participants: live.participants.map(player => ({ ...player })),
+          room: (() => {
+            const room = [...this.customRooms.values()].find(candidate => candidate.matchId === runtime.options.matchId)
+            return room ? {
+              roomId: room.roomId,
+              roomName: room.roomName,
+              passwordCredential: room.passwordCredential ? structuredClone(room.passwordCredential) as unknown as Record<string, unknown> : null,
+              spectatorsAllowed: room.spectatorsAllowed,
+              createdAt: room.createdAt,
+              hostPlayerId: room.hostPlayerId,
+              players: structuredClone(room.players) as unknown as Array<Record<string, unknown>>,
+              matchId: room.matchId,
+            } : undefined
+          })(),
+        },
+        createdAt: nowIso(),
+      })
+    }).catch((error) => { console.error(`PVP active checkpoint save failed for ${live.runtime.snapshot().matchId}:`, error) })
+    return live.checkpointSave
+  }
+
   private async ratingOrInitial(season: PvpSeason, playerId: string): Promise<PvpRating> {
     return await this.store.getRating(season.seasonId, season.modeId, playerId)
       ?? createInitialPvpRating({ seasonId: season.seasonId, modeId: season.modeId, playerId, at: nowIso() })
@@ -579,18 +740,18 @@ export class PvpPlatformService {
     return ticketId ? this.matchmaking.getTicket(ticketId) : null
   }
 
-  private activateAcceptedMatch(match: PvpAcceptedMatch): void {
-    this.activateMatch(match)
+  private async activateAcceptedMatch(match: PvpAcceptedMatch): Promise<void> {
+    await this.activateMatch(match)
   }
 
-  private activateMatch(match: {
+  private async activateMatch(match: {
     matchId: string
     mode: PvpMode
     region: string
     rulesetVersion: string
     acceptedAt: number
     players: Array<{ playerId: string; playerName: string; side: PvpSide; loadoutVersion: number }>
-  }): void {
+  }): Promise<void> {
     if (this.liveMatches.has(match.matchId)) return
     const runtime = new PvpMatchRuntime({
       matchId: match.matchId,
@@ -617,8 +778,16 @@ export class PvpPlatformService {
       settledAtMs: null,
       realtimeSeq: 1,
       realtimeConnections: new Map(),
+      lease: null,
+      checkpointSave: Promise.resolve(),
     }
-    this.liveMatches.set(match.matchId, live)
+    try {
+      live.lease = await this.store.claimActiveMatchLease({ matchId: match.matchId, holderId: this.holderId, ttlMs: this.activeMatchLeaseTtlMs })
+      this.liveMatches.set(match.matchId, live)
+      await this.queueCheckpoint(live)
+    } catch {
+      throw new PvpPlatformError('PVP_LEASE_UNAVAILABLE', 'PVP 对局暂时无法取得权威租约', 503)
+    }
   }
 
   private publishMatchState(matchId: string, live: LiveMatch): void {
@@ -683,6 +852,17 @@ export class PvpPlatformService {
 
   private reapTerminalMatches(): void {
     const now = this.nowMs()
+    // Waiting custom rooms are intentionally ephemeral.  A host can leave a
+    // browser open for hours without creating an active match; reclaim those
+    // indexes on the same cadence as terminal match retention.
+    for (const [roomId, room] of this.customRooms) {
+      if (room.matchId || now - room.createdAtMs < this.waitingRoomTtlMs) continue
+      this.customRooms.delete(roomId)
+      for (const key of this.roomPasswordAttempts.keys()) if (key.startsWith(`${roomId}:`)) this.roomPasswordAttempts.delete(key)
+    }
+    for (const [key, receipt] of this.customRoomReceipts) {
+      if (now - receipt.createdAtMs >= this.waitingRoomTtlMs || !this.customRooms.has(receipt.roomId)) this.customRoomReceipts.delete(key)
+    }
     const candidates = [...this.liveMatches.entries()]
       .filter(([matchId, live]) => live.settledDetail !== null
         && live.settledAtMs !== null
@@ -695,6 +875,7 @@ export class PvpPlatformService {
       const overCapacity = retained > this.maxRetainedTerminalMatches
       if (!expired && !overCapacity) continue
       this.liveMatches.delete(matchId)
+      if (live.lease) void this.store.deleteActiveMatchCheckpoint(live.lease).catch(() => undefined)
       if ((this.matchSubscribers.get(matchId)?.size ?? 0) === 0) this.matchSubscribers.delete(matchId)
       for (const [roomId, room] of this.customRooms) {
         if (room.matchId !== matchId) continue

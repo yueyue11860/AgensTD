@@ -23,6 +23,9 @@ const ROOM_PASSWORD_ATTEMPT_MAX = 5;
 function nowIso() {
     return new Date().toISOString();
 }
+function activeCheckpointHash(runtime, metadata) {
+    return (0, node_crypto_1.createHash)('sha256').update(JSON.stringify({ runtime, metadata })).digest('hex');
+}
 function clampLimit(value, fallback) {
     if (!Number.isFinite(value) || (value ?? 0) <= 0)
         return fallback;
@@ -45,12 +48,20 @@ class PvpPlatformService {
     runtimeOptions;
     terminalRetentionMs;
     maxRetainedTerminalMatches;
+    waitingRoomTtlMs;
+    maxRoomsPerPlayer;
+    maxSubscribersPerMatch;
+    maxConnectionsPerPlayer;
     nowMs;
+    holderId;
+    activeMatchLeaseTtlMs;
     constructor(options = {}) {
         this.store = options.store ?? new memory_pvp_store_1.MemoryPvpStore();
         this.matchmaking = new service_1.InMemoryPvpMatchmakingService();
         this.rank = new service_2.PvpRankService(this.store);
-        this.ready = this.bootstrapCatalog();
+        this.holderId = options.holderId ?? `pvp-worker-${(0, node_crypto_1.randomUUID)()}`;
+        this.activeMatchLeaseTtlMs = Math.max(5_000, Math.trunc(options.activeMatchLeaseTtlMs ?? 30_000));
+        this.ready = this.bootstrapCatalog().then(() => this.restoreActiveMatches());
         this.runtimeOptions = {
             runtimeTickRateMs: Math.max(10, Math.trunc(options.runtimeTickRateMs ?? TICK_RATE_MS)),
             countdownMs: Math.max(0, Math.trunc(options.countdownMs ?? 5000)),
@@ -59,6 +70,10 @@ class PvpPlatformService {
         };
         this.terminalRetentionMs = Math.max(0, Math.trunc(options.terminalRetentionMs ?? 5 * 60_000));
         this.maxRetainedTerminalMatches = Math.max(0, Math.trunc(options.maxRetainedTerminalMatches ?? 500));
+        this.waitingRoomTtlMs = Math.max(60_000, Math.trunc(options.waitingRoomTtlMs ?? 30 * 60_000));
+        this.maxRoomsPerPlayer = Math.max(1, Math.trunc(options.maxRoomsPerPlayer ?? 3));
+        this.maxSubscribersPerMatch = Math.max(1, Math.trunc(options.maxSubscribersPerMatch ?? 100));
+        this.maxConnectionsPerPlayer = Math.max(1, Math.trunc(options.maxConnectionsPerPlayer ?? 3));
         this.nowMs = options.nowMs ?? Date.now;
         this.tickTimer = options.autoTick === false ? null : setInterval(() => this.tick(), Math.max(1, Math.trunc(options.timerIntervalMs ?? TICK_RATE_MS)));
         this.tickTimer?.unref();
@@ -203,6 +218,17 @@ class PvpPlatformService {
                 this.matchSubscribers.delete(matchId);
         };
     }
+    /** Validate the SSE quota before the HTTP handler flushes response headers. */
+    assertRealtimeCapacity(principal, matchId) {
+        const live = this.requireLiveMatchForPlayer(matchId, principal.playerId);
+        const subscribers = this.matchSubscribers.get(matchId);
+        if ((subscribers?.size ?? 0) >= this.maxSubscribersPerMatch) {
+            throw new types_1.PvpPlatformError('REALTIME_CAPACITY_EXCEEDED', '该对局实时连接数已达上限', 429);
+        }
+        if ((live.realtimeConnections.get(principal.playerId) ?? 0) >= this.maxConnectionsPerPlayer) {
+            throw new types_1.PvpPlatformError('REALTIME_PLAYER_CONNECTION_LIMIT', '该玩家实时连接数已达上限', 429);
+        }
+    }
     async joinQueue(principal, request) {
         await this.ready;
         if (request.mode === 'ranked_1v1' && process.env.NODE_ENV === 'production' && process.env.PVP_RANKED_ENABLED !== 'true') {
@@ -316,6 +342,11 @@ class PvpPlatformService {
             }
         }
         this.assertNoActiveMatch(principal.playerId);
+        const ownedOpenRooms = [...this.customRooms.values()].filter(room => !room.matchId
+            && room.players.some(player => player.playerId === principal.playerId)).length;
+        if (ownedOpenRooms >= this.maxRoomsPerPlayer) {
+            throw new types_1.PvpPlatformError('ROOM_QUOTA_EXCEEDED', '同时创建的未开始房间已达上限', 429);
+        }
         const roomName = input.roomName?.trim();
         if (!roomName || roomName.length > 40)
             throw new types_1.PvpPlatformError('INVALID_ROOM_NAME', '房间名称长度必须为 1–40', 422);
@@ -328,6 +359,7 @@ class PvpPlatformService {
             passwordCredential: input.password ? (0, password_1.createPasswordCredential)(input.password) : null,
             spectatorsAllowed: input.spectatorsAllowed === true,
             createdAt: nowIso(),
+            createdAtMs: this.nowMs(),
             hostPlayerId: principal.playerId,
             players: [this.customRoomPlayer(principal, 'A', true)],
             matchId: null,
@@ -337,6 +369,7 @@ class PvpPlatformService {
             this.customRoomReceipts.set(`${principal.playerId}:${input.requestId}`, {
                 fingerprint: JSON.stringify({ roomName: input.roomName, password: input.password ?? null, spectatorsAllowed: input.spectatorsAllowed }),
                 roomId,
+                createdAtMs: this.nowMs(),
             });
         }
         return this.projectRoom(room);
@@ -408,6 +441,7 @@ class PvpPlatformService {
     /** 供 smoke 与可控时钟宿主主动推进；生产默认由 100ms 定时器调用。 */
     tick() {
         this.matchmaking.advance();
+        this.matchmaking.prune();
         for (const live of this.liveMatches.values()) {
             // `voided` is terminal for simulation but not for persistence. Retry a
             // failed no-contest settlement on subsequent host ticks until an
@@ -419,6 +453,7 @@ class PvpPlatformService {
             }
             const state = live.runtime.tick();
             this.publishMatchState(state.matchId, live);
+            void this.queueCheckpoint(live);
             if (state.phase === 'settling' || state.phase === 'voided')
                 void this.settleIfNeeded(live);
         }
@@ -464,6 +499,128 @@ class PvpPlatformService {
             });
         }
     }
+    async restoreActiveMatches() {
+        let checkpoints = [];
+        try {
+            checkpoints = await this.store.listActiveMatchCheckpoints(500);
+        }
+        catch (error) {
+            console.error('PVP active checkpoint discovery failed:', error);
+            return;
+        }
+        for (const checkpoint of checkpoints) {
+            if (checkpoint.runtime.phase === 'completed' || checkpoint.runtime.phase === 'voided')
+                continue;
+            try {
+                if (checkpoint.schemaVersion !== 1 || checkpoint.runtime.schemaVersion !== 1
+                    || checkpoint.runtime.options.rulesetVersion !== RULESET_VERSION
+                    || activeCheckpointHash(checkpoint.runtime, checkpoint.metadata) !== checkpoint.stateHash)
+                    throw new Error('PVP_CHECKPOINT_INTEGRITY_INVALID');
+                const lease = await this.store.claimActiveMatchLease({ matchId: checkpoint.matchId, holderId: this.holderId, ttlMs: this.activeMatchLeaseTtlMs });
+                const runtime = runtime_1.PvpMatchRuntime.restoreCheckpoint(checkpoint.runtime);
+                const metadata = checkpoint.metadata;
+                const live = {
+                    runtime,
+                    mode: metadata.mode,
+                    region: metadata.region,
+                    seasonId: metadata.seasonId,
+                    createdAt: metadata.createdAt,
+                    participants: metadata.participants.map(player => ({ ...player })),
+                    settling: false,
+                    settledDetail: null,
+                    settledAtMs: null,
+                    realtimeSeq: 1,
+                    realtimeConnections: new Map(),
+                    lease,
+                    checkpointSave: Promise.resolve(),
+                };
+                this.liveMatches.set(checkpoint.matchId, live);
+                const savedRoom = metadata.room;
+                if (savedRoom && !this.customRooms.has(savedRoom.roomId)) {
+                    this.customRooms.set(savedRoom.roomId, {
+                        roomId: savedRoom.roomId,
+                        roomName: savedRoom.roomName,
+                        passwordCredential: savedRoom.passwordCredential,
+                        spectatorsAllowed: savedRoom.spectatorsAllowed,
+                        createdAt: savedRoom.createdAt,
+                        createdAtMs: Date.parse(savedRoom.createdAt),
+                        hostPlayerId: savedRoom.hostPlayerId,
+                        players: savedRoom.players,
+                        matchId: savedRoom.matchId,
+                    });
+                }
+                await this.queueCheckpoint(live);
+            }
+            catch (error) {
+                console.error(`PVP active checkpoint recovery failed for ${checkpoint.matchId}:`, error);
+            }
+        }
+    }
+    async ensureLeaseAndCheckpoint(live) {
+        try {
+            live.lease = await this.store.claimActiveMatchLease({ matchId: live.runtime.snapshot().matchId, holderId: this.holderId, ttlMs: this.activeMatchLeaseTtlMs });
+            await this.queueCheckpoint(live);
+        }
+        catch (error) {
+            console.error(`PVP active match lease claim failed for ${live.runtime.snapshot().matchId}:`, error);
+        }
+    }
+    queueCheckpoint(live) {
+        live.checkpointSave = live.checkpointSave.then(async () => {
+            if (!live.lease)
+                return;
+            live.lease = await this.store.renewActiveMatchLease(live.lease, this.activeMatchLeaseTtlMs);
+            const runtime = live.runtime.checkpoint();
+            await this.store.saveActiveMatchCheckpoint(live.lease, {
+                schemaVersion: 1,
+                matchId: runtime.options.matchId,
+                checkpointTick: runtime.currentTick,
+                stateHash: activeCheckpointHash(runtime, {
+                    mode: live.mode,
+                    region: live.region,
+                    seasonId: live.seasonId,
+                    createdAt: live.createdAt,
+                    participants: live.participants.map(player => ({ ...player })),
+                    room: (() => {
+                        const room = [...this.customRooms.values()].find(candidate => candidate.matchId === runtime.options.matchId);
+                        return room ? {
+                            roomId: room.roomId,
+                            roomName: room.roomName,
+                            passwordCredential: room.passwordCredential ? structuredClone(room.passwordCredential) : null,
+                            spectatorsAllowed: room.spectatorsAllowed,
+                            createdAt: room.createdAt,
+                            hostPlayerId: room.hostPlayerId,
+                            players: structuredClone(room.players),
+                            matchId: room.matchId,
+                        } : undefined;
+                    })(),
+                }),
+                runtime,
+                metadata: {
+                    mode: live.mode,
+                    region: live.region,
+                    seasonId: live.seasonId,
+                    createdAt: live.createdAt,
+                    participants: live.participants.map(player => ({ ...player })),
+                    room: (() => {
+                        const room = [...this.customRooms.values()].find(candidate => candidate.matchId === runtime.options.matchId);
+                        return room ? {
+                            roomId: room.roomId,
+                            roomName: room.roomName,
+                            passwordCredential: room.passwordCredential ? structuredClone(room.passwordCredential) : null,
+                            spectatorsAllowed: room.spectatorsAllowed,
+                            createdAt: room.createdAt,
+                            hostPlayerId: room.hostPlayerId,
+                            players: structuredClone(room.players),
+                            matchId: room.matchId,
+                        } : undefined;
+                    })(),
+                },
+                createdAt: nowIso(),
+            });
+        }).catch((error) => { console.error(`PVP active checkpoint save failed for ${live.runtime.snapshot().matchId}:`, error); });
+        return live.checkpointSave;
+    }
     async ratingOrInitial(season, playerId) {
         return await this.store.getRating(season.seasonId, season.modeId, playerId)
             ?? (0, policy_1.createInitialPvpRating)({ seasonId: season.seasonId, modeId: season.modeId, playerId, at: nowIso() });
@@ -494,6 +651,7 @@ class PvpPlatformService {
     }
     activateAcceptedMatch(match) {
         this.activateMatch(match);
+        this.matchmaking.consumeAcceptedMatch(match.matchId);
     }
     activateMatch(match) {
         if (this.liveMatches.has(match.matchId))
@@ -524,8 +682,11 @@ class PvpPlatformService {
             settledAtMs: null,
             realtimeSeq: 1,
             realtimeConnections: new Map(),
+            lease: null,
+            checkpointSave: Promise.resolve(),
         };
         this.liveMatches.set(match.matchId, live);
+        void this.ensureLeaseAndCheckpoint(live);
     }
     publishMatchState(matchId, live) {
         const subscribers = this.matchSubscribers.get(matchId);
@@ -588,6 +749,21 @@ class PvpPlatformService {
     }
     reapTerminalMatches() {
         const now = this.nowMs();
+        // Waiting custom rooms are intentionally ephemeral.  A host can leave a
+        // browser open for hours without creating an active match; reclaim those
+        // indexes on the same cadence as terminal match retention.
+        for (const [roomId, room] of this.customRooms) {
+            if (room.matchId || now - room.createdAtMs < this.waitingRoomTtlMs)
+                continue;
+            this.customRooms.delete(roomId);
+            for (const key of this.roomPasswordAttempts.keys())
+                if (key.startsWith(`${roomId}:`))
+                    this.roomPasswordAttempts.delete(key);
+        }
+        for (const [key, receipt] of this.customRoomReceipts) {
+            if (now - receipt.createdAtMs >= this.waitingRoomTtlMs || !this.customRooms.has(receipt.roomId))
+                this.customRoomReceipts.delete(key);
+        }
         const candidates = [...this.liveMatches.entries()]
             .filter(([matchId, live]) => live.settledDetail !== null
             && live.settledAtMs !== null
@@ -601,6 +777,8 @@ class PvpPlatformService {
             if (!expired && !overCapacity)
                 continue;
             this.liveMatches.delete(matchId);
+            if (live.lease)
+                void this.store.deleteActiveMatchCheckpoint(live.lease).catch(() => undefined);
             if ((this.matchSubscribers.get(matchId)?.size ?? 0) === 0)
                 this.matchSubscribers.delete(matchId);
             for (const [roomId, room] of this.customRooms) {

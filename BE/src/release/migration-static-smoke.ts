@@ -70,6 +70,15 @@ assert.match(authIdentitySql, /after insert or update of email, raw_user_meta_da
 assert.match(authIdentitySql, /insert into public\.user_progress/i)
 assert.doesNotMatch(authIdentitySql, /\b(drop\s+table|drop\s+column|truncate|delete\s+from)\b/i)
 
+const pvpCheckpointMigrationName = '202608280009_pvp_match_checkpoint.sql'
+const pvpCheckpointSql = fs.readFileSync(path.join(migrationDir, pvpCheckpointMigrationName), 'utf8')
+assert.match(pvpCheckpointSql, /create table if not exists public\.pvp_match_leases/i)
+assert.match(pvpCheckpointSql, /create table if not exists public\.pvp_match_checkpoints/i)
+assert.match(pvpCheckpointSql, /claim_pvp_match_lease/i)
+assert.match(pvpCheckpointSql, /save_pvp_match_checkpoint/i)
+assert.match(pvpCheckpointSql, /PVP_LEASE_FENCED/i)
+assert.doesNotMatch(pvpCheckpointSql, /\b(drop\s+table|drop\s+column|truncate|delete\s+from)\b/i)
+
 const runbook = path.resolve(__dirname, '../../PRODUCTION_RELEASE_RUNBOOK.md')
 assert.ok(fs.existsSync(runbook), 'production release runbook is required')
 const runbookText = fs.readFileSync(runbook, 'utf8')
@@ -82,6 +91,6 @@ assert.match(runbookText, /PVE.*跨进程|cross-process.*PVE/i)
 process.stdout.write(`${JSON.stringify({
   ok: true,
   scope: 'static-sql-only',
-  migrations: [...expected, checkpointMigrationName, authIdentityMigrationName],
+  migrations: [...expected, checkpointMigrationName, authIdentityMigrationName, pvpCheckpointMigrationName],
   actualDatabaseApplyVerified: false,
 })}\n`)

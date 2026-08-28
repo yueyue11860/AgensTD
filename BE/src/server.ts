@@ -159,7 +159,7 @@ if (isProduction && (!supabaseAuthVerifier.isEnabled() || !userStore.isEnabled()
 }
 const pvpStore = persistencePolicy.pvpStoreMode === 'supabase' ? new SupabasePvpStore(config) : new MemoryPvpStore()
 const pvpPlatform = new PvpPlatformService({ store: pvpStore })
-const pvpRewardWorker = new PvpRewardOutboxWorker(pvpStore)
+const pvpRewardWorker = new PvpRewardOutboxWorker(pvpStore, { accountService })
 gateway = new SocketGateway(
   httpServer,
   roomManager,
@@ -250,22 +250,31 @@ void Promise.all([
     gateway!.shutdown(() => { process.exitCode = 1 })
   })
 
+let shuttingDown = false
 const shutdown = () => {
+  if (shuttingDown) return
+  shuttingDown = true
   pvpPlatform.shutdown()
   void pvpRewardWorker.stop()
-  pveCheckpointCoordinator.shutdown()
-  void replayRecorder.flushLatest()
-    .catch((error: unknown) => {
-      const details = error instanceof Error ? error.message : String(error)
-      console.error(`Final replay persistence failed during shutdown: ${details}`)
-    })
-    .finally(() => {
-      gateway!.shutdown(() => {
-        httpServer.close(() => {
-          process.exit(0)
-        })
-      })
-    })
+  // Close gateway/http ingress first so no new actions can race the final
+  // checkpoint.  Existing keep-alive/SSE sockets are force-closed after the
+  // listener stops accepting, then durable state is flushed in order.
+  gateway!.shutdown(() => {
+    try { httpServer.close() } catch { /* server may not have started */ }
+    httpServer.closeAllConnections?.()
+    void (async () => {
+      try {
+        await pveCheckpointCoordinator.flushAndShutdown()
+        await replayRecorder.flushLatest()
+        process.exit(0)
+      } catch (error: unknown) {
+        const details = error instanceof Error ? error.message : String(error)
+        console.error(`Final persistence failed during shutdown: ${details}`)
+        process.exitCode = 1
+        process.exit(1)
+      }
+    })()
+  })
 }
 
 process.on('SIGINT', shutdown)

@@ -22,6 +22,7 @@ const CORE_DAMAGE_BONUS_START_MS = 8 * 60_000;
 const ONE_LEAK_DEFEAT_START_MS = 10 * 60_000;
 const HARD_TIMEOUT_MS = 12 * 60_000;
 const DEFAULT_LOAD_TIMEOUT_MS = 45_000;
+const COMMAND_RECEIPT_LIMIT = 2_000;
 exports.PVP_ASSETS_VERSION = 'pvp_assets_v1';
 function oppositeSide(side) {
     return side === 'A' ? 'B' : 'A';
@@ -614,7 +615,7 @@ class PvpMatchRuntime {
             }
         }
         runtime.commandReceipts.clear();
-        for (const [requestId, receipt] of checkpoint.commandReceipts)
+        for (const [requestId, receipt] of checkpoint.commandReceipts.slice(-COMMAND_RECEIPT_LIMIT))
             runtime.commandReceipts.set(requestId, structuredClone(receipt));
         runtime.recentEvents.splice(0, runtime.recentEvents.length, ...structuredClone(checkpoint.recentEvents));
         return runtime;
@@ -1125,6 +1126,14 @@ class PvpMatchRuntime {
         }
         const result = apply();
         this.commandReceipts.set(key, { fingerprint, result: structuredClone(result) });
+        // Keep retries idempotent within a bounded replay window without allowing
+        // long-running matches to retain an unbounded map of unique request IDs.
+        while (this.commandReceipts.size > COMMAND_RECEIPT_LIMIT) {
+            const oldest = this.commandReceipts.keys().next().value;
+            if (!oldest)
+                break;
+            this.commandReceipts.delete(oldest);
+        }
         return result;
     }
 }

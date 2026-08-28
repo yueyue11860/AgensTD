@@ -17,7 +17,21 @@ class PvpRewardOutboxWorker {
         this.pollIntervalMs = Math.max(50, Math.floor(options.pollIntervalMs ?? 1_000));
         this.leaseMs = Math.max(1_000, Math.floor(options.leaseMs ?? 30_000));
         this.batchSize = Math.max(1, Math.min(100, Math.floor(options.batchSize ?? 20)));
-        this.apply = options.apply ?? (async () => undefined);
+        this.apply = options.apply ?? (options.accountService
+            ? async (event) => {
+                const honor = rewardAmount(event, 'honor');
+                const gold = rewardAmount(event, 'gold');
+                await options.accountService.applyPvpReward({
+                    eventId: event.eventId,
+                    matchId: event.matchId,
+                    playerId: event.playerId,
+                    honor,
+                    gold,
+                });
+            }
+            : async () => {
+                throw new Error('PVP_REWARD_APPLIER_NOT_CONFIGURED');
+            });
         this.now = options.now ?? (() => new Date());
     }
     start() {
@@ -65,3 +79,13 @@ class PvpRewardOutboxWorker {
     }
 }
 exports.PvpRewardOutboxWorker = PvpRewardOutboxWorker;
+function rewardAmount(event, key) {
+    const value = event.payload[key];
+    // Reward policies may grant only one currency; an omitted field means zero.
+    if (value === undefined)
+        return 0;
+    if (!Number.isSafeInteger(value) || value < 0) {
+        throw new Error(`PVP_REWARD_INVALID_${key.toUpperCase()}`);
+    }
+    return value;
+}

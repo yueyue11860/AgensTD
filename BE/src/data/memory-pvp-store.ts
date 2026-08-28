@@ -22,6 +22,7 @@ import type {
   PvpSettlementCommitResult,
   PvpStore,
 } from './pvp-store'
+import type { PvpActiveMatchCheckpoint, PvpMatchLease } from './pvp-store'
 import { PvpStoreError } from './pvp-store'
 import { projectLeaderboardRank } from '../rank-v1/policy'
 
@@ -89,6 +90,8 @@ export class MemoryPvpStore implements PvpStore {
   private readonly replayChunks = new Map<string, Map<number, PvpReplayChunk>>()
   private readonly playerNames = new Map<string, string>()
   private readonly settlementRequests = new Map<string, { matchId: string; fingerprint: string }>()
+  private readonly activeLeases = new Map<string, PvpMatchLease>()
+  private readonly activeCheckpoints = new Map<string, PvpActiveMatchCheckpoint>()
 
   isEnabled(): boolean {
     return true
@@ -363,6 +366,75 @@ export class MemoryPvpStore implements PvpStore {
     event.updatedAt = retryAt
     this.updateSettlementRewardStatus(event.matchId, event.playerId, 'pending')
     return true
+  }
+
+  async claimActiveMatchLease(input: { matchId: string; holderId: string; ttlMs: number }): Promise<PvpMatchLease> {
+    if (!input.matchId || !input.holderId || !Number.isFinite(input.ttlMs) || input.ttlMs < 5_000) {
+      throw new PvpStoreError('LEASE_FENCED', 'invalid PVP active-match lease')
+    }
+    const previous = this.activeLeases.get(input.matchId)
+    const now = Date.now()
+    const previousExpires = previous ? Date.parse(previous.leaseExpiresAt) : 0
+    const sameOwner = previous?.holderId === input.holderId
+    if (previous && previousExpires > now && !sameOwner) throw new PvpStoreError('LEASE_FENCED', 'PVP active match lease is held')
+    const lease: PvpMatchLease = {
+      matchId: input.matchId,
+      holderId: input.holderId,
+      generation: previous ? (sameOwner && previousExpires > now ? previous.generation : previous.generation + 1) : 1,
+      leaseExpiresAt: new Date(now + Math.trunc(input.ttlMs)).toISOString(),
+    }
+    this.activeLeases.set(input.matchId, clone(lease))
+    return clone(lease)
+  }
+
+  async renewActiveMatchLease(lease: PvpMatchLease, ttlMs: number): Promise<PvpMatchLease> {
+    this.assertActiveLease(lease)
+    const renewed = { ...lease, leaseExpiresAt: new Date(Date.now() + Math.trunc(ttlMs)).toISOString() }
+    this.activeLeases.set(lease.matchId, clone(renewed))
+    return clone(renewed)
+  }
+
+  async loadActiveMatchCheckpoint(matchId: string): Promise<PvpActiveMatchCheckpoint | null> {
+    const checkpoint = this.activeCheckpoints.get(matchId)
+    return checkpoint ? clone(checkpoint) : null
+  }
+
+  async listActiveMatchCheckpoints(limit = 1000): Promise<readonly PvpActiveMatchCheckpoint[]> {
+    return [...this.activeCheckpoints.values()]
+      .sort((left, right) => right.checkpointTick - left.checkpointTick || right.createdAt.localeCompare(left.createdAt))
+      .slice(0, Math.max(1, Math.min(1000, Math.trunc(limit))))
+      .map(clone)
+  }
+
+  async saveActiveMatchCheckpoint(lease: PvpMatchLease, checkpoint: Omit<PvpActiveMatchCheckpoint, 'generation'>): Promise<PvpActiveMatchCheckpoint> {
+    this.assertActiveLease(lease)
+    if (checkpoint.matchId !== lease.matchId || checkpoint.runtime.options.matchId !== lease.matchId) {
+      throw new PvpStoreError('CHECKPOINT_CONFLICT', 'PVP checkpoint identity does not match lease')
+    }
+    const previous = this.activeCheckpoints.get(checkpoint.matchId)
+    if (previous && previous.generation === lease.generation && previous.checkpointTick > checkpoint.checkpointTick) {
+      throw new PvpStoreError('CHECKPOINT_CONFLICT', 'PVP checkpoint moved backwards')
+    }
+    const stored = { ...clone(checkpoint), generation: lease.generation }
+    this.activeCheckpoints.set(checkpoint.matchId, stored)
+    return clone(stored)
+  }
+
+  async deleteActiveMatchCheckpoint(lease: PvpMatchLease): Promise<boolean> {
+    // Terminal GC may run after the lease naturally expires.  Generation and
+    // holder fencing still prevent an older process from deleting a newer
+    // checkpoint, so expiry itself must not strand the retained blob.
+    this.assertActiveLease(lease, true)
+    this.activeCheckpoints.delete(lease.matchId)
+    return true
+  }
+
+  private assertActiveLease(candidate: PvpMatchLease, allowExpired = false): void {
+    const current = this.activeLeases.get(candidate.matchId)
+    if (!current || current.holderId !== candidate.holderId || current.generation !== candidate.generation
+      || (!allowExpired && Date.parse(current.leaseExpiresAt) <= Date.now())) {
+      throw new PvpStoreError('LEASE_FENCED', 'PVP active match lease fenced')
+    }
   }
 
   async createReplayManifest(manifest: PvpReplayManifest): Promise<PvpReplayManifest> {

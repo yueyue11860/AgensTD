@@ -158,6 +158,26 @@ export class PveCheckpointCoordinator {
     })
   }
 
+  /**
+   * Stop accepting new listeners only after every attached room has committed
+   * its latest authoritative state.  Shutdown callers should await this method
+   * before flushing replay data or closing the process.
+   */
+  async flushAndShutdown(): Promise<void> {
+    this.assertHealthy()
+    const contexts = [...this.contexts.values()]
+    try {
+      await Promise.all(contexts.map((context) => this.queueSave(context)))
+      this.assertHealthy()
+    } finally {
+      for (const context of contexts) {
+        context.unsubscribeAction()
+        context.unsubscribeTick()
+      }
+      this.contexts.clear()
+    }
+  }
+
   shutdown(): void {
     for (const context of this.contexts.values()) {
       context.unsubscribeAction()

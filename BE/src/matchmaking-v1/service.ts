@@ -18,6 +18,9 @@ const BASE_RATING_RANGE = 100
 const RATING_EXPANSION_EVERY_MS = 10_000
 const RATING_EXPANSION_STEP = 50
 const MAX_RATING_RANGE = 400
+const REQUEST_RECEIPT_LIMIT = 5_000
+const TERMINAL_TICKET_RETENTION_MS = 15 * 60_000
+const ACCEPTED_MATCH_RETENTION_MS = 5 * 60_000
 
 interface ProposalRuntime {
   found: PvpMatchFound
@@ -38,6 +41,7 @@ interface InternalPvpQueueTicket extends PvpQueueTicket {
 interface RequestReceipt {
   fingerprint: string
   result: MatchmakingResult<unknown>
+  createdAt: number
 }
 
 class SystemClock implements MatchmakingClock {
@@ -213,6 +217,31 @@ export class InMemoryPvpMatchmakingService {
     return match ? structuredClone(match) : null
   }
 
+  /** Remove stale queue artifacts and bound request-id memory growth. */
+  prune(now = this.clock.now()): void {
+    for (const [key, receipt] of this.requestReceipts) {
+      if (now - receipt.createdAt >= TERMINAL_TICKET_RETENTION_MS) this.requestReceipts.delete(key)
+    }
+    for (const [ticketId, ticket] of this.tickets) {
+      if (!['cancelled', 'expired', 'accepted'].includes(ticket.state)) continue
+      if (now - ticket.createdAt < TERMINAL_TICKET_RETENTION_MS) continue
+      this.tickets.delete(ticketId)
+    }
+    for (const [matchId, match] of this.acceptedMatches) {
+      if (now - match.acceptedAt >= ACCEPTED_MATCH_RETENTION_MS) this.acceptedMatches.delete(matchId)
+    }
+    while (this.requestReceipts.size > REQUEST_RECEIPT_LIMIT) {
+      const oldest = this.requestReceipts.keys().next().value as string | undefined
+      if (!oldest) break
+      this.requestReceipts.delete(oldest)
+    }
+  }
+
+  /** Called once the platform has materialized an accepted match runtime. */
+  consumeAcceptedMatch(matchId: string): void {
+    this.acceptedMatches.delete(matchId)
+  }
+
   getPlayerCooldownUntil(playerId: string): number {
     return this.cooldownUntilByPlayer.get(playerId) ?? 0
   }
@@ -374,6 +403,7 @@ export class InMemoryPvpMatchmakingService {
     payload: Record<string, unknown>,
     apply: () => MatchmakingResult<T>,
   ): MatchmakingResult<T> {
+    this.prune()
     if (!requestId.trim()) return { ok: false, code: 'REQUEST_ID_REQUIRED' }
     const key = `${playerId}:${requestId}`
     const fingerprint = stableJson({ operation, payload })
@@ -383,7 +413,7 @@ export class InMemoryPvpMatchmakingService {
       return { ...cloneResult(previous.result as MatchmakingResult<T>), duplicate: true }
     }
     const result = apply()
-    this.requestReceipts.set(key, { fingerprint, result: cloneResult(result as MatchmakingResult<unknown>) })
+    this.requestReceipts.set(key, { fingerprint, result: cloneResult(result as MatchmakingResult<unknown>), createdAt: this.clock.now() })
     return result
   }
 }

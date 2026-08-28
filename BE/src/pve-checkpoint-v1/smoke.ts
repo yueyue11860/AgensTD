@@ -207,7 +207,9 @@ async function main() {
   second.shutdown()
   third.shutdown()
   fourth.shutdown()
-  benchmark.shutdown()
+  await benchmark.flushAndShutdown()
+  const finalShutdownCheckpoint = await store.loadLatestCheckpointForRoom(benchmarkRoom.id)
+  assert.ok(finalShutdownCheckpoint, 'graceful shutdown must persist the final PVE checkpoint before exit')
   process.stdout.write(`${JSON.stringify({
     ok: true,
     stateHashBeforeRecovery: finalBeforeExpiryHash,

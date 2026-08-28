@@ -71,6 +71,7 @@ export interface PlayerMetaAccount {
   playerId: string
   version: number
   gold: number
+  honor: number
   item: {
     unlockedActiveItemIds: string[]
     unlockedPassiveItemIds: string[]
@@ -255,6 +256,7 @@ function normalizeResponse(payload: unknown): PlayerAccountData | null {
       playerId: typeof account.playerId === 'string' ? account.playerId : '',
       version: typeof account.version === 'number' ? account.version : 0,
       gold: typeof wallet?.gold === 'number' ? wallet.gold : typeof account.gold === 'number' ? account.gold : 0,
+      honor: typeof wallet?.honor === 'number' ? wallet.honor : typeof account.honor === 'number' ? account.honor : 0,
       item: {
         unlockedActiveItemIds: stringArray(item.unlockedActiveItemIds),
         unlockedPassiveItemIds: stringArray(item.unlockedPassiveItemIds),

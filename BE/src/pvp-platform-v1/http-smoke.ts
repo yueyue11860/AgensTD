@@ -123,6 +123,15 @@ async function main(): Promise<void> {
     assert.ok(platform.matchState({ token: 'alice-token', playerId: 'alice-http', playerName: 'Alice HTTP', playerKind: 'human' }, matchId).sides.A!.stats.baseKills >= 5)
     assert.equal((await call(`/matches/${matchId}/pressure`, 'alice-token', { method: 'POST', body: JSON.stringify({ requestId: 'http-pressure' }) })).status, 200)
 
+    // SSE authorization/match checks must complete before headers are flushed;
+    // unknown matches and non-participants therefore remain ordinary JSON errors.
+    const unknownStream = await call('/matches/not-a-real-match/events', 'alice-token')
+    assert.equal(unknownStream.status, 404)
+    assert.equal(unknownStream.body.code, 'MATCH_NOT_FOUND')
+    const agentStream = await call(`/matches/${matchId}/events`, 'agent-token')
+    assert.equal(agentStream.status, 403)
+    assert.equal(agentStream.body.code, 'HUMAN_ACCOUNT_REQUIRED')
+
     const streamController = new AbortController()
     const stream = await fetch(`${root}/matches/${matchId}/events`, {
       headers: { Authorization: 'Bearer alice-token', Accept: 'text/event-stream' },
