@@ -1,0 +1,130 @@
+- main [ref=e297]:
+  - button "退出" [ref=e299]
+  - generic [ref=e305]: 第 1 回 · 花果山 · 开阵。目标：召唤天兵，落子布防，守住第一轮妖潮。 威胁：当前敌军 0 · 全局共 20 波
+  - generic:
+    - generic:
+      - text: 章回题签
+      - heading [level=2]: 第 1 回 · 花果山 · 开阵
+      - paragraph: 目标召唤天兵，落子布防，守住第一轮妖潮。
+      - paragraph: 威胁当前敌军 0 · 全局共 20 波
+  - generic:
+    - region [ref=e905]:
+      - paragraph [ref=e906]: 第一步 · 斋饭与召唤
+      - heading "先看斋饭，再落召唤令" [level=2] [ref=e907]
+      - paragraph [ref=e908]: 首次召唤从 5 斋饭起；此刻服务端确认的费用是 5 斋饭。费用变化始终以按钮为准。
+      - generic [ref=e909]: 召唤只发送请求，不会在客户端先扣资源。
+      - generic [ref=e910]:
+        - button "跳过此步" [ref=e911]
+        - button "稍后" [ref=e912]
+        - button "全部跳过" [ref=e913]
+    - generic: 首局提示：先看斋饭，再落召唤令
+  - generic [ref=e306]:
+    - generic "全局战况" [ref=e307]:
+      - generic [ref=e308]:
+        - generic [ref=e309]: DEFENSE GRID
+        - strong [ref=e310]: 花果山
+        - generic [ref=e311]: 简单
+      - generic [ref=e312]:
+        - generic [ref=e313]:
+          - generic [ref=e319]: 斋饭
+          - strong [ref=e320]: "15"
+        - generic [ref=e321]:
+          - generic [ref=e327]: 人口
+          - strong [ref=e328]: 0/10
+        - generic [ref=e329]:
+          - generic [ref=e335]: 敌军
+          - strong [ref=e336]: "0"
+      - generic [ref=e337]:
+        - generic [ref=e340]: 交战中
+        - strong [ref=e341]: 第 1 / 20 波
+        - generic "战斗音量" [ref=e343]:
+          - button "静音战斗音效" [ref=e344]
+          - slider "战斗音效主音量" [ref=e349]: "45"
+      - generic [ref=e351]:
+        - generic [ref=e352]: BOSS首领尚未现身
+        - strong [ref=e353]: 预计第 5 波
+    - generic [ref=e355]:
+      - complementary [ref=e356]:
+        - button "收起 0/5" [expanded] [ref=e357]:
+          - generic [ref=e358]: 收起
+          - strong [ref=e359]: 0/5
+        - generic [ref=e360]:
+          - region "队友连接状态" [ref=e361]:
+            - generic [ref=e362]:
+              - paragraph [ref=e363]: 联机路况
+              - generic [ref=e364]: 1/1 在线
+            - generic [ref=e366]:
+              - generic [ref=e367]: P1 · 你
+              - strong [ref=e368]: 在线
+          - generic [ref=e369]:
+            - paragraph [ref=e370]: 召唤托盘
+            - generic [ref=e371]:
+              - button "空托盘1" [ref=e372]:
+                - generic [ref=e373]: 空
+              - button "空托盘2" [ref=e374]:
+                - generic [ref=e375]: 空
+              - button "空托盘3" [ref=e376]:
+                - generic [ref=e377]: 空
+              - button "空托盘4" [ref=e378]:
+                - generic [ref=e379]: 空
+              - button "空托盘5" [ref=e380]:
+                - generic [ref=e381]: 空
+            - button "召唤 5 斋饭" [ref=e382]:
+              - generic [ref=e388]: 召唤
+              - strong [ref=e389]: 5 斋饭
+            - generic [ref=e391]:
+              - button "备战席空位1" [ref=e392]:
+                - generic [ref=e393]: 空
+              - button "备战席空位2" [ref=e394]:
+                - generic [ref=e395]: 空
+              - button "备战席空位3" [ref=e915]:
+                - generic [ref=e916]: 空
+          - generic [ref=e396]:
+            - generic [ref=e398]:
+              - paragraph [ref=e399]: 主动道具
+              - paragraph [ref=e400]: 2 槽 · 服务端确认后才扣除次数
+            - generic [ref=e401]:
+              - button "点 点将笔 2 次可用" [ref=e917]:
+                - generic [ref=e403]: 点
+                - generic [ref=e404]:
+                  - strong [ref=e405]: 点将笔
+                  - generic [ref=e406]: 2 次可用
+              - button "修 修为丹 2 次可用" [ref=e918]:
+                - generic [ref=e411]: 修
+                - generic [ref=e412]:
+                  - strong [ref=e413]: 修为丹
+                  - generic [ref=e414]: 2 次可用
+      - complementary "战场文字摘要" [ref=e418]:
+        - heading "战场摘要" [level=2] [ref=e419]
+        - paragraph [ref=e420]: 第 1 / 20 波，当前敌军 0。
+        - paragraph [ref=e421]: 当前没有已现身首领。
+        - paragraph [ref=e422]: 战场尚未聚焦。
+        - paragraph [ref=e423]: 当前选择：无。
+        - paragraph [ref=e424]: 可执行动作：先选择召唤托盘、备战席或己方棋子；战场聚焦后可用方向键浏览。
+      - region "29×29西游汉字战场" [ref=e425]:
+        - generic [ref=e426]:
+          - application "29×29西游汉字战场，第 1 波。方向键移动格游标，Enter 或空格执行，Escape 取消。" [ref=e919]
+          - group "战场视角控制" [ref=e429]:
+            - button "全阵" [pressed] [ref=e430]
+            - button "聚焦" [ref=e431]
+            - button "缩小战场" [ref=e432]: −
+            - status "战场缩放比例" [ref=e433]: 100%
+            - button "放大战场" [ref=e434]: ＋
+          - paragraph: 滚轮缩放 · 双指缩放平移 · Shift+方向键平移
+      - complementary "情境情报抽屉":
+        - group [ref=e435]:
+          - generic "已激活羁绊 ＋" [ref=e436] [cursor=pointer]:
+            - generic [ref=e437]: 已激活羁绊
+            - text: ＋
+        - group [ref=e438]:
+          - generic "战斗效果 ＋" [ref=e439] [cursor=pointer]:
+            - generic [ref=e440]: 战斗效果
+            - text: ＋
+        - group [ref=e441]:
+          - generic "操作提示 ＋" [ref=e442] [cursor=pointer]:
+            - generic [ref=e443]: 操作提示
+            - text: ＋
+        - group [ref=e921]:
+          - generic "关卡情报 ＋" [ref=e922] [cursor=pointer]:
+            - generic [ref=e923]: 关卡情报
+            - text: ＋

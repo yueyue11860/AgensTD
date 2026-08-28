@@ -1,0 +1,44 @@
+- main [ref=e1479]:
+  - button "用户菜单" [ref=e1482]:
+    - generic [ref=e1483]: 本
+    - generic [ref=e1484]: 本地测试玩家
+  - generic [ref=e1487]:
+    - paragraph [ref=e1488]: 新国风墨箓塔防 · 天庭机关录
+    - heading "万字天关" [level=1] [ref=e1489]
+    - strong [ref=e1490]: 汉字落阵，神将显形；同守西游八十一难
+    - generic "孙、悟、空三个汉字组成神将孙悟空" [ref=e1491]:
+      - generic [ref=e1492]: 孙
+      - generic [ref=e1493]: 悟
+      - generic [ref=e1494]: 空
+      - generic [ref=e1495]: 合字成将
+      - generic [ref=e1496]: 孙悟空
+  - navigation "局外构筑" [ref=e1497]:
+    - button "道具构筑" [ref=e1498]
+    - button "神将武库" [ref=e1504]
+    - button "金币商店" [ref=e1515]
+  - generic [ref=e1520]:
+    - button "西行卷 · 四人同守 西游守关 邀同道落字布阵，将散落汉字组合为神将，共守花果山至火焰山的西游章回。 合字成将 二十波守关 每五波首领 前往南天门集结" [ref=e1521] [cursor=pointer]:
+      - generic [ref=e1522]: 守
+      - generic [ref=e1525]:
+        - generic [ref=e1526]: 西行卷 · 四人同守
+        - heading "西游守关" [level=2] [ref=e1527]
+        - paragraph [ref=e1528]: 邀同道落字布阵，将散落汉字组合为神将，共守花果山至火焰山的西游章回。
+        - generic [ref=e1529]:
+          - generic [ref=e1530]: 合字成将
+          - generic [ref=e1531]: 二十波守关
+          - generic [ref=e1532]: 每五波首领
+        - button "前往南天门集结" [ref=e1533]
+    - button "斗法卷 · 真人对阵 斗法竞技 真人一对一镜像斗法，以真经制造压力，在相同规则下比拼临阵合字与调度。 镜像规则 真经压力 排位天梯 进入斗法台" [ref=e1534] [cursor=pointer]:
+      - generic [ref=e1535]: 斗
+      - generic [ref=e1538]:
+        - generic [ref=e1539]: 斗法卷 · 真人对阵
+        - heading "斗法竞技" [level=2] [ref=e1540]
+        - paragraph [ref=e1541]: 真人一对一镜像斗法，以真经制造压力，在相同规则下比拼临阵合字与调度。
+        - generic [ref=e1542]:
+          - generic [ref=e1543]: 镜像规则
+          - generic [ref=e1544]: 真经压力
+          - generic [ref=e1545]: 排位天梯
+        - button "进入斗法台" [ref=e1546]
+  - navigation "Primary navigation" [ref=e1547]:
+    - button "首页" [ref=e1548]
+    - button "排行榜" [ref=e1553]

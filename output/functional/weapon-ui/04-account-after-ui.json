@@ -1,0 +1,23 @@
+{
+  "version": 2,
+  "weaponVersion": 2,
+  "unlocked": [
+    "chasing_wind_bow",
+    "houyi_sun_shooting_bow",
+    "peachwood_staff",
+    "qinggang_blade"
+  ],
+  "fragments": {
+    "qinggang_blade": 0,
+    "armor_breaking_halberd": 2,
+    "battle_sky_axe": 0
+  },
+  "houyi": {
+    "slots": [
+      "qinggang_blade",
+      "houyi_sun_shooting_bow"
+    ],
+    "version": 1,
+    "updatedAt": "2026-08-28T10:30:41.793Z"
+  }
+}

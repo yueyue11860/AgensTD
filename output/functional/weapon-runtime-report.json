@@ -1,0 +1,642 @@
+{
+  "generatedAt": "2026-08-28T10:35:05.253Z",
+  "sourceAccount": {
+    "accountVersion": 2,
+    "uiSavedSlots": [
+      "qinggang_blade",
+      "houyi_sun_shooting_bow"
+    ]
+  },
+  "baseline": {
+    "seed": "weapon-baseline-11",
+    "attack": 34,
+    "attackIntervalMs": 1350,
+    "attackRangeMilliCells": 3000
+  },
+  "dualCommonWeapons": {
+    "seed": "weapon-dual-40",
+    "slots": [
+      "qinggang_blade",
+      "chasing_wind_bow"
+    ],
+    "attack": 36,
+    "attackIntervalMs": 1228,
+    "attackRangeMilliCells": 3250
+  },
+  "uiSavedCommonPlusExclusive": {
+    "seed": "weapon-ui-loadout-50",
+    "slots": [
+      "qinggang_blade",
+      "houyi_sun_shooting_bow"
+    ],
+    "attack": 36,
+    "additionalTargets": 2,
+    "houyiExtensionDamageEvents": 2,
+    "sample": [
+      {
+        "id": "event-42",
+        "tick": 121,
+        "type": "DAMAGE_APPLIED",
+        "data": {
+          "attackerId": "general-formation:human-dev:houyi:1",
+          "playerId": "human-dev",
+          "generalId": "houyi",
+          "sourceKind": "active_skill",
+          "effectId": "houyi_chuanyun_zhurijian_damage",
+          "enemyId": "enemy-1",
+          "rawDamage": 63,
+          "finalDamage": 40,
+          "hpBefore": 1107,
+          "hpAfter": 1067,
+          "isCritical": false,
+          "isSecondary": false,
+          "actionId": "general-formation:human-dev:houyi:1:chuanyun_zhurijian:121:houyi-weapon-1"
+        },
+        "actionId": "general-formation:human-dev:houyi:1:chuanyun_zhurijian:121:houyi-weapon-1",
+        "targetIds": [
+          "enemy-1"
+        ],
+        "geometry": {
+          "kind": "point",
+          "xMilli": 7100,
+          "yMilli": 21000
+        }
+      },
+      {
+        "id": "event-43",
+        "tick": 121,
+        "type": "DAMAGE_APPLIED",
+        "data": {
+          "attackerId": "general-formation:human-dev:houyi:1",
+          "playerId": "human-dev",
+          "generalId": "houyi",
+          "sourceKind": "active_skill",
+          "effectId": "houyi_chuanyun_zhurijian_damage",
+          "enemyId": "enemy-2",
+          "rawDamage": 47,
+          "finalDamage": 30,
+          "hpBefore": 1199,
+          "hpAfter": 1169,
+          "isCritical": false,
+          "isSecondary": false,
+          "actionId": "general-formation:human-dev:houyi:1:chuanyun_zhurijian:121:houyi-weapon-2"
+        },
+        "actionId": "general-formation:human-dev:houyi:1:chuanyun_zhurijian:121:houyi-weapon-2",
+        "targetIds": [
+          "enemy-2"
+        ],
+        "geometry": {
+          "kind": "point",
+          "xMilli": 7000,
+          "yMilli": 19600
+        }
+      }
+    ]
+  },
+  "snapshotFreeze": {
+    "sourceWasMutatedAfterRuntimeConstruction": true,
+    "runtimeSlotsAfterMutation": [
+      "qinggang_blade",
+      "chasing_wind_bow"
+    ],
+    "attackAfterMutation": 36,
+    "rangeAfterMutation": 3250,
+    "passed": true
+  },
+  "explicitUnsupportedEvidence": [
+    {
+      "id": "event-4",
+      "tick": 0,
+      "type": "WEAPON_EFFECT_UNSUPPORTED",
+      "data": {
+        "playerId": "human-dev",
+        "generalId": "houyi",
+        "weaponId": "sun_piercing_bow",
+        "sourceKey": "weapon:weapon-unsupported-11:human-dev:houyi:0:sun_piercing_bow",
+        "triggerId": "sun_bow_target",
+        "actionType": "parameter_patch_requires_matching_effect"
+      }
+    },
+    {
+      "id": "event-5",
+      "tick": 0,
+      "type": "WEAPON_EFFECT_UNSUPPORTED",
+      "data": {
+        "playerId": "human-dev",
+        "generalId": "houyi",
+        "weaponId": "sun_piercing_bow",
+        "sourceKey": "weapon:weapon-unsupported-11:human-dev:houyi:0:sun_piercing_bow",
+        "triggerId": "sun_bow_falloff",
+        "actionType": "parameter_patch_requires_matching_effect"
+      }
+    }
+  ],
+  "catalog": {
+    "matrix": [
+      {
+        "weaponId": "qinggang_blade",
+        "name": "青钢刀",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 1,
+        "supportedEffects": 1,
+        "unsupportedEffects": 0,
+        "runtimeClass": "fully_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 6
+      },
+      {
+        "weaponId": "peachwood_staff",
+        "name": "桃木杖",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 1,
+        "supportedEffects": 1,
+        "unsupportedEffects": 0,
+        "runtimeClass": "fully_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 5
+      },
+      {
+        "weaponId": "spirit_bell",
+        "name": "御灵铃",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 1,
+        "supportedEffects": 1,
+        "unsupportedEffects": 0,
+        "runtimeClass": "fully_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 4
+      },
+      {
+        "weaponId": "binding_rope",
+        "name": "缚妖索",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 1,
+        "supportedEffects": 1,
+        "unsupportedEffects": 0,
+        "runtimeClass": "fully_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 6
+      },
+      {
+        "weaponId": "chasing_wind_bow",
+        "name": "追风弓",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 2,
+        "unsupportedEffects": 0,
+        "runtimeClass": "fully_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 6
+      },
+      {
+        "weaponId": "spirit_gathering_orb",
+        "name": "聚灵珠",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 2,
+        "unsupportedEffects": 0,
+        "runtimeClass": "fully_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 5
+      },
+      {
+        "weaponId": "life_extending_incense",
+        "name": "续灵香",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 2,
+        "unsupportedEffects": 0,
+        "runtimeClass": "fully_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 4
+      },
+      {
+        "weaponId": "calming_pearl",
+        "name": "定风珠",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 2,
+        "unsupportedEffects": 0,
+        "runtimeClass": "fully_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 6
+      },
+      {
+        "weaponId": "armor_breaking_halberd",
+        "name": "破军钺",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 1,
+        "supportedEffects": 1,
+        "unsupportedEffects": 0,
+        "runtimeClass": "fully_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 6
+      },
+      {
+        "weaponId": "thunder_fire_talisman",
+        "name": "雷火符",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 1,
+        "supportedEffects": 0,
+        "unsupportedEffects": 1,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 5
+      },
+      {
+        "weaponId": "division_banner",
+        "name": "分灵幡",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 2,
+        "unsupportedEffects": 0,
+        "runtimeClass": "fully_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 4
+      },
+      {
+        "weaponId": "truth_mirror",
+        "name": "破妄镜",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 1,
+        "supportedEffects": 1,
+        "unsupportedEffects": 0,
+        "runtimeClass": "fully_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 6
+      },
+      {
+        "weaponId": "sun_piercing_bow",
+        "name": "贯日弓",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 3,
+        "supportedEffects": 1,
+        "unsupportedEffects": 2,
+        "runtimeClass": "partially_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 6
+      },
+      {
+        "weaponId": "nine_luminary_wheel",
+        "name": "九曜法轮",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 1,
+        "supportedEffects": 0,
+        "unsupportedEffects": 1,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 5
+      },
+      {
+        "weaponId": "command_seal",
+        "name": "统御宝印",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 3,
+        "supportedEffects": 3,
+        "unsupportedEffects": 0,
+        "runtimeClass": "fully_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 4
+      },
+      {
+        "weaponId": "boundary_stele",
+        "name": "镇界碑",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 1,
+        "supportedEffects": 0,
+        "unsupportedEffects": 1,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 6
+      },
+      {
+        "weaponId": "battle_sky_axe",
+        "name": "战天斧",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 3,
+        "supportedEffects": 3,
+        "unsupportedEffects": 0,
+        "runtimeClass": "fully_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 6
+      },
+      {
+        "weaponId": "river_chart_luoshu",
+        "name": "河图洛书",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 4,
+        "supportedEffects": 4,
+        "unsupportedEffects": 0,
+        "runtimeClass": "fully_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 5
+      },
+      {
+        "weaponId": "myriad_beast_scroll",
+        "name": "万兽图",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 5,
+        "supportedEffects": 5,
+        "unsupportedEffects": 0,
+        "runtimeClass": "fully_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 4
+      },
+      {
+        "weaponId": "chaos_umbrella",
+        "name": "混元伞",
+        "exclusiveGeneralId": null,
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 1,
+        "unsupportedEffects": 1,
+        "runtimeClass": "partially_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 6
+      },
+      {
+        "weaponId": "yangjian_divine_trident",
+        "name": "三尖两刃神锋",
+        "exclusiveGeneralId": "yangjian",
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 0,
+        "unsupportedEffects": 2,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "nazha_fire_tip_spear",
+        "name": "火尖枪",
+        "exclusiveGeneralId": "nazha",
+        "status": "testing",
+        "declaredEffects": 1,
+        "supportedEffects": 0,
+        "unsupportedEffects": 1,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "houyi_sun_shooting_bow",
+        "name": "射日神弓",
+        "exclusiveGeneralId": "houyi",
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 2,
+        "unsupportedEffects": 0,
+        "runtimeClass": "fully_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "sha_wujing_demon_staff",
+        "name": "降妖宝杖",
+        "exclusiveGeneralId": "sha_wujing",
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 0,
+        "unsupportedEffects": 2,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "zhu_bajie_supreme_rake",
+        "name": "上宝沁金钯",
+        "exclusiveGeneralId": "zhu_bajie",
+        "status": "testing",
+        "declaredEffects": 1,
+        "supportedEffects": 0,
+        "unsupportedEffects": 1,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "jade_emperor_celestial_seal",
+        "name": "凌霄天帝印",
+        "exclusiveGeneralId": "yu_huang_dadi",
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 0,
+        "unsupportedEffects": 2,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "lei_gong_thunder_chisel",
+        "name": "雷公凿",
+        "exclusiveGeneralId": "lei_gong",
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 0,
+        "unsupportedEffects": 2,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "dian_mu_lightning_mirror",
+        "name": "乾元电镜",
+        "exclusiveGeneralId": "dian_mu",
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 0,
+        "unsupportedEffects": 2,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "zhen_yuanzi_book_of_earth",
+        "name": "天地宝鉴",
+        "exclusiveGeneralId": "zhen_yuanzi",
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 0,
+        "unsupportedEffects": 2,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "ru_lai_five_finger_seal",
+        "name": "五指金印",
+        "exclusiveGeneralId": "ru_lai_fozu",
+        "status": "testing",
+        "declaredEffects": 1,
+        "supportedEffects": 0,
+        "unsupportedEffects": 1,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "pu_ti_lingtai_staff",
+        "name": "灵台方寸杖",
+        "exclusiveGeneralId": "pu_ti_laozu",
+        "status": "testing",
+        "declaredEffects": 1,
+        "supportedEffects": 0,
+        "unsupportedEffects": 1,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "lijing_pagoda",
+        "name": "玲珑宝塔",
+        "exclusiveGeneralId": "lijing",
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 1,
+        "unsupportedEffects": 1,
+        "runtimeClass": "partially_consumed",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "chang_e_guanghan_moonwheel",
+        "name": "广寒月轮",
+        "exclusiveGeneralId": "chang_e",
+        "status": "testing",
+        "declaredEffects": 1,
+        "supportedEffects": 0,
+        "unsupportedEffects": 1,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "sunwukong_ruyi_jingu_bang",
+        "name": "如意金箍棒",
+        "exclusiveGeneralId": "sunwukong",
+        "status": "testing",
+        "declaredEffects": 1,
+        "supportedEffects": 0,
+        "unsupportedEffects": 1,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "taiyi_nine_dragon_fire_hood",
+        "name": "九龙神火罩",
+        "exclusiveGeneralId": "tai_yi_zhenren",
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 0,
+        "unsupportedEffects": 2,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "shouxing_longevity_staff",
+        "name": "盘龙寿杖",
+        "exclusiveGeneralId": "shou_xing",
+        "status": "testing",
+        "declaredEffects": 1,
+        "supportedEffects": 0,
+        "unsupportedEffects": 1,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "tang_sanzang_khakkhara",
+        "name": "九环锡杖",
+        "exclusiveGeneralId": "tang_sanzang",
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 0,
+        "unsupportedEffects": 2,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "bai_longma_sea_dragon_pearl",
+        "name": "沧海龙珠",
+        "exclusiveGeneralId": "bai_longma",
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 0,
+        "unsupportedEffects": 2,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "pi_lanpo_sun_needle",
+        "name": "昴日金针",
+        "exclusiveGeneralId": "pi_lanpo",
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 0,
+        "unsupportedEffects": 2,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "guanyin_jade_purifying_vase",
+        "name": "羊脂玉净瓶",
+        "exclusiveGeneralId": "guan_yin_pusa",
+        "status": "testing",
+        "declaredEffects": 2,
+        "supportedEffects": 0,
+        "unsupportedEffects": 2,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      },
+      {
+        "weaponId": "laojun_purple_gold_furnace",
+        "name": "紫金八卦炉",
+        "exclusiveGeneralId": "tai_shang_laojun",
+        "status": "testing",
+        "declaredEffects": 1,
+        "supportedEffects": 0,
+        "unsupportedEffects": 1,
+        "runtimeClass": "unsupported_shell",
+        "iconPresent": true,
+        "compatibleGeneralCount": 1
+      }
+    ],
+    "counts": {
+      "catalog": 41,
+      "effectDefined": 41,
+      "fullyConsumed": 16,
+      "partiallyConsumed": 3,
+      "unsupportedShell": 22,
+      "iconPresent": 41,
+      "compatibleWithAtLeastOneGeneral": 41,
+      "releasedStatus": 0,
+      "testingStatus": 41,
+      "uniqueGroupConfigured": 0
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "ok": true,
+  "status": "finished",
+  "wave": null,
+  "player": {
+    "weaponLoadoutByGeneralId": {
+      "houyi": [
+        "qinggang_blade",
+        "houyi_sun_shooting_bow"
+      ]
+    },
+    "itemRuntime": {
+      "version": 1,
+      "slots": [
+        {
+          "itemId": "change_character_brush",
+          "slotIndex": 0,
+          "chargesRemaining": 2,
+          "cooldownEndsAtTick": 0,
+          "usesThisMatch": 0,
+          "enabled": true
+        },
+        {
+          "itemId": "cultivation_pill",
+          "slotIndex": 1,
+          "chargesRemaining": 2,
+          "cooldownEndsAtTick": 0,
+          "usesThisMatch": 0,
+          "enabled": true
+        }
+      ]
+    }
+  }
+}

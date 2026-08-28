@@ -1,0 +1,64 @@
+{
+  "generatedAt": "2026-08-28T10:40:00+08:00",
+  "roomId": "RM-9147",
+  "testMode": "real Chromium UI plus authoritative server actions; no direct damage, resource, wave-clear, or victory injection",
+  "frontend": {
+    "roomCreated": true,
+    "missionSelected": true,
+    "recruitBatchViaUi": true,
+    "firstSoldierDeployedViaUi": "cavalry",
+    "keyboardBattlefieldInteraction": true,
+    "muteToggle": {
+      "before": "静音战斗音效",
+      "after": "开启战斗音效"
+    },
+    "zoom": {
+      "before": "100%",
+      "after": "118%"
+    },
+    "bossPanelObserved": "山魈先锋 · 阶段 1 · 330/330"
+  },
+  "soldiers": {
+    "catalogTypes": ["blade", "spear", "bow", "cavalry"],
+    "deployedTypes": ["blade", "spear", "bow", "cavalry"],
+    "damageEventsObservedByType": {
+      "blade": 32,
+      "spear": 21,
+      "bow": 5,
+      "cavalry": 36
+    }
+  },
+  "ordinaryEnemies": {
+    "waveCatalogEntries": 20,
+    "entityKindObserved": "ordinary_minion",
+    "spawned": true,
+    "enteredBattlefield": true,
+    "tookDamage": true,
+    "died": true,
+    "grantedRice": true
+  },
+  "bosses": {
+    "catalogDefinitions": 40,
+    "resolvedDifficultyVariants": 120,
+    "bossWaves": [5, 10, 15, 20],
+    "liveBoss": {
+      "definitionId": "boss_l1_w5_mountain_scout_v1",
+      "name": "山魈先锋",
+      "glyph": "魈",
+      "entityKind": "boss",
+      "phase": 1,
+      "maxHp": 330,
+      "hpObservedAfterCombat": 69,
+      "skillCast": "山魈催阵",
+      "skillLifecycleEnded": true
+    }
+  },
+  "supportingSmokes": {
+    "pveFullSmoke": "passed",
+    "bossBalanceSmoke": "passed",
+    "bossRuntimeSmoke": "passed",
+    "battlefieldAccessibilitySmoke": "passed",
+    "combatPresentationSmoke": "passed",
+    "clientActionIntentSmoke": "passed"
+  }
+}

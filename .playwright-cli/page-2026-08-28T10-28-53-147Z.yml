@@ -1,0 +1,137 @@
+- main [ref=e122]:
+  - generic [ref=e125]:
+    - generic [ref=e126]:
+      - button "返回主页" [ref=e127]
+      - navigation "局外系统导航" [ref=e130]:
+        - link "道具构筑" [ref=e131] [cursor=pointer]:
+          - /url: /build
+        - link "神将武库" [ref=e137] [cursor=pointer]:
+          - /url: /arsenal
+        - link "金币商店" [ref=e148] [cursor=pointer]:
+          - /url: /shop
+      - generic [ref=e153]:
+        - generic [ref=e159]:
+          - text: OUT-OF-MATCH SYSTEM
+          - heading "道具构筑" [level=1] [ref=e160]
+          - paragraph [ref=e161]: 2 个主动槽与 6 个被动槽，对局开始时锁定
+        - generic [ref=e162]:
+          - strong [ref=e168]: "0"
+          - generic [ref=e169]: 局外金币
+    - generic [ref=e334]: 道具构筑已保存，将从下一局开始生效。
+    - generic [ref=e335]:
+      - generic [ref=e336]:
+        - generic [ref=e337]:
+          - generic [ref=e338]:
+            - text: LOADOUT
+            - heading "对局构筑" [level=2] [ref=e339]
+          - generic [ref=e340]: v2
+        - generic [ref=e341]:
+          - paragraph [ref=e342]: 主动道具 · 2
+          - generic [ref=e343]:
+            - button "1 点将笔 点击替换" [ref=e344]:
+              - generic [ref=e345]: "1"
+              - strong [ref=e346]: 点将笔
+              - generic [ref=e347]: 点击替换
+            - button "2 修为丹 点击替换" [ref=e348]:
+              - generic [ref=e349]: "2"
+              - strong [ref=e350]: 修为丹
+              - generic [ref=e351]: 点击替换
+        - generic [ref=e352]:
+          - paragraph [ref=e353]: 被动道具 · 6
+          - generic [ref=e354]:
+            - button "1 行军灶 点击替换" [ref=e355]:
+              - generic [ref=e356]: "1"
+              - strong [ref=e357]: 行军灶
+              - generic [ref=e358]: 点击替换
+            - button "2 招贤榜 点击替换" [ref=e359]:
+              - generic [ref=e360]: "2"
+              - strong [ref=e361]: 招贤榜
+              - generic [ref=e362]: 点击替换
+            - button "3 备战符 点击替换" [ref=e363]:
+              - generic [ref=e364]: "3"
+              - strong [ref=e365]: 备战符
+              - generic [ref=e366]: 点击替换
+            - button "4 空槽位 点击装配" [ref=e367]:
+              - generic [ref=e368]: "4"
+              - strong [ref=e369]: 空槽位
+              - generic [ref=e370]: 点击装配
+            - button "5 空槽位 点击装配" [ref=e371]:
+              - generic [ref=e372]: "5"
+              - strong [ref=e373]: 空槽位
+              - generic [ref=e374]: 点击装配
+            - button "6 空槽位 点击装配" [ref=e375]:
+              - generic [ref=e376]: "6"
+              - strong [ref=e377]: 空槽位
+              - generic [ref=e378]: 点击装配
+        - button "保存构筑" [ref=e379]
+      - generic [ref=e384]:
+        - generic [ref=e385]:
+          - generic [ref=e386]:
+            - text: INVENTORY
+            - heading "主动槽 1" [level=2] [ref=e387]
+          - button "卸下" [ref=e388]
+        - generic [ref=e392]:
+          - button "点将笔 替换一个自己的字符 主动 2 次/局 选择神将字符" [ref=e393]:
+            - generic [ref=e394]: 点
+            - generic [ref=e396]: 点将笔
+            - paragraph [ref=e400]: 替换一个自己的字符
+            - generic [ref=e401]:
+              - generic [ref=e402]: 主动
+              - generic [ref=e403]: 2 次/局
+              - generic [ref=e404]: 选择神将字符
+          - button "修为丹 神将增加 10 经验 主动 2 次/局 选择已激活神将" [ref=e405]:
+            - generic [ref=e406]: 修
+            - generic [ref=e408]: 修为丹
+            - paragraph [ref=e410]: 神将增加 10 经验
+            - generic [ref=e411]:
+              - generic [ref=e412]: 主动
+              - generic [ref=e413]: 2 次/局
+              - generic [ref=e414]: 选择已激活神将
+          - button "神将符 神将恰好提升一级 主动 1 次/局 选择已激活神将" [disabled] [ref=e415]:
+            - generic [ref=e416]: 神
+            - generic [ref=e418]: 神将符
+            - paragraph [ref=e424]: 神将恰好提升一级
+            - generic [ref=e425]:
+              - generic [ref=e426]: 主动
+              - generic [ref=e427]: 1 次/局
+              - generic [ref=e428]: 选择已激活神将
+          - button "再征令 免费刷新召唤托盘 主动 1 次/局 无需选择目标" [disabled] [ref=e429]:
+            - generic [ref=e430]: 再
+            - generic [ref=e432]: 再征令
+            - paragraph [ref=e438]: 免费刷新召唤托盘
+            - generic [ref=e439]:
+              - generic [ref=e440]: 主动
+              - generic [ref=e441]: 1 次/局
+              - generic [ref=e442]: 无需选择目标
+          - button "招魂幡 找回一个弃置字符 主动 1 次/局 选择弃置字符与空位" [disabled] [ref=e443]:
+            - generic [ref=e444]: 招
+            - generic [ref=e446]: 招魂幡
+            - paragraph [ref=e452]: 找回一个弃置字符
+            - generic [ref=e453]:
+              - generic [ref=e454]: 主动
+              - generic [ref=e455]: 1 次/局
+              - generic [ref=e456]: 选择弃置字符与空位
+          - button "天雷令 范围压低敌人当前生命 主动 2 次/局 选择战场位置" [disabled] [ref=e457]:
+            - generic [ref=e458]: 天
+            - generic [ref=e460]: 天雷令
+            - paragraph [ref=e466]: 范围压低敌人当前生命
+            - generic [ref=e467]:
+              - generic [ref=e468]: 主动
+              - generic [ref=e469]: 2 次/局
+              - generic [ref=e470]: 选择战场位置
+          - button "定风符 范围减速并定身 主动 2 次/局 选择战场位置" [disabled] [ref=e471]:
+            - generic [ref=e472]: 定
+            - generic [ref=e474]: 定风符
+            - paragraph [ref=e480]: 范围减速并定身
+            - generic [ref=e481]:
+              - generic [ref=e482]: 主动
+              - generic [ref=e483]: 2 次/局
+              - generic [ref=e484]: 选择战场位置
+          - button "战鼓令 强化神将八秒 主动 2 次/局 选择已激活神将" [disabled] [ref=e485]:
+            - generic [ref=e486]: 战
+            - generic [ref=e488]: 战鼓令
+            - paragraph [ref=e494]: 强化神将八秒
+            - generic [ref=e495]:
+              - generic [ref=e496]: 主动
+              - generic [ref=e497]: 2 次/局
+              - generic [ref=e498]: 选择已激活神将

@@ -1,0 +1,31 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: "TACTICAL_GATEWAY :: SUPABASE NODE"
+      - generic [ref=e7]: ● ONLINE
+    - generic [ref=e11]:
+      - generic [ref=e12]:
+        - heading "MYRIAD TD" [level=1] [ref=e13]
+        - paragraph [ref=e14]: < 零域身份终端 >
+      - generic [ref=e15]:
+        - button "登录" [ref=e16]
+        - button "创建账号" [ref=e17]
+      - generic [ref=e18]:
+        - generic [ref=e19]:
+          - generic [ref=e20]:
+            - generic [ref=e21]: 本地测试账号（无需数据库）
+            - button "一键填入" [ref=e22]
+          - paragraph [ref=e23]: dev@agenstd.local / dev123456
+        - generic [ref=e24]:
+          - generic [ref=e25]: EMAIL / 邮箱
+          - textbox "EMAIL / 邮箱" [ref=e26]:
+            - /placeholder: commander@example.com
+        - generic [ref=e27]:
+          - generic [ref=e28]: PASSWORD / 密码
+          - textbox "PASSWORD / 密码" [ref=e29]:
+            - /placeholder: 至少 6 位
+        - button "[ 进入战区 ]" [ref=e30]
+      - paragraph [ref=e31]: "AUTH_PROVIDER :: SUPABASE AUTH · JWT · TLS 1.3"
+    - generic [ref=e32]:
+      - generic [ref=e33]: "SYS :: SECTOR ZERO"
+      - generic [ref=e34]: "CLEARANCE :: DELTA"

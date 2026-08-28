@@ -1,0 +1,62 @@
+[
+  {
+    "name": "incompatible",
+    "general": "houyi",
+    "slots": [
+      "peachwood_staff",
+      null
+    ],
+    "expectedLoadoutVersion": 1,
+    "status": 422,
+    "body": {
+      "ok": false,
+      "code": "WEAPON_INCOMPATIBLE",
+      "message": "peachwood_staff is incompatible with houyi"
+    }
+  },
+  {
+    "name": "exclusive-mismatch",
+    "general": "yangjian",
+    "slots": [
+      "houyi_sun_shooting_bow",
+      null
+    ],
+    "expectedLoadoutVersion": 0,
+    "status": 422,
+    "body": {
+      "ok": false,
+      "code": "EXCLUSIVE_GENERAL_MISMATCH",
+      "message": "houyi_sun_shooting_bow is exclusive to houyi"
+    }
+  },
+  {
+    "name": "duplicate",
+    "general": "houyi",
+    "slots": [
+      "qinggang_blade",
+      "qinggang_blade"
+    ],
+    "expectedLoadoutVersion": 1,
+    "status": 422,
+    "body": {
+      "ok": false,
+      "code": "DUPLICATE_WEAPON_IN_LOADOUT",
+      "message": "Cannot equip qinggang_blade twice"
+    }
+  },
+  {
+    "name": "locked",
+    "general": "houyi",
+    "slots": [
+      "armor_breaking_halberd",
+      null
+    ],
+    "expectedLoadoutVersion": 1,
+    "status": 422,
+    "body": {
+      "ok": false,
+      "code": "WEAPON_NOT_UNLOCKED",
+      "message": "Weapon armor_breaking_halberd is not unlocked"
+    }
+  }
+]

@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "accountVersion": 5,
+  "currentAccountSlots": [
+    "qinggang_blade",
+    "chasing_wind_bow"
+  ],
+  "matchStatus": "finished",
+  "frozenMatchSlots": [
+    "qinggang_blade",
+    "houyi_sun_shooting_bow"
+  ]
+}
