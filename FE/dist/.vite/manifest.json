@@ -13,8 +13,8 @@
       "_ui-vendor-ZGroOlBN.js"
     ]
   },
-  "_gaming-page-BR23xqSb.js": {
-    "file": "assets/gaming-page-BR23xqSb.js",
+  "_gaming-page-BOjwslWt.js": {
+    "file": "assets/gaming-page-BOjwslWt.js",
     "name": "gaming-page",
     "isDynamicEntry": true,
     "imports": [
@@ -24,7 +24,7 @@
       "_cx-BiP10JOn.js",
       "_use-modal-focus-D2CAbj4Z.js",
       "_ui-vendor-ZGroOlBN.js",
-      "_use-player-account-C95PUmC-.js",
+      "_use-player-account-6VJpKKgJ.js",
       "_combat-event-stream-gndJbacP.js"
     ],
     "dynamicImports": [
@@ -68,8 +68,8 @@
       "_react-vendor-VCeWi7p5.js"
     ]
   },
-  "_use-player-account-C95PUmC-.js": {
-    "file": "assets/use-player-account-C95PUmC-.js",
+  "_use-player-account-6VJpKKgJ.js": {
+    "file": "assets/use-player-account-6VJpKKgJ.js",
     "name": "use-player-account",
     "imports": [
       "_react-vendor-VCeWi7p5.js",
@@ -77,26 +77,26 @@
     ]
   },
   "components/phaser-battlefield.tsx": {
-    "file": "assets/phaser-battlefield-UK1ul25Y.js",
+    "file": "assets/phaser-battlefield-CUBxhTCR.js",
     "name": "phaser-battlefield",
     "src": "components/phaser-battlefield.tsx",
     "isDynamicEntry": true,
     "imports": [
       "_react-vendor-VCeWi7p5.js",
       "_phaser-vendor-BTGbtjln.js",
-      "_gaming-page-BR23xqSb.js",
+      "_gaming-page-BOjwslWt.js",
       "index.html",
       "_ui-vendor-ZGroOlBN.js",
       "_supabase-vendor-DiOMTyHL.js",
       "_realtime-vendor-Ba-X_5Ya.js",
       "_cx-BiP10JOn.js",
       "_use-modal-focus-D2CAbj4Z.js",
-      "_use-player-account-C95PUmC-.js",
+      "_use-player-account-6VJpKKgJ.js",
       "_combat-event-stream-gndJbacP.js"
     ]
   },
   "components/require-auth.tsx": {
-    "file": "assets/require-auth-D9mlgcbl.js",
+    "file": "assets/require-auth-B--LcfNn.js",
     "name": "require-auth",
     "src": "components/require-auth.tsx",
     "isDynamicEntry": true,
@@ -108,7 +108,7 @@
     ]
   },
   "index.html": {
-    "file": "assets/index-BE-Ptf0O.js",
+    "file": "assets/index-YS3VIffk.js",
     "name": "index",
     "src": "index.html",
     "isEntry": true,
@@ -120,7 +120,7 @@
     "dynamicImports": [
       "components/require-auth.tsx",
       "pages/tower-defense-frontend-page.tsx",
-      "_gaming-page-BR23xqSb.js",
+      "_gaming-page-BOjwslWt.js",
       "pages/meta-system-page.tsx",
       "pages/pvp-page.tsx"
     ],
@@ -129,21 +129,21 @@
     ]
   },
   "pages/meta-system-page.tsx": {
-    "file": "assets/meta-system-page-mrawuQgp.js",
+    "file": "assets/meta-system-page-DaINazQv.js",
     "name": "meta-system-page",
     "src": "pages/meta-system-page.tsx",
     "isDynamicEntry": true,
     "imports": [
       "_react-vendor-VCeWi7p5.js",
       "_cx-BiP10JOn.js",
-      "_use-player-account-C95PUmC-.js",
+      "_use-player-account-6VJpKKgJ.js",
       "_ui-vendor-ZGroOlBN.js",
       "index.html",
       "_supabase-vendor-DiOMTyHL.js"
     ]
   },
   "pages/pvp-page.tsx": {
-    "file": "assets/pvp-page-DoTBGjVt.js",
+    "file": "assets/pvp-page-CpWNfpYb.js",
     "name": "pvp-page",
     "src": "pages/pvp-page.tsx",
     "isDynamicEntry": true,
@@ -157,7 +157,7 @@
     ]
   },
   "pages/tower-defense-frontend-page.tsx": {
-    "file": "assets/tower-defense-frontend-page-D5dLWvmv.js",
+    "file": "assets/tower-defense-frontend-page-Bnjq2kLo.js",
     "name": "tower-defense-frontend-page",
     "src": "pages/tower-defense-frontend-page.tsx",
     "isDynamicEntry": true,

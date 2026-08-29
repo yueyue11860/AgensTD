@@ -1,0 +1,35 @@
+- main [ref=f1e3]:
+  - generic [ref=f1e4]:
+    - generic [ref=f1e5]:
+      - generic [ref=f1e6]: "TACTICAL_GATEWAY :: SUPABASE NODE"
+      - generic [ref=f1e7]: ● ONLINE
+    - generic [ref=f1e9]:
+      - paragraph [ref=f1e30]: ">_ MYRIAD_TD :: TACTICAL GATEWAY v2.6.0 ............... [INIT]"
+      - paragraph [ref=f1e31]: ">_ KERNEL_MODULES loading ................................ [ OK ]"
+      - paragraph [ref=f1e32]: ">_ SEC_LAYER :: asymmetric cipher established ........... [ OK ]"
+      - paragraph [ref=f1e33]: ">_ SUPABASE_AUTH :: identity service online ............. [ OK ]"
+      - paragraph [ref=f1e34]: ">_ WAITING FOR IDENTITY VERIFICATION .................... [HALT]"
+    - generic [ref=f1e11]:
+      - generic [ref=f1e12]:
+        - heading "MYRIAD TD" [level=1] [ref=f1e13]
+        - paragraph [ref=f1e14]: < 零域身份终端 >
+      - generic [ref=f1e15]:
+        - button "登录" [ref=f1e16]
+        - button "创建账号" [ref=f1e17]
+      - generic [ref=f1e18]:
+        - generic [ref=f1e19]:
+          - generic [ref=f1e20]: EMAIL / 邮箱
+          - textbox "EMAIL / 邮箱" [ref=f1e21]:
+            - /placeholder: commander@example.com
+            - text: 1186063801@qq.com
+        - generic [ref=f1e22]:
+          - generic [ref=f1e23]: PASSWORD / 密码
+          - textbox "PASSWORD / 密码" [ref=f1e24]:
+            - /placeholder: 至少 6 位
+            - text: invalid-final-check
+        - alert [ref=f1e35]: Invalid login credentials
+        - button "[ 进入战区 ]" [ref=f1e25]
+      - paragraph [ref=f1e26]: "AUTH_PROVIDER :: SUPABASE AUTH · JWT · TLS 1.3"
+    - generic [ref=f1e27]:
+      - generic [ref=f1e28]: "SYS :: SECTOR ZERO"
+      - generic [ref=f1e29]: "CLEARANCE :: DELTA"

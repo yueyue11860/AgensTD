@@ -841,6 +841,39 @@ function normalizeSyncState(payload: unknown, playerId: string): ServerDrivenGam
   }
 }
 
+/**
+ * LEVEL_SELECTED is an ephemeral socket event.  A reconnect starts with a
+ * full authoritative snapshot instead, so recover the same presentation
+ * metadata from the persisted PVE ruleset embedded in that snapshot.
+ */
+function selectedLevelInfoFromNetworkState(payload: NetworkGameState): SelectedLevelInfo | null {
+  const pve = isObject(payload.pve) ? payload.pve : null
+  // Waiting snapshots carry the default level-1 config so the client can
+  // render a stable schema before the host starts a match.  That config is
+  // not an active selection; only recover presentation metadata after the
+  // authoritative PVE runtime has actually started (or finished).
+  if (!pve || (pve.phase !== 'running' && pve.phase !== 'finished')) return null
+  const config = pve && isObject(pve.configSnapshot) ? pve.configSnapshot : null
+  const levelId = config && typeof config.levelId === 'number' ? config.levelId : null
+  if (levelId === null) return null
+
+  const level = LEVEL_DEFS.find((candidate) => candidate.levelId === levelId)
+  if (!level) return null
+  const difficulty: PveDifficulty = config?.difficulty === 'normal' || config?.difficulty === 'hard'
+    ? config.difficulty
+    : 'easy'
+
+  return {
+    levelId,
+    difficulty,
+    label: level.label,
+    description: level.description,
+    waveCount: config && typeof config.maxWaves === 'number' ? config.maxWaves : 0,
+    targetClearRate: level.clearRate,
+    minPlayers: level.minPlayers,
+  }
+}
+
 function isNetworkGameState(value: unknown): value is NetworkGameState {
   return isObject(value)
     && typeof value.tick === 'number'
@@ -1266,6 +1299,11 @@ export function GamingPage() {
       const nextState = normalizeSyncState(networkState, playerId)
       if (nextState) {
         setGameState(nextState)
+        // The server does not replay LEVEL_SELECTED on reconnect.  Restore
+        // the stage theme from the authoritative ruleset so the battlefield
+        // never falls back to the legacy/default background after a refresh.
+        const recoveredLevelInfo = selectedLevelInfoFromNetworkState(networkState)
+        if (recoveredLevelInfo) setSelectedLevelInfo(recoveredLevelInfo)
         setClientActionIntents(current => isFull
           ? []
           : reconcileClientActionIntents(current, nextState.tick, Date.now()))

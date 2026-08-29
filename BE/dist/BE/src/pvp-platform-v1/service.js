@@ -278,7 +278,7 @@ class PvpPlatformService {
         if (!result.ok || !result.value)
             throw new types_1.PvpPlatformError(result.code, result.code, result.code === 'PROPOSAL_NOT_FOUND' ? 404 : 409);
         if ('matchId' in result.value)
-            this.activateAcceptedMatch(result.value);
+            await this.activateAcceptedMatch(result.value);
         const ticket = this.findPlayerTicket(principal.playerId, proposalId);
         return {
             ticket,
@@ -336,9 +336,14 @@ class PvpPlatformService {
             const fingerprint = JSON.stringify({ roomName: input.roomName, password: input.password ?? null, spectatorsAllowed: input.spectatorsAllowed });
             const previous = this.customRoomReceipts.get(key);
             if (previous) {
-                if (previous.fingerprint !== fingerprint)
-                    throw new types_1.PvpPlatformError('REQUEST_ID_CONFLICT', 'requestId was reused with a different room payload', 409);
-                return this.getRoom(previous.roomId);
+                if (!this.customRooms.has(previous.roomId)) {
+                    this.customRoomReceipts.delete(key);
+                }
+                else {
+                    if (previous.fingerprint !== fingerprint)
+                        throw new types_1.PvpPlatformError('REQUEST_ID_CONFLICT', 'requestId was reused with a different room payload', 409);
+                    return this.getRoom(previous.roomId);
+                }
             }
         }
         this.assertNoActiveMatch(principal.playerId);
@@ -422,7 +427,7 @@ class PvpPlatformService {
             const matchId = `pvp-custom-${Date.now()}-${(0, node_crypto_1.randomUUID)().slice(0, 6)}`;
             room.matchId = matchId;
             const acceptedAt = Date.now();
-            this.activateMatch({
+            await this.activateMatch({
                 matchId,
                 mode: 'custom_1v1',
                 region: REGION,
@@ -443,6 +448,10 @@ class PvpPlatformService {
         this.matchmaking.advance();
         this.matchmaking.prune();
         for (const live of this.liveMatches.values()) {
+            // A fenced/expired owner must stop advancing authority immediately;
+            // only a successor holding the lease may tick this match.
+            if (!live.lease || Date.parse(live.lease.leaseExpiresAt) <= this.nowMs())
+                continue;
             // `voided` is terminal for simulation but not for persistence. Retry a
             // failed no-contest settlement on subsequent host ticks until an
             // immutable detail exists; otherwise the reaper can never reclaim it.
@@ -556,15 +565,6 @@ class PvpPlatformService {
             }
         }
     }
-    async ensureLeaseAndCheckpoint(live) {
-        try {
-            live.lease = await this.store.claimActiveMatchLease({ matchId: live.runtime.snapshot().matchId, holderId: this.holderId, ttlMs: this.activeMatchLeaseTtlMs });
-            await this.queueCheckpoint(live);
-        }
-        catch (error) {
-            console.error(`PVP active match lease claim failed for ${live.runtime.snapshot().matchId}:`, error);
-        }
-    }
     queueCheckpoint(live) {
         live.checkpointSave = live.checkpointSave.then(async () => {
             if (!live.lease)
@@ -649,11 +649,10 @@ class PvpPlatformService {
                 .find(match => match.proposalId === proposalId)?.players.find(player => player.playerId === playerId)?.ticketId;
         return ticketId ? this.matchmaking.getTicket(ticketId) : null;
     }
-    activateAcceptedMatch(match) {
-        this.activateMatch(match);
-        this.matchmaking.consumeAcceptedMatch(match.matchId);
+    async activateAcceptedMatch(match) {
+        await this.activateMatch(match);
     }
-    activateMatch(match) {
+    async activateMatch(match) {
         if (this.liveMatches.has(match.matchId))
             return;
         const runtime = new runtime_1.PvpMatchRuntime({
@@ -685,8 +684,14 @@ class PvpPlatformService {
             lease: null,
             checkpointSave: Promise.resolve(),
         };
-        this.liveMatches.set(match.matchId, live);
-        void this.ensureLeaseAndCheckpoint(live);
+        try {
+            live.lease = await this.store.claimActiveMatchLease({ matchId: match.matchId, holderId: this.holderId, ttlMs: this.activeMatchLeaseTtlMs });
+            this.liveMatches.set(match.matchId, live);
+            await this.queueCheckpoint(live);
+        }
+        catch {
+            throw new types_1.PvpPlatformError('PVP_LEASE_UNAVAILABLE', 'PVP 对局暂时无法取得权威租约', 503);
+        }
     }
     publishMatchState(matchId, live) {
         const subscribers = this.matchSubscribers.get(matchId);

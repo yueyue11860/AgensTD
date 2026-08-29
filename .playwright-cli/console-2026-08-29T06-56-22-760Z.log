@@ -1,0 +1,3 @@
+[   33211ms] [ERROR] Failed to load resource: the server responded with a status of 400 (Bad Request) @ https://www.myriadtd.online/supabase/auth/v1/token?grant_type=password:0
+[  218683ms] [ERROR] Failed to load resource: the server responded with a status of 400 (Bad Request) @ https://www.myriadtd.online/supabase/auth/v1/token?grant_type=password:0
+[  314112ms] [ERROR] Failed to load resource: the server responded with a status of 400 (Bad Request) @ https://www.myriadtd.online/supabase/auth/v1/token?grant_type=password:0

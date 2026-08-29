@@ -504,8 +504,12 @@ class PlayerAccountService {
                 gold: Number.isSafeInteger(legacyWallet.gold) && legacyWallet.gold >= 0 ? legacyWallet.gold : 0,
                 honor: Number.isSafeInteger(legacyWallet.honor) && legacyWallet.honor >= 0 ? legacyWallet.honor : 0,
             };
-            if (!hasValidPveProgress)
+            // Older schema progress was client-authored and is intentionally not
+            // trusted; only preserve a valid payload when upgrading the current
+            // schema for the additive honor-wallet field.
+            if (candidate.schemaVersion !== types_1.PLAYER_ACCOUNT_SCHEMA_VERSION || !hasValidPveProgress) {
                 next.pveProgress = (0, unlock_logic_1.createDefaultPveProgress)();
+            }
             for (const settlement of Object.values(next.settlementsById)) {
                 if (typeof settlement.progressionUpdated !== 'boolean')
                     settlement.progressionUpdated = false;

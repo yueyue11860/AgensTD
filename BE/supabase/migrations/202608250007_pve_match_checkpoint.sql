@@ -59,7 +59,11 @@ begin
   if p_ttl_ms < 5000 then raise exception 'PVE_LEASE_TTL_INVALID'; end if;
   insert into public.pve_match_leases as lease(match_id, room_id, holder_id, generation, lease_expires_at, updated_at)
   values (p_match_id, p_room_id, p_holder_id, 1, clock_timestamp() + make_interval(secs => p_ttl_ms / 1000.0), clock_timestamp())
-  on conflict (match_id) do update set
+  -- The function exposes a return-table column named match_id.  Qualifying
+  -- the conflict target via the primary-key constraint avoids PostgreSQL
+  -- resolving `match_id` against that PL/pgSQL output variable instead of the
+  -- table column (which otherwise aborts every new PVE match activation).
+  on conflict on constraint pve_match_leases_pkey do update set
     room_id = excluded.room_id,
     holder_id = excluded.holder_id,
     generation = case
