@@ -55,16 +55,19 @@ export interface ResourceState {
   fortressMax?: number
 }
 
+/** @deprecated Retired PVE wave-runtime action. Server ingress rejects it. */
 export interface BuildTowerAction extends GridPosition {
   action: 'BUILD_TOWER'
   type: string
 }
 
+/** @deprecated Retired PVE wave-runtime action. Server ingress rejects it. */
 export interface UpgradeTowerAction {
   action: 'UPGRADE_TOWER'
   towerId: string
 }
 
+/** @deprecated Retired PVE wave-runtime action. Server ingress rejects it. */
 export interface SellTowerAction {
   action: 'SELL_TOWER'
   towerId: string

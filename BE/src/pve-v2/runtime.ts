@@ -34,6 +34,7 @@ import {
   getGeneralLevelValue,
   resolveGeneralStats,
 } from '../core/hero-v1/catalog'
+import { DEFAULT_STARTER_GENERAL_IDS } from '../account-v1/service'
 import {
   planGeneralCombatFrame,
   planGeneralPassiveTrigger,
@@ -379,6 +380,20 @@ function normalizeGeneralSelection(
   const unlockedSet = new Set(unlocked)
   if (selected.some((id) => !unlockedSet.has(id))) throw new Error('SELECTED_GENERAL_NOT_UNLOCKED')
   return { unlockedGeneralIds: unlocked, selectedGeneralIds: selected }
+}
+
+/** Recompute the legal character glyphs for a frozen general selection. */
+function selectionGlyphs(
+  selectedGeneralIds: readonly string[],
+  catalog: Readonly<Record<string, GeneralDefinition>>,
+): ReadonlySet<string> {
+  const glyphs = new Set<string>()
+  for (const generalId of selectedGeneralIds) {
+    const definition = catalog[generalId]
+    if (!definition) continue
+    for (const glyph of definition.recipe.glyphs) glyphs.add(glyph)
+  }
+  return glyphs
 }
 
 export class PveGameRuntime {
@@ -898,12 +913,34 @@ export class PveGameRuntime {
     for (const playerId of allPlayerIds) this.synergyEffects.removePlayer(playerId)
     this.players.clear()
     for (const stored of checkpoint.players) {
+      // Build snapshots are authoritative when restoring a room. Older
+      // checkpoints may have been created before the unlock gate and contain
+      // a full-catalog token map (including 佛/净/悟); filter those tokens
+      // before they can be recruited after a restart.
+      const configuredSelection = this.generalSelections[stored.playerId]
+      const checkpointSelection = stored.selectedGeneralIds && stored.selectedGeneralIds.length > 0
+        ? {
+            unlockedGeneralIds: stored.unlockedGeneralIds ?? stored.selectedGeneralIds,
+            selectedGeneralIds: stored.selectedGeneralIds,
+          }
+        : {
+            unlockedGeneralIds: [...DEFAULT_STARTER_GENERAL_IDS],
+            selectedGeneralIds: [...DEFAULT_STARTER_GENERAL_IDS],
+          }
+      const normalizedSelection = normalizeGeneralSelection(
+        configuredSelection ?? checkpointSelection,
+        this.generalCatalog,
+      )
+      const allowedGlyphs = selectionGlyphs(normalizedSelection.selectedGeneralIds, this.generalCatalog)
+      const remainingCharacterTokens = new Map(
+        stored.remainingCharacterTokens.filter(([glyph, count]) => allowedGlyphs.has(glyph) && count > 0),
+      )
       const player: PlayerRuntime = {
         ...structuredClone(stored),
-        unlockedGeneralIds: stored.unlockedGeneralIds ?? Object.keys(this.generalCatalog).sort(),
-        selectedGeneralIds: stored.selectedGeneralIds ?? Object.keys(this.generalCatalog).sort(),
+        unlockedGeneralIds: normalizedSelection.unlockedGeneralIds,
+        selectedGeneralIds: normalizedSelection.selectedGeneralIds,
         board: new Map(stored.board.map(([key, value]) => [key, structuredClone(value)])),
-        remainingCharacterTokens: new Map(stored.remainingCharacterTokens),
+        remainingCharacterTokens,
         clearedWaves: new Set(stored.clearedWaves),
       }
       this.players.set(player.playerId, player)

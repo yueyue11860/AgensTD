@@ -97,9 +97,7 @@ for (const criticalDirectory of ['assets', join('art', 'backgrounds')]) {
   }
 }
 
-// Public sprites include a legacy, unreferenced source archive. Do not make that
-// archive a false-positive build blocker, but gate every public image path that
-// the emitted JS/CSS can actually request (including /sprites/**).
+// Gate every public image path that the emitted JS/CSS can actually request.
 const emittedCodeFiles = (await walkFiles(DIST_DIR)).filter(file => ['.css', '.js'].includes(extname(file)))
 for (const emittedFile of emittedCodeFiles) {
   const code = await readFile(emittedFile, 'utf8')

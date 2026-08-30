@@ -92,7 +92,6 @@ class Room {
             laneRoutes: this.layout.laneRoutes,
             spawnPoint: this.layout.primarySpawn,
             basePoint: this.layout.hub,
-            spawnMultiplier: 1,
         });
     }
     requiresPassword() {

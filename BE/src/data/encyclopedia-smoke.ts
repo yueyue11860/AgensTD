@@ -32,8 +32,31 @@ function main(): void {
 
   const firstWeapon = payload.weapons[0]
   assert.equal(typeof firstWeapon.unlocked, 'boolean')
-  assert.equal(payload.minions.every((entry) => entry.unlocked), true)
-  assert.equal(payload.bosses.every((entry) => entry.unlocked), true)
+  // New accounts receive the complete PVE V2 catalog, but encounter-driven
+  // entries remain grey/locked until a settlement records the wave reached.
+  assert.equal(payload.minions.every((entry) => entry.unlocked === false), true)
+  assert.equal(payload.bosses.every((entry) => entry.unlocked === false), true)
+
+  // Simulate a run that reached wave 5 of stage 1.  The adapter should unlock
+  // ordinary waves 1-5 and only the stage-1 Boss node at wave 5.
+  const encounter = {
+    settlementId: 'encounter:encyclopedia-smoke',
+    matchId: 'encounter', playerId: account.playerId, reason: 'defeat',
+    highestCompletedWave: 4, highestEncounteredWave: 5,
+    rewardTier: 'none', retainedWeaponFragments: {}, goldGranted: 0,
+    entitlementIds: [], stageSelection: { levelId: 1, difficulty: 'easy' },
+    progressionUpdated: false, status: 'committed', committedAt: new Date().toISOString(),
+    accountVersionAfter: account.version + 1,
+  }
+  account.settlementsById[encounter.settlementId] = encounter as never
+  const encountered = buildEncyclopediaCatalog(account)
+  assert.deepEqual(
+    encountered.minions.map((entry) => entry.unlocked),
+    WAVE_MINION_CATALOG.map((entry) => entry.waveNumber <= 5),
+  )
+  const stageOneWaveFiveBoss = BOSS_DEFINITIONS.find((entry) => entry.levelId === 1 && entry.waveNumber === 5)
+  assert.equal(stageOneWaveFiveBoss ? encountered.bosses.find((entry) => entry.entryId === stageOneWaveFiveBoss.bossDefinitionId)?.unlocked : false, true)
+  assert.equal(encountered.bosses.filter((entry) => entry.unlocked).length, 1)
 
   console.log('encyclopedia smoke checks passed')
 }

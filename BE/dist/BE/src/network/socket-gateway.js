@@ -53,13 +53,6 @@ function parseStageSelection(payload) {
     const selection = { levelId: candidate.levelId, difficulty };
     return (0, pve_stage_config_1.isPveStageSelection)(selection) ? selection : null;
 }
-function isBuildTowerPayload(payload) {
-    return typeof payload === 'object'
-        && payload !== null
-        && typeof payload.x === 'number'
-        && typeof payload.y === 'number'
-        && typeof payload.towerType === 'string';
-}
 class SocketGateway {
     telemetry;
     actionLimiter;
@@ -175,9 +168,6 @@ class SocketGateway {
         });
         socket.on('SEND_ACTION', (payload) => {
             void this.handleActionSubmission(socket, payload);
-        });
-        socket.on('BUILD_TOWER', (payload) => {
-            this.handleBuildTower(socket, payload);
         });
         socket.on('START_MATCH', (payload) => {
             this.handleStartMatch(socket, payload);
@@ -503,18 +493,6 @@ class SocketGateway {
         socket.emit('ACTION_ACCEPTED', acceptedPayload);
         socket.emit('action_accepted', acceptedPayload);
     }
-    handleBuildTower(socket, payload) {
-        if (!isBuildTowerPayload(payload)) {
-            this.emitEngineError(socket, 'BAD_PAYLOAD', '缺少必要参数 x、y、towerType');
-            return;
-        }
-        void this.handleActionSubmission(socket, {
-            action: 'BUILD_TOWER',
-            x: payload.x,
-            y: payload.y,
-            type: payload.towerType,
-        });
-    }
     handleStartMatch(socket, payload) {
         const joinedContext = this.getJoinedContext(socket);
         if (!joinedContext) {
@@ -650,7 +628,7 @@ class SocketGateway {
             label: levelConfig.label,
             description: levelConfig.description,
             targetClearRate: levelConfig.targetClearRate,
-            waveCount: levelConfig.waves.length,
+            waveCount: level_config_1.PVE_WAVE_COUNT,
             minPlayers: levelConfig.minPlayers,
         };
         this.io.to(room.id).emit('LEVEL_SELECTED', levelSelectedPayload);
@@ -918,6 +896,7 @@ class SocketGateway {
                         playerId: player.playerId,
                         reason: officialVictory ? 'victory' : 'defeat',
                         highestCompletedWave: player.highestCompletedWave,
+                        highestEncounteredWave: state.pve.currentWave,
                         officialVictory,
                         retainedWeaponFragments: frozenRewards.fragmentBalances,
                         stageSelection: selection,
@@ -998,6 +977,7 @@ class SocketGateway {
                 playerId,
                 reason: 'disconnect_exit',
                 highestCompletedWave: player.highestCompletedWave,
+                highestEncounteredWave: pve.currentWave,
                 officialVictory: false,
                 retainedWeaponFragments: frozenRewards.fragmentBalances,
                 stageSelection: selection,

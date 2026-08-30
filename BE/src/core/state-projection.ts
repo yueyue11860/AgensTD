@@ -1,8 +1,6 @@
 import type { ServerConfig } from '../config/server-config'
 import type { GameState } from '../domain/game-state'
 import type { FrontendGameCell, FrontendGameState } from '../domain/frontend-game-state'
-import { enemyCatalog } from '../domain/enemy-catalog'
-import { getNextTowerCatalogEntryById, towerCatalog } from '../domain/tower-catalog'
 import type { EntityDelta, GameNoticeUpdate, GameStatePatch, GameUiState, GameUiStateUpdate } from '../../../shared/contracts/game'
 import { createPveMatchStatePatch } from '../../../shared/contracts/pve-state-delta'
 
@@ -279,41 +277,22 @@ function buildCells(state: GameState): FrontendGameCell[] {
   return projectedCells
 }
 
-function getEnemyProgress(state: GameState, enemy: GameState['enemies'][number]) {
-  const totalDistance = Math.abs(state.map.base.x - state.map.spawn.x) + Math.abs(state.map.base.y - state.map.spawn.y)
-  const remainingDistance = Math.abs(state.map.base.x - enemy.x) + Math.abs(state.map.base.y - enemy.y)
-
-  if (totalDistance === 0) {
-    return 1
-  }
-
-  return Math.max(0, Math.min(1, 1 - remainingDistance / totalDistance))
-}
-
-function buildFrontendBuildPalette(state: GameState, config: ServerConfig): FrontendGameState['buildPalette'] {
-  const primaryPlayer = state.players[0] ?? null
-
-  return Object.values(towerCatalog).map((entry, index) => ({
-    type: entry.type,
-    label: entry.label,
-    description: entry.description,
-    costLabel: `${entry.cost} 金币`,
-    hotkey: String(index + 1),
-    disabled: (primaryPlayer?.gold ?? config.playerStartingGold) < entry.cost,
-    reason: (primaryPlayer?.gold ?? config.playerStartingGold) < entry.cost ? '金币不足' : undefined,
-  }))
+function buildFrontendBuildPalette(): FrontendGameState['buildPalette'] {
+  return []
 }
 
 function buildFrontendActionBar(): FrontendGameState['actionBar'] {
   return {
-    title: '建议动作',
-    summary: '防御塔会按各自策略选择目标；升级与出售暂未实现。',
+    title: 'PVE V2',
+    summary: '使用征兵、部署与神将动作进行战斗。',
     actions: [],
   }
 }
 
 function projectFrontendRuntimeState(state: GameState, config: ServerConfig): FrontendRuntimeState {
   const primaryPlayer = state.players[0] ?? null
+  const pveEnemyCount = state.pve?.enemyCount ?? 0
+  const pveCapacity = state.pve?.maxCapacity ?? state.maxCapacity
 
   return {
     tick: state.tick,
@@ -323,80 +302,23 @@ function projectFrontendRuntimeState(state: GameState, config: ServerConfig): Fr
       gold: primaryPlayer?.gold ?? config.playerStartingGold,
       mana: 0,
       manaLimit: 100,
-      heat: Math.min(state.towers.length * 5, 100),
+      heat: 0,
       heatLimit: 100,
       repair: 0,
-      threat: state.enemies.length * 10,
-      fortress: Math.max(0, state.maxCapacity - state.enemies.length),
-      fortressMax: state.maxCapacity,
+      threat: pveEnemyCount * 10,
+      fortress: Math.max(0, pveCapacity - pveEnemyCount),
+      fortressMax: pveCapacity,
     },
     room: {
       playerCount: state.playerCount,
-      enemyCount: state.enemies.length,
-      maxCapacity: state.maxCapacity,
+      enemyCount: pveEnemyCount,
+      maxCapacity: pveCapacity,
       overloadTicks: state.overloadTicks,
       overloadCountdownSec: state.overloadCountdownSec,
       totalGold: state.players.reduce((sum, player) => sum + player.gold, 0),
     },
-    towers: state.towers.map((tower) => {
-      const towerDefinition = towerCatalog[tower.type]
-      const nextTowerDefinition = getNextTowerCatalogEntryById(tower.type)
-      const towerOwner = state.players.find((player) => player.id === tower.ownerId)
-      const canUpgrade = Boolean(nextTowerDefinition) && (towerOwner?.gold ?? 0) >= (nextTowerDefinition?.cost ?? 0)
-
-      return {
-        id: tower.id,
-        type: tower.type,
-        name: towerDefinition?.label ?? tower.type,
-        level: towerDefinition?.level ?? 1,
-        status: tower.cooldownTicks > 0 ? 'cooldown' : 'idle',
-        cell: { x: tower.x, y: tower.y },
-        footprint: { width: tower.width, height: tower.height },
-        range: tower.range,
-        damage: tower.damage,
-        attackRate: typeof tower.fireRateTicks === 'number' ? tower.fireRateTicks : undefined,
-        hp: 100,
-        maxHp: 100,
-        tags: [tower.type],
-        commands: [
-          {
-            id: `${tower.id}-upgrade`,
-            label: '升级',
-            description: nextTowerDefinition
-              ? `升级到 ${nextTowerDefinition.label}，费用 ${nextTowerDefinition.cost} 金币。`
-              : '当前已是最高等级。',
-            payload: { action: 'UPGRADE_TOWER', towerId: tower.id },
-            disabled: !canUpgrade,
-            reason: nextTowerDefinition
-              ? ((towerOwner?.gold ?? 0) < nextTowerDefinition.cost ? '金币不足。' : undefined)
-              : '当前已是最高等级。',
-          },
-          {
-            id: `${tower.id}-sell`,
-            label: '出售',
-            description: '出售逻辑尚未在后端实现。',
-            payload: { action: 'SELL_TOWER', towerId: tower.id },
-            disabled: true,
-            reason: '后端暂未实现出售。',
-          },
-        ],
-      }
-    }),
-    enemies: state.enemies.map((enemy) => {
-      const enemyConfig = enemyCatalog[enemy.kind]
-
-      return {
-        id: enemy.id,
-        type: enemy.kind,
-        name: enemyConfig?.label ?? enemy.kind,
-        position: { x: enemy.x, y: enemy.y },
-        hp: enemy.hp,
-        maxHp: enemy.maxHp,
-        threat: enemyConfig?.threat ?? 'low',
-        intent: 'advance',
-        progress: getEnemyProgress(state, enemy),
-      }
-    }),
+    towers: [],
+    enemies: [],
     wave: {
       index: state.wave.index,
       label: `${state.wave.label} · 剩余刷怪 ${state.wave.remainingSpawns}`,
@@ -417,14 +339,14 @@ function buildFrontendNotices(state: GameState): NonNullable<FrontendGameState['
   return state.players.length === 0
     ? ['等待玩家或 Agent 连接网关。']
     : [
-      `当前 ${state.playerCount} 人房间，刷怪容量 ${state.enemies.length}/${state.maxCapacity}${state.overloadCountdownSec > 0 ? `，超载倒计时 ${state.overloadCountdownSec}s` : ''}。`,
+      `当前 ${state.playerCount} 人房间，刷怪容量 ${state.pve?.enemyCount ?? 0}/${state.pve?.maxCapacity ?? state.maxCapacity}${state.overloadCountdownSec > 0 ? `，超载倒计时 ${state.overloadCountdownSec}s` : ''}。`,
       ...(resultNotice ? [resultNotice] : []),
     ]
 }
 
 export function projectFrontendUiState(state: GameState, config: ServerConfig): GameUiState {
   return {
-    buildPalette: buildFrontendBuildPalette(state, config),
+    buildPalette: buildFrontendBuildPalette(),
     actionBar: buildFrontendActionBar(),
   }
 }

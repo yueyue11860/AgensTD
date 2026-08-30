@@ -127,6 +127,12 @@ export interface MatchPlayerSettlement {
   playerId: string
   reason: SettlementReason
   highestCompletedWave: number
+  /**
+   * Highest wave actually entered by the player.  This is optional so
+   * settlements written before encounter tracking was introduced remain
+   * readable; the account service derives a conservative legacy fallback.
+   */
+  highestEncounteredWave?: number
   rewardTier: SettlementRewardTier
   retainedWeaponFragments: Record<string, number>
   goldGranted: number

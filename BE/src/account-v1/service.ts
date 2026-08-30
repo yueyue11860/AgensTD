@@ -76,6 +76,8 @@ export interface SettleMatchInput {
   playerId: string
   reason: SettlementReason
   highestCompletedWave: number
+  /** Authoritative wave currently in progress when the room is settled. */
+  highestEncounteredWave?: number
   /** 只能由权威房间结束事件设置。 */
   officialVictory: boolean
   /** 由 Room 在点火时锁定，客户端不得传入或改写。 */
@@ -180,6 +182,29 @@ function assertNonNegativeInteger(value: number, field: string): void {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new AccountDomainError('INVALID_ACCOUNT_MUTATION', `${field} must be a non-negative safe integer`)
   }
+}
+
+/**
+ * Normalize the encounter marker used by the encyclopedia.  A victory is
+ * authoritative evidence that the player reached the final wave.  Older
+ * callers only reported completed waves, so a non-victory settlement falls
+ * back to the next wave as the best available encounter estimate.
+ */
+function normalizeHighestEncounteredWave(input: Pick<SettleMatchInput, 'highestCompletedWave' | 'highestEncounteredWave' | 'reason' | 'officialVictory'>): number {
+  const completed = input.highestCompletedWave
+  // A server-confirmed victory is conclusive evidence that the final wave was
+  // entered; do not let a stale snapshot (for example currentWave=0 during the
+  // result transition) hide that encounter.
+  const candidate = input.officialVictory || input.reason === 'victory'
+    ? 20
+    : (input.highestEncounteredWave ?? Math.min(20, completed + 1))
+  if (!Number.isInteger(candidate) || candidate < 0 || candidate > 20 || candidate < completed) {
+    throw new AccountDomainError(
+      'INVALID_SETTLEMENT',
+      'highestEncounteredWave must be an integer from highestCompletedWave to 20',
+    )
+  }
+  return candidate
 }
 
 function isPveProgressPayload(value: unknown): boolean {
@@ -376,6 +401,7 @@ export class PlayerAccountService {
     if (input.officialVictory && !input.stageSelection) {
       throw new AccountDomainError('INVALID_SETTLEMENT', 'official PVE victory requires the server-locked stageSelection')
     }
+    const highestEncounteredWave = normalizeHighestEncounteredWave(input)
     const settlementId = `${input.matchId}:${input.playerId}`
     const fingerprint = stableStringify({ ...input, retainedWeaponFragments: input.retainedWeaponFragments })
 
@@ -388,6 +414,10 @@ export class PlayerAccountService {
           && oldSettlement.playerId === input.playerId
           && oldSettlement.reason === input.reason
           && oldSettlement.highestCompletedWave === input.highestCompletedWave
+          && (oldSettlement.highestEncounteredWave
+            ?? (oldSettlement.reason === 'victory'
+              ? 20
+              : Math.min(20, oldSettlement.highestCompletedWave + 1))) === highestEncounteredWave
           && stableStringify(oldSettlement.stageSelection ?? null) === stableStringify(input.stageSelection ?? null)
           && stableStringify(oldSettlement.retainedWeaponFragments) === stableStringify(input.retainedWeaponFragments)
         if (!sameSettlement) {
@@ -455,6 +485,7 @@ export class PlayerAccountService {
         playerId: input.playerId,
         reason: input.reason,
         highestCompletedWave: input.highestCompletedWave,
+        highestEncounteredWave,
         rewardTier: tier,
         retainedWeaponFragments: { ...input.retainedWeaponFragments },
         goldGranted,

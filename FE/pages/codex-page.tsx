@@ -9,42 +9,25 @@ type CodexTab = 'generals' | 'items' | 'monsters' | 'bosses'
 const ARCHETYPE_LABEL: Record<GeneralArchetype, string> = { physical: '物理', magic: '魔法', summon: '召唤', control: '控制' }
 const QUALITY_LABEL: Record<string, string> = { green: '绿', blue: '蓝', purple: '紫', orange: '橙', red: '红' }
 
-const MONSTERS = [
-  ['Grunt', '机械杂兵', '基础血量，中等移速，无护甲。', '低'], ['Speedster', '猎犬/刺客', '极低血量，极快移速。', '中'],
-  ['Tank', '重装行者', '高血量，高护甲，慢移速。', '高'], ['Shielded', '能量护盾兵', '自带高额护盾。', '中'],
-  ['Cleanser', '净化者', '周期性清空 Debuff。', '高'], ['Grunt-Armored', '装甲杂兵', '高护甲普通单位。', '中'],
-  ['Tank-Fortress', '堡垒重装', '极高护甲慢速单位。', '高'], ['Swarm-Drone', '虫群无人机', '低血量群体单位。', '低'],
-  ['Swarm-Runner', '虫群突进体', '高速群体单位。', '中'], ['Cleanser-Pro', '净化者 Pro', '死亡后分裂的净化精英。', '高'],
-  ['runner', 'Runner', '兼容旧版波次配置的标准单位。', '低'], ['swift', 'Swift', '兼容旧版波次配置的高速单位。', '中'],
-  ['brute', 'Brute', '兼容旧版波次配置的重装单位。', '高'], ['Lord-01', '矩阵领主 I', '高血量首领。', 'Boss'],
-  ['Lord-02', '矩阵领主 II', '高护甲高护盾首领。', 'Boss'], ['Lord-03', '矩阵领主 III', '虫群首领。', 'Boss'],
-] as const
-
-const BOSSES = [
-  ['山魈先锋', 1, 5, '压力'], ['水帘魔猿', 1, 10, '生存'], ['花果魔帅', 1, 15, '支援'], ['混世魔王', 1, 20, '混合'],
-  ['黑风熊先锋', 2, 5, '压力'], ['白花蛇怪', 2, 10, '生存'], ['凌虚子', 2, 15, '混合'], ['黑熊精', 2, 20, '生存'],
-  ['虎先锋', 3, 5, '压力'], ['黄风妖将', 3, 10, '支援'], ['黄毛貂鼠', 3, 15, '混合'], ['黄风大圣', 3, 20, '压力'],
-  ['河底怨魂', 4, 5, '生存'], ['九骷髅妖', 4, 10, '支援'], ['流沙妖将', 4, 15, '混合'], ['卷帘大将', 4, 20, '生存'],
-  ['骨灵侍女', 5, 5, '支援'], ['白骨化身', 5, 10, '生存'], ['白骨夫人', 5, 15, '混合'], ['白骨精', 5, 20, '生存'],
-  ['精细鬼', 6, 5, '压力'], ['伶俐虫', 6, 10, '混合'], ['银角大王', 6, 15, '生存'], ['金角大王', 6, 20, '混合'],
-  ['蛛丝侍女', 7, 5, '支援'], ['蛛女长姐', 7, 10, '生存'], ['七蛛女', 7, 15, '支援'], ['百眼魔君', 7, 20, '混合'],
-  ['毒花娘子', 8, 5, '支援'], ['琵琶洞主', 8, 10, '生存'], ['倒马毒后', 8, 15, '压力'], ['蝎子精', 8, 20, '混合'],
-  ['青狮先锋', 9, 5, '压力'], ['白象大王', 9, 10, '生存'], ['金翅大鹏', 9, 15, '压力'], ['狮驼三圣', 9, 20, '混合'],
-  ['火云先锋', 10, 5, '压力'], ['铁扇公主', 10, 10, '支援'], ['牛魔王', 10, 15, '生存'], ['平天大圣', 10, 20, '混合'],
-] as const
-
 const TABS: Array<{ id: CodexTab; label: string; icon: typeof BookOpen }> = [
   { id: 'generals', label: '神将', icon: Swords }, { id: 'items', label: '图鉴 / 道具', icon: BookOpen },
   { id: 'monsters', label: '怪物', icon: Shield }, { id: 'bosses', label: 'Boss', icon: Skull },
 ]
 
-function CodexCard({ locked, glyph, title, subtitle, description, tags }: { locked?: boolean; glyph: string; title: string; subtitle?: string; description: string; tags?: string[] }) {
+function CodexCard({ locked, glyph, title, subtitle, description, lockedDescription, tags }: { locked?: boolean; glyph: string; title: string; subtitle?: string; description: string; lockedDescription?: string; tags?: string[] }) {
   return <article className={cx('codex-card', locked && 'codex-card-locked')}>
     <div className="codex-glyph">{glyph}</div><div className="codex-card-copy"><div className="codex-card-title"><h3>{locked ? '???' : title}</h3>{locked ? <LockKeyhole className="h-4 w-4" /> : null}</div>
-      <small>{locked ? '尚未解锁' : subtitle}</small><p>{locked ? '完成关卡或收集足够碎片后解锁该条目。' : description}</p>
+      <small>{locked ? '尚未解锁' : subtitle}</small><p>{locked ? (lockedDescription ?? '完成关卡或收集足够碎片后解锁该条目。') : description}</p>
       {tags?.length ? <div className="codex-tags">{tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
     </div>
   </article>
+}
+
+function PveCatalogEmpty({ category, hasEncyclopedia, hasQuery }: { category: '怪物' | 'Boss'; hasEncyclopedia: boolean; hasQuery: boolean }) {
+  if (!hasEncyclopedia) {
+    return <p className="meta-inline-empty">PVE V2 图鉴数据未下发，无法显示{category}。页面不会回退到旧版目录。</p>
+  }
+  return <p className="meta-inline-empty">{hasQuery ? `没有匹配的${category}图鉴条目。` : `服务端 PVE V2 图鉴尚无${category}条目。`}</p>
 }
 
 export function CodexPage() {
@@ -63,7 +46,9 @@ export function CodexPage() {
   const itemUnlocked = useMemo(() => new Set([...(data?.account.item.unlockedActiveItemIds ?? []), ...(data?.account.item.unlockedPassiveItemIds ?? [])]), [data])
   const weaponUnlocked = useMemo(() => new Set(data?.account.weapon.unlockedWeaponIds ?? []), [data])
   const match = (name: string) => !normalizedQuery || name.toLowerCase().includes(normalizedQuery)
-  const counts = { generals: generals.length, items: items.length + weapons.length, monsters: minions?.length ?? MONSTERS.length, bosses: bosses?.length ?? BOSSES.length }
+  const matchedMinions = minions?.filter((entry) => match(String(entry.displayName ?? entry.label ?? entry.entryId ?? ''))) ?? []
+  const matchedBosses = bosses?.filter((entry) => match(String(entry.displayName ?? entry.entryId ?? ''))) ?? []
+  const counts = { generals: generals.length, items: items.length + weapons.length, monsters: minions?.length ?? 0, bosses: bosses?.length ?? 0 }
 
   return <main className="meta-page codex-page"><div className="cyber-background" /><div className="cyber-grid" /><div className="cyber-noise" /><div className="meta-shell codex-shell">
     <header className="meta-header"><button type="button" className="meta-back-button" onClick={() => navigate('/home')}><ArrowLeft className="h-4 w-4" />返回主页</button>
@@ -74,9 +59,24 @@ export function CodexPage() {
       <section className="codex-grid">
         {tab === 'generals' && generals.filter((entry) => match(entry.name)).map((entry) => <CodexCard key={entry.generalId} locked={!isGeneralUnlocked(entry.generalId, entry.unlocked)} glyph={entry.name.slice(0, 1)} title={entry.name} subtitle={`${ARCHETYPE_LABEL[entry.archetype]} · ${entry.quality ?? '神将'}`} description="可在对局中选用的神将，拥有独特技能与成长曲线。" tags={[entry.generalId]} />)}
         {tab === 'items' && <>{items.filter((entry) => match(entry.name)).map((entry) => <CodexCard key={entry.itemId} locked={encyclopedia ? !('unlocked' in entry && entry.unlocked === true) : !itemUnlocked.has(entry.itemId)} glyph={entry.name.slice(0, 1)} title={entry.name} subtitle={`${entry.itemKind === 'active' ? '主动道具' : '被动道具'} · ${entry.itemId}`} description={entry.shortDescription || entry.detailDescription || '暂无效果说明'} tags={[entry.itemKind === 'active' ? '主动' : '被动']} />)}{weapons.filter((entry) => match(entry.name)).map((entry) => <CodexCard key={entry.weaponId} locked={encyclopedia ? !('unlocked' in entry && entry.unlocked === true) : !weaponUnlocked.has(entry.weaponId)} glyph={entry.name.slice(0, 1)} title={entry.name} subtitle={`${QUALITY_LABEL[entry.quality] ?? entry.quality}品武器 · ${entry.weaponId}`} description={entry.shortDescription || entry.detailDescription || '暂无效果说明'} tags={[entry.exclusiveGeneralId ? '神将专属' : '通用武器']} />)}</>}
-        {tab === 'monsters' && (minions ? minions.filter((entry) => match(String(entry.displayName ?? entry.label ?? entry.entryId ?? ''))).map((entry) => { const name = String(entry.displayName ?? entry.label ?? entry.entryId ?? '未命名怪物'); return <CodexCard key={String(entry.entryId ?? name)} glyph={name.slice(0, 1)} title={name} subtitle={String(entry.kind ?? '敌对单位')} description={String(entry.description ?? '战场敌对单位。')} tags={['敌对单位']} /> }) : MONSTERS.filter((entry) => match(entry[1])).map(([id, name, description, threat]) => <CodexCard key={id} glyph={name.slice(0, 1)} title={name} subtitle={`${id} · 威胁${threat}`} description={description} tags={['敌对单位']} />))}
-        {tab === 'bosses' && (bosses ? bosses.filter((entry) => match(String(entry.displayName ?? entry.entryId ?? ''))).map((entry) => { const name = String(entry.displayName ?? entry.entryId ?? '未命名 Boss'); return <CodexCard key={String(entry.entryId ?? name)} glyph={name.slice(0, 1)} title={name} subtitle={`第 ${String(entry.levelId ?? '?')} 关 · 第 ${String(entry.waveNumber ?? '?')} 波 · ${String(entry.role ?? 'Boss')}`} description="关卡节点 Boss，拥有独特技能组合与阶段性战斗机制。" tags={['Boss', `L${String(entry.levelId ?? '?')}`]} /> }) : BOSSES.filter((entry) => match(entry[0])).map(([name, level, wave, role]) => <CodexCard key={`${level}-${wave}`} glyph={name.slice(0, 1)} title={name} subtitle={`第 ${level} 关 · 第 ${wave} 波 · ${role}`} description="关卡节点 Boss，拥有独特技能组合与阶段性战斗机制。" tags={['Boss', `L${level}`]} />))}
-        {((tab === 'generals' && !generals.some((e) => match(e.name))) || (tab === 'items' && ![...items, ...weapons].some((e) => match(e.name))) || (tab === 'monsters' && !(minions ? minions.some((e) => match(String(e.displayName ?? e.label ?? e.entryId ?? ''))) : MONSTERS.some((e) => match(e[1])))) || (tab === 'bosses' && !(bosses ? bosses.some((e) => match(String(e.displayName ?? e.entryId ?? ''))) : BOSSES.some((e) => match(e[0]))))) ? <p className="meta-inline-empty">没有匹配的图鉴条目。</p> : null}
+        {tab === 'monsters' && matchedMinions.map((entry) => {
+          const name = String(entry.displayName ?? entry.label ?? entry.entryId ?? '未命名怪物')
+          const waveNumber = typeof entry.waveNumber === 'number' ? entry.waveNumber : null
+          const glyphs = Array.isArray(entry.glyphPool)
+            ? entry.glyphPool.filter((glyph): glyph is string => typeof glyph === 'string').slice(0, 2).join('·')
+            : ''
+          const glyph = glyphs || name.slice(0, 1)
+          const stats = [
+            typeof entry.maxHp === 'number' ? `生命 ${entry.maxHp}` : null,
+            typeof entry.armor === 'number' ? `护甲 ${entry.armor}` : null,
+            typeof entry.magicResistance === 'number' ? `法抗 ${entry.magicResistance}` : null,
+          ].filter((value): value is string => Boolean(value)).join(' · ')
+          return <CodexCard key={String(entry.entryId ?? name)} locked={entry.unlocked !== true} glyph={glyph} title={name} subtitle={`第 ${waveNumber ?? '?'} 波 · 新版字妖`} description={stats || String(entry.description ?? '战场敌对字妖。')} lockedDescription="在关卡中实际遇到该字妖后解锁图鉴。" tags={['敌对单位', ...(waveNumber ? [`W${waveNumber}`] : [])]} />
+        })}
+        {tab === 'bosses' && matchedBosses.map((entry) => { const name = String(entry.displayName ?? entry.entryId ?? '未命名 Boss'); return <CodexCard key={String(entry.entryId ?? name)} locked={entry.unlocked !== true} glyph={name.slice(0, 1)} title={name} subtitle={`第 ${String(entry.levelId ?? '?')} 关 · 第 ${String(entry.waveNumber ?? '?')} 波 · ${String(entry.role ?? 'Boss')}`} description="关卡节点 Boss，拥有独特技能组合与阶段性战斗机制。" lockedDescription="在关卡中实际遇到该 Boss 后解锁图鉴。" tags={['Boss', `L${String(entry.levelId ?? '?')}`]} /> })}
+        {tab === 'monsters' && matchedMinions.length === 0 ? <PveCatalogEmpty category="怪物" hasEncyclopedia={Boolean(encyclopedia)} hasQuery={Boolean(normalizedQuery)} /> : null}
+        {tab === 'bosses' && matchedBosses.length === 0 ? <PveCatalogEmpty category="Boss" hasEncyclopedia={Boolean(encyclopedia)} hasQuery={Boolean(normalizedQuery)} /> : null}
+        {((tab === 'generals' && !generals.some((e) => match(e.name))) || (tab === 'items' && ![...items, ...weapons].some((e) => match(e.name)))) ? <p className="meta-inline-empty">没有匹配的图鉴条目。</p> : null}
       </section>
     </>}
   </div></main>

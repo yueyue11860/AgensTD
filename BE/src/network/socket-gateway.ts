@@ -12,7 +12,7 @@ import { authenticateGatewayTokenAsync, extractSocketToken, type GatewayPrincipa
 import type { ProgressStore } from '../data/progress-store'
 import type { PlayerType } from '../domain/progress'
 import { checkPveStageUnlock } from '../core/unlock-logic'
-import { LEVEL_CONFIGS } from '../config/level-config'
+import { LEVEL_CONFIGS, PVE_WAVE_COUNT } from '../config/level-config'
 import {
   getPveStageDefinition,
   isPveDifficulty,
@@ -61,12 +61,6 @@ interface JoinRoomPayload {
   capabilities?: {
     combatEventBatch?: number
   }
-}
-
-interface BuildTowerPayload {
-  x: number
-  y: number
-  towerType: string
 }
 
 interface RoomRuntime {
@@ -136,14 +130,6 @@ function parseStageSelection(payload: unknown): PveStageSelection | null {
   const difficulty = candidate.difficulty === undefined ? 'easy' : candidate.difficulty
   const selection = { levelId: candidate.levelId, difficulty }
   return isPveStageSelection(selection) ? selection : null
-}
-
-function isBuildTowerPayload(payload: unknown): payload is BuildTowerPayload {
-  return typeof payload === 'object'
-    && payload !== null
-    && typeof (payload as BuildTowerPayload).x === 'number'
-    && typeof (payload as BuildTowerPayload).y === 'number'
-    && typeof (payload as BuildTowerPayload).towerType === 'string'
 }
 
 export class SocketGateway {
@@ -273,10 +259,6 @@ export class SocketGateway {
 
     socket.on('SEND_ACTION', (payload: unknown) => {
       void this.handleActionSubmission(socket, payload)
-    })
-
-    socket.on('BUILD_TOWER', (payload: unknown) => {
-      this.handleBuildTower(socket, payload)
     })
 
     socket.on('START_MATCH', (payload: unknown) => {
@@ -633,20 +615,6 @@ export class SocketGateway {
     socket.emit('action_accepted', acceptedPayload)
   }
 
-  private handleBuildTower(socket: Socket, payload: unknown) {
-    if (!isBuildTowerPayload(payload)) {
-      this.emitEngineError(socket, 'BAD_PAYLOAD', '缺少必要参数 x、y、towerType')
-      return
-    }
-
-    void this.handleActionSubmission(socket, {
-      action: 'BUILD_TOWER',
-      x: payload.x,
-      y: payload.y,
-      type: payload.towerType,
-    })
-  }
-
   private handleStartMatch(socket: Socket, payload?: unknown) {
     const joinedContext = this.getJoinedContext(socket)
     if (!joinedContext) {
@@ -814,7 +782,7 @@ export class SocketGateway {
       label: levelConfig.label,
       description: levelConfig.description,
       targetClearRate: levelConfig.targetClearRate,
-      waveCount: levelConfig.waves.length,
+      waveCount: PVE_WAVE_COUNT,
       minPlayers: levelConfig.minPlayers,
     }
 
@@ -1099,6 +1067,7 @@ export class SocketGateway {
             playerId: player.playerId,
             reason: officialVictory ? 'victory' : 'defeat',
             highestCompletedWave: player.highestCompletedWave,
+            highestEncounteredWave: state.pve.currentWave,
             officialVictory,
             retainedWeaponFragments: frozenRewards.fragmentBalances,
             stageSelection: selection,
@@ -1176,6 +1145,7 @@ export class SocketGateway {
         playerId,
         reason: 'disconnect_exit',
         highestCompletedWave: player.highestCompletedWave,
+        highestEncounteredWave: pve.currentWave,
         officialVictory: false,
         retainedWeaponFragments: frozenRewards.fragmentBalances,
         stageSelection: selection,

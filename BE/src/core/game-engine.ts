@@ -1,19 +1,14 @@
 import { ActionQueue } from './action-queue'
-import { EnemyFactory } from './enemy-factory'
-import { Enemy } from './entities/enemy'
-import { Tower } from './entities/tower'
-import { TowerBuilder } from './tower-builder'
 import { GridMap, type GridMapCell } from './grid-map'
-import { WaveManager, type WaveManagerCallbacks } from './WaveManager'
 import { performance } from 'node:perf_hooks'
 import type { PerformanceTelemetry } from './performance-telemetry'
-import type { BuildTowerAction, ClientAction, PlayerIdentity, QueuedAction, UpgradeTowerAction } from '../domain/actions'
-import type { EnemyKind, GameLogEntry, GameState, PlayerState, Position } from '../domain/game-state'
+import type { ClientAction, PlayerIdentity, QueuedAction } from '../domain/actions'
+import type { GameLogEntry, GameState, PlayerState, Position } from '../domain/game-state'
 import type { ServerConfig } from '../config/server-config'
-import type { PveEnemyState, WaveConfig } from '../../../shared/contracts/game'
+import type { PveEnemyState } from '../../../shared/contracts/game'
 import { getPveStageDefinition } from '../../../shared/contracts/pve-stage-config'
 import { GENERAL_CATALOG } from './hero-v1'
-import type { TowerCatalogEntry } from '../domain/tower-catalog'
+import { DEFAULT_STARTER_GENERAL_IDS } from '../account-v1/service'
 import type { MatchBuildSnapshot } from '../account-v1/types'
 import type { MatchItemLoadoutSnapshot } from '../item-v1'
 import type { MatchWeaponLoadoutSnapshot } from '../weapon-v1'
@@ -63,14 +58,6 @@ export interface GameEngineOptions {
   laneRoutes?: Record<EngineSlotId, EngineLaneRoute>
   spawnPoint?: Position
   basePoint?: Position
-  spawnMultiplier?: number
-}
-
-interface EnemySpawnInstruction {
-  spawn: Position
-  path: Position[]
-  pathIndex: number
-  loopStartIndex: number | null
 }
 
 const SLOT_ORDER: readonly EngineSlotId[] = ['P1', 'P2', 'P3', 'P4']
@@ -195,18 +182,9 @@ export class GameEngine {
 
   private readonly pveActionAppliedListeners = new Set<PveActionAppliedListener>()
 
-  private readonly enemyFactory = new EnemyFactory()
-
   private readonly state: GameState
 
   private readonly gridMap: GridMap
-
-  private enemies: Enemy[] = []
-
-  private towers: Tower[] = []
-
-  // 非 readonly：ignite() 时会用新波次配置重建 WaveManager
-  private waveManager: WaveManager
 
   private readonly laneRoutes: Record<EngineSlotId, EngineLaneRoute>
 
@@ -241,8 +219,6 @@ export class GameEngine {
 
   private overloadTicks = 0
 
-  private spawnRotation = 0
-
   private performanceTelemetry: PerformanceTelemetry | null = null
 
   constructor(config: ServerConfig, options: GameEngineOptions = {}) {
@@ -258,8 +234,6 @@ export class GameEngine {
     const spawnPoint = options.spawnPoint ?? fallbackMap.spawnPoint
     const basePoint = options.basePoint ?? fallbackMap.basePoint
     this.gridMap = new GridMap(options.mapCells ?? fallbackMap.cells, spawnPoint, basePoint)
-
-    this.waveManager = this.createWaveManager(config.waveConfigs, options.spawnMultiplier ?? this.playerCount)
 
     this.state = {
       matchId: config.matchId,
@@ -300,8 +274,6 @@ export class GameEngine {
       logs: [],
       pve: this.projectPveSnapshot(this.pveRuntime.snapshot()),
     }
-
-    this.updateWaveState()
 
     this.appendLog('info', 'GameEngine initialized', {
       roomId: this.roomId,
@@ -378,14 +350,12 @@ export class GameEngine {
     }
 
     this.maxCapacity = this.playerCount * 10
-    this.waveManager.setSpawnMultiplier(this.playerCount)
     this.state.playerCount = this.playerCount
     this.state.maxCapacity = this.maxCapacity
   }
 
   setActiveSlots(activeSlots: EngineSlotId[]) {
     this.activeSlots = normalizeActiveSlots(activeSlots)
-    this.spawnRotation = 0
   }
 
   syncPlayerSlots(assignments: ReadonlyArray<{ playerId: string, slotId: EngineSlotId }>) {
@@ -401,9 +371,7 @@ export class GameEngine {
     for (const { playerId, slotId } of assignments) {
       this.playerSlots.set(playerId, slotId)
       const build = this.matchBuildSnapshots[playerId]
-      this.pveRuntime.registerPlayer(playerId, slotId, build?.unlockedGeneralIds && build?.selectedGeneralIds
-        ? { unlockedGeneralIds: build.unlockedGeneralIds, selectedGeneralIds: build.selectedGeneralIds }
-        : undefined)
+      this.pveRuntime.registerPlayer(playerId, slotId, this.resolvePveGeneralSelection(build))
     }
 
     this.syncPveRuntimeState()
@@ -484,6 +452,15 @@ export class GameEngine {
   setMatchBuildSnapshots(snapshots: Readonly<Record<string, MatchBuildSnapshot>>): void {
     if (this.pveStarted) throw new Error('MATCH_BUILD_SNAPSHOTS_LOCKED')
     this.matchBuildSnapshots = structuredClone(snapshots)
+
+    // Slots are registered when players join, before the account build is
+    // locked at countdown. Refresh waiting players immediately so the runtime
+    // drops its safe starter fallback and uses the account-scoped selection.
+    for (const [playerId, slotId] of this.playerSlots.entries()) {
+      this.pveRuntime.unregister(playerId)
+      this.pveRuntime.registerPlayer(playerId, slotId, this.resolvePveGeneralSelection(this.matchBuildSnapshots[playerId]))
+    }
+    this.syncPveRuntimeState()
   }
 
   /**
@@ -566,7 +543,6 @@ export class GameEngine {
       playerCount: this.playerCount,
       maxCapacity: this.maxCapacity,
       overloadTicks: this.overloadTicks,
-      spawnRotation: this.spawnRotation,
       runtime: this.pveRuntime.exportCheckpoint(),
     }
   }
@@ -588,7 +564,6 @@ export class GameEngine {
       playerCount: number
       maxCapacity: number
       overloadTicks: number
-      spawnRotation: number
       runtime: Record<string, unknown>
     }
     if (checkpoint.schemaVersion !== 1 || checkpoint.roomId !== this.roomId || !checkpoint.pveStarted
@@ -607,7 +582,6 @@ export class GameEngine {
     this.playerCount = checkpoint.playerCount
     this.maxCapacity = checkpoint.maxCapacity
     this.overloadTicks = checkpoint.overloadTicks
-    this.spawnRotation = checkpoint.spawnRotation
     const configSnapshot = checkpoint.state.pve.configSnapshot
     this.pveRuntime = this.createPveRuntime(configSnapshot.levelId, configSnapshot.difficulty)
     this.pveRuntime.restoreCheckpoint(checkpoint.runtime)
@@ -645,19 +619,10 @@ export class GameEngine {
     this.matchSequence += 1
     this.actionQueue.drain()
 
-    for (const tower of this.towers) {
-      this.gridMap.release(tower.x, tower.y, tower.width, tower.height)
-    }
-
-    this.towers = []
-    this.enemies = []
-    this.waveManager = this.createWaveManager(this.config.waveConfigs, this.playerCount)
     this.pveRuntime = this.createPveRuntime()
     for (const [playerId, slotId] of this.playerSlots.entries()) {
       const build = this.matchBuildSnapshots[playerId]
-      this.pveRuntime.registerPlayer(playerId, slotId, build?.unlockedGeneralIds && build?.selectedGeneralIds
-        ? { unlockedGeneralIds: build.unlockedGeneralIds, selectedGeneralIds: build.selectedGeneralIds }
-        : undefined)
+      this.pveRuntime.registerPlayer(playerId, slotId, this.resolvePveGeneralSelection(build))
     }
 
     this.pveStarted = false
@@ -667,7 +632,6 @@ export class GameEngine {
     this.pveWaveStartedAtTick = 0
     this.overloadTicks = 0
     this.maxCapacity = this.playerCount * 10
-    this.spawnRotation = 0
 
     this.state.matchId = `${this.config.matchId}:rematch-${this.matchSequence}`
     this.state.tick = 0
@@ -739,29 +703,14 @@ export class GameEngine {
       }
 
       if (this.state.status === 'finished') {
-        this.updateWaveState()
         this.syncRuntimeState()
         this.state.pendingActions = this.actionQueue.size()
         this.emitTick(this.cloneStateSnapshot())
         return
       }
 
-      // 等待关卡选择：持续向前端广播状态（建塔等操作已在 processQueuedActions 中处理），
-      // 但不推进 WaveManager 刷怪逻辑。
-      if (this.state.status === 'waiting') {
-        this.syncRuntimeState()
-        this.state.pendingActions = this.actionQueue.size()
-        this.emitTick(this.cloneStateSnapshot())
-        return
-      }
-
-      this.resolveTowerAttacks()
-      this.collectDefeatedEnemies()
-      this.updateEnemyPositions(this.config.tickRateMs / 1000)
-      this.collectDefeatedEnemies()
-      this.waveManager.update()
-      this.updateWaveState()
-      this.evaluateOverloadState()
+      // PVE V2 is the only enabled PVE runtime. A pre-ignition engine only
+      // broadcasts its waiting/finished shell and never runs legacy waves.
       this.syncRuntimeState()
       this.state.pendingActions = this.actionQueue.size()
 
@@ -769,8 +718,7 @@ export class GameEngine {
         this.appendLog('info', 'Tick settled', {
           tick: this.state.tick,
           players: this.state.players.length,
-          towers: this.towers.length,
-          enemies: this.enemies.length,
+          runtime: 'pve-v2',
           pendingActions: this.state.pendingActions,
           overloadTicks: this.overloadTicks,
           maxCapacity: this.maxCapacity,
@@ -818,32 +766,13 @@ export class GameEngine {
       return
     }
 
-    if (
-      this.pveStarted
-      && (
-        queuedAction.action.action === 'BUILD_TOWER'
-        || queuedAction.action.action === 'UPGRADE_TOWER'
-        || queuedAction.action.action === 'SELL_TOWER'
-      )
-    ) {
-      this.appendLog('warn', 'Legacy tower action ignored after PVE V2 ignition', {
-        playerId: queuedAction.player.playerId,
-        action: queuedAction.action.action,
-      })
-      return
-    }
-
     switch (queuedAction.action.action) {
       case 'BUILD_TOWER':
-        this.handleBuildTower(queuedAction as QueuedAction & { action: BuildTowerAction })
-        return
       case 'UPGRADE_TOWER':
-        this.handleUpgradeTower(queuedAction as QueuedAction & { action: UpgradeTowerAction })
-        return
       case 'SELL_TOWER':
-        this.appendLog('info', 'Sell action acknowledged but not implemented yet', {
+        this.appendLog('warn', 'Legacy tower action rejected; PVE V2 uses soldier/general actions', {
           playerId: queuedAction.player.playerId,
-          towerId: queuedAction.action.towerId,
+          action: queuedAction.action.action,
         })
         return
       case 'RECRUIT_BATCH':
@@ -986,252 +915,6 @@ export class GameEngine {
     }
   }
 
-  private handleBuildTower(queuedAction: QueuedAction & { action: BuildTowerAction }) {
-    const player = this.ensurePlayer(queuedAction.player)
-    const { x, y, type } = queuedAction.action
-    const stats = TowerBuilder.getConfigBySelection(type)
-
-    if (!stats) {
-      this.appendLog('warn', 'Unknown tower type rejected', { playerId: player.id, type })
-      return
-    }
-
-    if (!this.isValidBuildPlacement(x, y, stats.width, stats.height)) {
-      this.appendLog('warn', 'Build rejected because coordinates are invalid', { playerId: player.id, x, y })
-      return
-    }
-
-    if (!this.gridMap.canBuildTower(x, y, stats.width, stats.height)) {
-      this.appendLog('warn', 'Build rejected because placement is not on high ground', {
-        playerId: player.id,
-        x,
-        y,
-      })
-      return
-    }
-
-    if (player.gold < stats.cost) {
-      this.appendLog('warn', 'Build rejected because player has insufficient gold', {
-        playerId: player.id,
-        gold: player.gold,
-        requiredGold: stats.cost,
-      })
-      return
-    }
-
-    player.gold -= stats.cost
-
-    const builtTower = TowerBuilder.createFromSelection(type, {
-      ownerId: player.id,
-      x,
-      y,
-      tick: this.state.tick,
-      sequence: this.towers.length + 1,
-    })
-    if (!builtTower) {
-      this.appendLog('warn', 'Tower builder failed to create tower', { playerId: player.id, type })
-      player.gold += stats.cost
-      return
-    }
-
-    this.towers.push(builtTower.tower)
-    this.gridMap.occupy(x, y, stats.width, stats.height)
-    this.syncMapCells()
-    this.appendLog('info', 'Tower built', { playerId: player.id, towerId: builtTower.state.id, type, x, y })
-  }
-
-  private handleUpgradeTower(queuedAction: QueuedAction & { action: UpgradeTowerAction }) {
-    const player = this.ensurePlayer(queuedAction.player)
-    const towerIndex = this.towers.findIndex((tower) => tower.id === queuedAction.action.towerId)
-
-    if (towerIndex < 0) {
-      this.appendLog('warn', 'Upgrade rejected because tower does not exist', {
-        playerId: player.id,
-        towerId: queuedAction.action.towerId,
-      })
-      return
-    }
-
-    const currentTower = this.towers[towerIndex]
-    if (currentTower.ownerId !== player.id) {
-      this.appendLog('warn', 'Upgrade rejected because tower owner does not match player', {
-        playerId: player.id,
-        towerId: currentTower.id,
-        ownerId: currentTower.ownerId,
-      })
-      return
-    }
-
-    const currentConfig = TowerBuilder.getConfigBySelection(currentTower.type)
-    const nextConfig = TowerBuilder.getNextConfigBySelection(currentTower.type)
-    if (!currentConfig || !nextConfig) {
-      this.appendLog('warn', 'Upgrade rejected because tower is already at max level', {
-        playerId: player.id,
-        towerId: currentTower.id,
-        type: currentTower.type,
-      })
-      return
-    }
-
-    if (player.gold < nextConfig.cost) {
-      this.appendLog('warn', 'Upgrade rejected because player has insufficient gold', {
-        playerId: player.id,
-        towerId: currentTower.id,
-        gold: player.gold,
-        requiredGold: nextConfig.cost,
-      })
-      return
-    }
-
-    if (!this.canUpgradeTowerFootprint(currentTower, nextConfig)) {
-      this.appendLog('warn', 'Upgrade rejected because upgraded footprint would overlap invalid terrain', {
-        playerId: player.id,
-        towerId: currentTower.id,
-        type: nextConfig.type,
-      })
-      return
-    }
-
-    player.gold -= nextConfig.cost
-    const upgradedTower = TowerBuilder.upgradeTower(currentTower, nextConfig)
-    this.towers[towerIndex] = upgradedTower.tower
-
-    if (currentTower.width !== nextConfig.width || currentTower.height !== nextConfig.height) {
-      this.gridMap.release(currentTower.x, currentTower.y, currentTower.width, currentTower.height)
-      this.gridMap.occupy(currentTower.x, currentTower.y, nextConfig.width, nextConfig.height)
-      this.syncMapCells()
-    }
-
-    this.appendLog('info', 'Tower upgraded', {
-      playerId: player.id,
-      towerId: currentTower.id,
-      fromType: currentConfig.type,
-      toType: nextConfig.type,
-      cost: nextConfig.cost,
-    })
-  }
-
-  private resolveTowerAttacks() {
-    for (const tower of this.towers) {
-      tower.beginTick()
-    }
-
-    this.runTowerPhase('support')
-    this.runTowerPhase('action')
-  }
-
-  private runTowerPhase(phase: 'support' | 'action') {
-    for (const tower of this.towers) {
-      if (tower.getPhase() !== phase) {
-        continue
-      }
-
-      const report = tower.tick({
-        enemies: this.enemies,
-        towers: this.towers,
-        tickRateMs: this.config.tickRateMs,
-      })
-
-      for (const attack of report.attacks) {
-        this.appendLog('info', 'Tower applied attack effect', {
-          towerId: tower.id,
-          enemyId: attack.enemyId,
-          damage: attack.damage,
-          mode: attack.mode,
-        })
-      }
-
-      if (report.buffedTowerIds.length > 0) {
-        this.appendLog('info', 'Tower applied support aura', {
-          towerId: tower.id,
-          buffedTowerIds: report.buffedTowerIds,
-        })
-      }
-
-      if (report.grantedGold > 0) {
-        const owner = this.state.players.find((player) => player.id === tower.ownerId)
-        if (owner) {
-          owner.gold += report.grantedGold
-        }
-
-        this.appendLog('info', 'Tower generated gold', {
-          towerId: tower.id,
-          ownerId: tower.ownerId,
-          goldGranted: report.grantedGold,
-        })
-      }
-    }
-  }
-
-  private collectDefeatedEnemies() {
-    const defeatedEnemies = this.enemies.filter((enemy) => !enemy.isAlive())
-    if (defeatedEnemies.length === 0) {
-      return
-    }
-
-    const defeatedEnemyIds = new Set(defeatedEnemies.map((enemy) => enemy.id))
-    this.enemies = this.enemies.filter((enemy) => !defeatedEnemyIds.has(enemy.id))
-
-    const splitSpawnQueue: Array<{
-      kind: EnemyKind
-      count: number
-      route: EnemySpawnInstruction
-      sourceEnemyId: string
-    }> = []
-
-    for (const enemy of defeatedEnemies) {
-      const owner = this.findRewardOwner(enemy)
-      if (owner) {
-        owner.gold += enemy.rewardGold
-        owner.score += enemy.rewardGold
-      }
-
-      const routeState = enemy.getRouteState()
-      const splitRequests = enemy.collectSplitOnDeathSpawns()
-      for (const splitRequest of splitRequests) {
-        splitSpawnQueue.push({
-          kind: splitRequest.kind,
-          count: splitRequest.count,
-          route: {
-            spawn: { x: enemy.x, y: enemy.y },
-            path: routeState.path,
-            pathIndex: routeState.pathIndex,
-            loopStartIndex: routeState.loopStartIndex,
-          },
-          sourceEnemyId: enemy.id,
-        })
-      }
-
-      this.appendLog('info', 'Enemy defeated', { enemyId: enemy.id, rewardGold: enemy.rewardGold })
-    }
-
-    for (const splitSpawn of splitSpawnQueue) {
-      for (let index = 0; index < splitSpawn.count; index += 1) {
-        const splitEnemy = this.spawnEnemyByKind(
-          splitSpawn.kind,
-          null,
-          `split:${splitSpawn.sourceEnemyId}`,
-          splitSpawn.route,
-        )
-
-        if (!splitEnemy) {
-          break
-        }
-      }
-    }
-  }
-
-  private updateEnemyPositions(deltaTime: number) {
-    for (const enemy of this.enemies) {
-      enemy.updateEffects(deltaTime)
-      if (!enemy.isAlive()) {
-        continue
-      }
-
-      enemy.move(deltaTime)
-    }
-  }
-
   private registerPvePlayer(playerId: string) {
     const slot = this.playerSlots.get(playerId)
     if (!slot) {
@@ -1239,10 +922,29 @@ export class GameEngine {
     }
 
     const build = this.matchBuildSnapshots[playerId]
-    this.pveRuntime.registerPlayer(playerId, slot, build?.unlockedGeneralIds && build?.selectedGeneralIds
-      ? { unlockedGeneralIds: build.unlockedGeneralIds, selectedGeneralIds: build.selectedGeneralIds }
-      : undefined)
+    this.pveRuntime.registerPlayer(playerId, slot, this.resolvePveGeneralSelection(build))
     this.syncPveRuntimeState()
+  }
+
+  /**
+   * Never fall back to the complete hero catalog for a live PVE match.  A
+   * missing account snapshot can happen during degraded startup/recovery; the
+   * safe fallback is the immutable starter roster, otherwise locked hero
+   * glyphs could leak into the summon pool.
+   */
+  private resolvePveGeneralSelection(build?: MatchBuildSnapshot) {
+    const unlocked = build?.unlockedGeneralIds?.filter((id): id is string => typeof id === 'string' && Boolean(GENERAL_CATALOG[id])) ?? []
+    const selected = build?.selectedGeneralIds?.filter((id): id is string => typeof id === 'string' && unlocked.includes(id)) ?? []
+    if (unlocked.length > 0 && selected.length > 0) {
+      return {
+        unlockedGeneralIds: [...new Set(unlocked)].sort(),
+        selectedGeneralIds: [...new Set(selected)].sort(),
+      }
+    }
+    return {
+      unlockedGeneralIds: [...DEFAULT_STARTER_GENERAL_IDS],
+      selectedGeneralIds: [...DEFAULT_STARTER_GENERAL_IDS],
+    }
   }
 
   private createPveRuntime(levelId?: number, difficulty: PveDifficulty = 'easy') {
@@ -1565,34 +1267,6 @@ export class GameEngine {
     return player
   }
 
-  private isValidBuildPlacement(x: number, y: number, width: number, height: number) {
-    for (let offsetY = 0; offsetY < height; offsetY += 1) {
-      for (let offsetX = 0; offsetX < width; offsetX += 1) {
-        const cell = this.gridMap.getCell(x + offsetX, y + offsetY)
-        if (cell === null || !cell.buildable) {
-          return false
-        }
-      }
-    }
-
-    return true
-  }
-
-  private canUpgradeTowerFootprint(currentTower: Tower, nextConfig: TowerCatalogEntry) {
-    if (currentTower.width === nextConfig.width && currentTower.height === nextConfig.height) {
-      return true
-    }
-
-    this.gridMap.release(currentTower.x, currentTower.y, currentTower.width, currentTower.height)
-
-    try {
-      return this.isValidBuildPlacement(currentTower.x, currentTower.y, nextConfig.width, nextConfig.height)
-        && this.gridMap.canBuildTower(currentTower.x, currentTower.y, nextConfig.width, nextConfig.height)
-    } finally {
-      this.gridMap.occupy(currentTower.x, currentTower.y, currentTower.width, currentTower.height)
-    }
-  }
-
   private appendLog(level: GameLogEntry['level'], message: string, meta?: Record<string, unknown>) {
     if (level === 'info' && !this.config.verboseGameLogs) {
       return
@@ -1615,151 +1289,8 @@ export class GameEngine {
     this.state.map.cells = this.gridMap.toCells()
   }
 
-  private updateWaveState() {
-    const snapshot = this.waveManager.getSnapshot()
-    const currentWave = snapshot.currentWave
-
-    if (!currentWave) {
-      this.state.wave = {
-        index: 0,
-        label: snapshot.victoryTriggered ? '已完成' : '无波次',
-        startedAtTick: 0,
-        endsAtTick: null,
-        remainingSpawns: 0,
-        prepCountdownSec: 0,
-      }
-      return
-    }
-
-    const prepCountdownSec = snapshot.state === 'PREP'
-      ? Math.ceil(snapshot.timer * this.config.tickRateMs / 1000)
-      : 0
-
-    const phaseLabel =
-      snapshot.state === 'PREP'
-        ? '准备中'
-        : snapshot.state === 'SPAWNING'
-          ? '出怪中'
-          : '清场中'
-
-    this.state.wave = {
-      index: currentWave.waveNumber,
-      label: `第 ${currentWave.waveNumber} 波 · ${phaseLabel}`,
-      startedAtTick: Math.max(0, this.state.tick - this.waveManager.getCurrentWaveElapsedTicks()),
-      endsAtTick: null,
-      remainingSpawns: snapshot.remainingSpawns,
-      prepCountdownSec,
-    }
-  }
-
-  private evaluateOverloadState() {
-    const isOverloaded = this.enemies.length >= this.maxCapacity
-
-    if (isOverloaded) {
-      this.overloadTicks += 1
-    }
-    else {
-      this.overloadTicks = 0
-    }
-
-    this.state.overloadTicks = this.overloadTicks
-    this.state.maxCapacity = this.maxCapacity
-    this.state.playerCount = this.playerCount
-
-    // 10 秒倒计时 = 10000ms / tickRateMs ticks
-    const overloadLimitTicks = Math.ceil(10000 / this.config.tickRateMs)
-    const remainingTicks = Math.max(0, overloadLimitTicks - this.overloadTicks)
-    this.state.overloadCountdownSec = this.overloadTicks > 0
-      ? Math.ceil(remainingTicks * this.config.tickRateMs / 1000)
-      : 0
-
-    if (this.overloadTicks >= overloadLimitTicks) {
-      this.finishMatch('defeat', `同屏怪物超载超过 10 秒`)
-    }
-  }
-
-  private finishMatch(outcome: 'victory' | 'defeat', reason: string) {
-    if (this.state.status === 'finished') {
-      return
-    }
-
-    this.state.status = 'finished'
-    this.state.result = {
-      outcome,
-      decidedAtTick: this.state.tick,
-      reason,
-    }
-
-    this.appendLog('info', 'Match finished', {
-      outcome,
-      reason,
-      tick: this.state.tick,
-      overloadTicks: this.overloadTicks,
-    })
-  }
-
-  private getNextSpawnRoute() {
-    const slot = this.activeSlots[this.spawnRotation % this.activeSlots.length] ?? 'P1'
-    this.spawnRotation = (this.spawnRotation + 1) % Math.max(1, this.activeSlots.length)
-    return this.laneRoutes[slot] ?? this.laneRoutes.P1
-  }
-
-  private spawnEnemyByKind(kind: EnemyKind, waveIndex: number | null, waveLabel: string, route: EnemySpawnInstruction) {
-    const enemy = this.enemyFactory.createByCode({
-      id: `enemy-${kind}-${this.state.tick}-${this.enemies.length + 1}`,
-      code: kind,
-      spawn: route.spawn,
-      path: route.path,
-    })
-    if (!enemy) {
-      this.appendLog('warn', 'Enemy spawn skipped because kind is unknown', {
-        kind,
-        waveIndex,
-      })
-      return null
-    }
-
-    enemy.setRoute(route.path, {
-      pathIndex: route.pathIndex,
-      loopStartIndex: route.loopStartIndex,
-      position: route.spawn,
-    })
-    this.enemies.push(enemy)
-    this.appendLog('info', 'Enemy spawned', {
-      enemyId: enemy.id,
-      kind: enemy.kind,
-      waveIndex,
-      waveLabel,
-      x: enemy.x,
-      y: enemy.y,
-      loopStartIndex: route.loopStartIndex,
-    })
-    return enemy
-  }
-
-  private findRewardOwner(enemy: Enemy) {
-    if (enemy.lastDamagedByPlayerId) {
-      const lastAttacker = this.state.players.find((player) => player.id === enemy.lastDamagedByPlayerId)
-      if (lastAttacker) {
-        return lastAttacker
-      }
-    }
-
-    return this.state.players[0]
-  }
-
   private syncRuntimeState() {
     this.syncPveRuntimeState()
-
-    if (this.pveStarted) {
-      return
-    }
-
-    this.state.playerCount = this.playerCount
-    this.state.maxCapacity = this.maxCapacity
-    this.state.overloadTicks = this.overloadTicks
-    this.state.enemies = this.enemies.map((enemy) => enemy.toState())
-    this.state.towers = this.towers.map((tower) => tower.toState())
   }
 
   private cloneStateSnapshot() {
@@ -1777,21 +1308,13 @@ export class GameEngine {
       return
     }
 
-    for (const tower of this.towers) {
-      this.gridMap.release(tower.x, tower.y, tower.width, tower.height)
-    }
-
-    this.towers = []
-    this.enemies = []
     this.overloadTicks = 0
     this.syncMapCells()
 
     this.pveRuntime = this.createPveRuntime(levelId, difficulty)
     for (const [playerId, slotId] of this.playerSlots.entries()) {
       const build = this.matchBuildSnapshots[playerId]
-      this.pveRuntime.registerPlayer(playerId, slotId, build?.unlockedGeneralIds && build?.selectedGeneralIds
-        ? { unlockedGeneralIds: build.unlockedGeneralIds, selectedGeneralIds: build.selectedGeneralIds }
-        : undefined)
+      this.pveRuntime.registerPlayer(playerId, slotId, this.resolvePveGeneralSelection(build))
     }
     this.pveStarted = true
     this.pveRuntime.start()
@@ -1806,37 +1329,4 @@ export class GameEngine {
     })
   }
 
-  /**
-   * 构建 WaveManager 实例（供构造函数和 ignite() 共用）。
-   * 回调闭包引用 `this`，因此新旧 WaveManager 切换后回调依然有效。
-   */
-  private createWaveManager(waves: readonly WaveConfig[], spawnMultiplier: number): WaveManager {
-    const callbacks: WaveManagerCallbacks = {
-      onSpawn: (enemyType) => {
-        if (this.state.status === 'finished') {
-          return
-        }
-
-        const currentWave = this.waveManager.getCurrentWave()
-        const route = this.getNextSpawnRoute()
-        this.spawnEnemyByKind(
-          enemyType as EnemyKind,
-          currentWave?.waveNumber ?? null,
-          currentWave ? `第 ${currentWave.waveNumber} 波` : 'WaveManager',
-          {
-            spawn: clonePosition(route.spawn),
-            path: clonePath(route.path),
-            pathIndex: 0,
-            loopStartIndex: route.loopStartIndex,
-          },
-        )
-      },
-      isMapClear: () => this.enemies.length === 0,
-      onVictory: () => {
-        this.finishMatch('victory', 'All waves cleared')
-      },
-    }
-
-    return new WaveManager(waves, callbacks, { spawnMultiplier })
-  }
 }

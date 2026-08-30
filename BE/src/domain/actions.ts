@@ -55,30 +55,13 @@ export function parseClientAction(payload: unknown): ClientAction | null {
 
   switch (payload.action) {
     case 'BUILD_TOWER':
-      return typeof payload.type === 'string'
-        && typeof payload.x === 'number'
-        && typeof payload.y === 'number'
-        ? {
-            action: 'BUILD_TOWER',
-            type: payload.type,
-            x: payload.x,
-            y: payload.y,
-          }
-        : null
     case 'UPGRADE_TOWER':
-      return typeof payload.towerId === 'string'
-        ? {
-            action: 'UPGRADE_TOWER',
-            towerId: payload.towerId,
-          }
-        : null
     case 'SELL_TOWER':
-      return typeof payload.towerId === 'string'
-        ? {
-            action: 'SELL_TOWER',
-            towerId: payload.towerId,
-          }
-        : null
+      // Tower actions belonged to the retired PVE wave runtime.  Keep the
+      // wire names in the shared type for source compatibility with old
+      // clients, but reject them at the only action ingress so they cannot
+      // mutate a waiting room or be persisted as an authoritative action.
+      return null
     case 'RECRUIT_BATCH':
       return typeof payload.expectedTrayRevision === 'number' || payload.expectedTrayRevision === undefined
         ? {

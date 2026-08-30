@@ -1,7 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createServerConfig = createServerConfig;
-const default_wave_configs_1 = require("./default-wave-configs");
 function readNumber(name, fallback, bounds = {}) {
     const value = process.env[name];
     const raw = value === undefined ? String(fallback) : value.trim();
@@ -108,6 +107,5 @@ function createServerConfig() {
         supabaseUrl: readString('SUPABASE_URL'),
         supabaseServiceRoleKey: readString('SUPABASE_SERVICE_ROLE_KEY'),
         authTokens: buildAuthTokens(),
-        waveConfigs: default_wave_configs_1.defaultWaveConfigs,
     };
 }

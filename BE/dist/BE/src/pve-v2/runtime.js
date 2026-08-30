@@ -9,6 +9,7 @@ const prng_1 = require("./prng");
 const boss_catalog_1 = require("./boss-catalog");
 const boss_runtime_1 = require("./boss-runtime");
 const catalog_1 = require("../core/hero-v1/catalog");
+const service_1 = require("../account-v1/service");
 const combat_engine_1 = require("../core/hero-v1/combat-engine");
 const formation_manager_1 = require("../core/hero-v1/formation-manager");
 const summon_catalog_1 = require("../core/hero-v1/summon-catalog");
@@ -124,6 +125,18 @@ function normalizeGeneralSelection(selection, catalog) {
     if (selected.some((id) => !unlockedSet.has(id)))
         throw new Error('SELECTED_GENERAL_NOT_UNLOCKED');
     return { unlockedGeneralIds: unlocked, selectedGeneralIds: selected };
+}
+/** Recompute the legal character glyphs for a frozen general selection. */
+function selectionGlyphs(selectedGeneralIds, catalog) {
+    const glyphs = new Set();
+    for (const generalId of selectedGeneralIds) {
+        const definition = catalog[generalId];
+        if (!definition)
+            continue;
+        for (const glyph of definition.recipe.glyphs)
+            glyphs.add(glyph);
+    }
+    return glyphs;
 }
 class PveGameRuntime {
     tickRateMs;
@@ -563,12 +576,29 @@ class PveGameRuntime {
             this.synergyEffects.removePlayer(playerId);
         this.players.clear();
         for (const stored of checkpoint.players) {
+            // Build snapshots are authoritative when restoring a room. Older
+            // checkpoints may have been created before the unlock gate and contain
+            // a full-catalog token map (including 佛/净/悟); filter those tokens
+            // before they can be recruited after a restart.
+            const configuredSelection = this.generalSelections[stored.playerId];
+            const checkpointSelection = stored.selectedGeneralIds && stored.selectedGeneralIds.length > 0
+                ? {
+                    unlockedGeneralIds: stored.unlockedGeneralIds ?? stored.selectedGeneralIds,
+                    selectedGeneralIds: stored.selectedGeneralIds,
+                }
+                : {
+                    unlockedGeneralIds: [...service_1.DEFAULT_STARTER_GENERAL_IDS],
+                    selectedGeneralIds: [...service_1.DEFAULT_STARTER_GENERAL_IDS],
+                };
+            const normalizedSelection = normalizeGeneralSelection(configuredSelection ?? checkpointSelection, this.generalCatalog);
+            const allowedGlyphs = selectionGlyphs(normalizedSelection.selectedGeneralIds, this.generalCatalog);
+            const remainingCharacterTokens = new Map(stored.remainingCharacterTokens.filter(([glyph, count]) => allowedGlyphs.has(glyph) && count > 0));
             const player = {
                 ...structuredClone(stored),
-                unlockedGeneralIds: stored.unlockedGeneralIds ?? Object.keys(this.generalCatalog).sort(),
-                selectedGeneralIds: stored.selectedGeneralIds ?? Object.keys(this.generalCatalog).sort(),
+                unlockedGeneralIds: normalizedSelection.unlockedGeneralIds,
+                selectedGeneralIds: normalizedSelection.selectedGeneralIds,
                 board: new Map(stored.board.map(([key, value]) => [key, structuredClone(value)])),
-                remainingCharacterTokens: new Map(stored.remainingCharacterTokens),
+                remainingCharacterTokens,
                 clearedWaves: new Set(stored.clearedWaves),
             };
             this.players.set(player.playerId, player);

@@ -178,7 +178,6 @@ export class Room {
         laneRoutes: this.layout.laneRoutes,
         spawnPoint: this.layout.primarySpawn,
         basePoint: this.layout.hub,
-        spawnMultiplier: 1,
       },
     )
   }
@@ -410,6 +409,7 @@ export class Room {
     playerId: string
     reason: SettlementReason
     highestCompletedWave: number
+    highestEncounteredWave?: number
     officialVictory: boolean
     retainedWeaponFragments: Readonly<Record<string, number>>
     stageSelection?: PveStageSelection

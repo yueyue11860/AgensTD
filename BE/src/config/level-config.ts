@@ -1,4 +1,3 @@
-import type { WaveConfig } from '../../../shared/contracts/game'
 import { PVE_STAGE_DEFINITIONS } from '../../../shared/contracts/pve-stage-config'
 import type { PlayerKind } from '../domain/game-state'
 
@@ -18,19 +17,9 @@ export interface LevelConfig {
   startingGold?: number
   minPlayers: number
   capacityPerPlayer: 10
-  waves: WaveConfig[]
 }
 
-const PVE_WAVE_COUNT = 20
-
-function createUnifiedTwentyWavePlan(): WaveConfig[] {
-  return Array.from({ length: PVE_WAVE_COUNT }, (_, index) => ({
-    waveNumber: index + 1,
-    prepTime: 50,
-    // 新版运行时从 WAVE_MINION_CATALOG 读取生成配置；这里保留结构用于房间协议和旧客户端展示。
-    groups: [],
-  }))
-}
+export const PVE_WAVE_COUNT = 20
 
 function createLevel(
   levelId: number,
@@ -47,7 +36,6 @@ function createLevel(
     allowedPlayerKinds: ['human', 'agent'],
     minPlayers: 1,
     capacityPerPlayer: 10,
-    waves: createUnifiedTwentyWavePlan(),
   }
 }
 
@@ -66,7 +54,3 @@ export const LEVEL_CONFIGS: Readonly<Record<number, LevelConfig>> = Object.freez
 export const ORDERED_STANDARD_LEVEL_IDS: readonly number[] = PVE_STAGE_DEFINITIONS.map(({ levelId }) => levelId)
 
 export const ALL_LEVEL_IDS: readonly number[] = ORDERED_STANDARD_LEVEL_IDS
-
-export function getWavesForLevel(levelId: number): WaveConfig[] | null {
-  return LEVEL_CONFIGS[levelId]?.waves ?? null
-}

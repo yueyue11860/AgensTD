@@ -1,6 +1,4 @@
-import type { WaveConfig } from '../../../shared/contracts/game'
 import type { PlayerKind } from '../domain/game-state'
-import { defaultWaveConfigs } from './default-wave-configs'
 
 export interface AuthTokenConfig {
   token: string
@@ -36,7 +34,6 @@ export interface ServerConfig {
   supabaseUrl: string | null
   supabaseServiceRoleKey: string | null
   authTokens: AuthTokenConfig[]
-  waveConfigs: WaveConfig[]
 }
 
 interface NumberBounds {
@@ -157,6 +154,5 @@ export function createServerConfig(): ServerConfig {
     supabaseUrl: readString('SUPABASE_URL'),
     supabaseServiceRoleKey: readString('SUPABASE_SERVICE_ROLE_KEY'),
     authTokens: buildAuthTokens(),
-    waveConfigs: defaultWaveConfigs,
   }
 }

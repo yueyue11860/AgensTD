@@ -119,6 +119,35 @@ function buildEncyclopediaCatalog(account) {
         ...definition,
         unlocked: unlockedWeapons.has(definition.weaponId),
     }));
+    // Encounter unlocks are derived from durable match settlements instead of
+    // being accepted from the client.  This keeps the encyclopedia deterministic
+    // and makes old accounts forward compatible with the new field.
+    const encounteredWaves = new Set();
+    const encounteredBosses = new Set();
+    const addEncounter = (stageSelection, highestCompletedWave, highestEncounteredWave, reason) => {
+        const wave = highestEncounteredWave
+            ?? (reason === 'victory' ? 20 : Math.min(20, highestCompletedWave + 1));
+        if (!Number.isSafeInteger(wave) || wave < 0)
+            return;
+        for (let number = 1; number <= Math.min(20, wave); number += 1)
+            encounteredWaves.add(number);
+        if (!stageSelection)
+            return;
+        boss_catalog_1.BOSS_DEFINITIONS
+            .filter(definition => definition.levelId === stageSelection.levelId && definition.waveNumber <= wave)
+            .forEach(definition => encounteredBosses.add(definition.bossDefinitionId));
+    };
+    Object.values(account.settlementsById).forEach((settlement) => {
+        addEncounter(settlement.stageSelection, settlement.highestCompletedWave, settlement.highestEncounteredWave, settlement.reason);
+    });
+    // A stage clear is an authoritative legacy progression fact and implies the
+    // player completed its final wave, even if the original settlement record
+    // was compacted or predates encounter tracking.
+    Object.values(account.pveProgress.clearsByStageKey).forEach((clear) => {
+        if (!clear)
+            return;
+        addEncounter(clear.selection, 20, 20, 'victory');
+    });
     // The wave catalog is the authoritative ordinary-monster encyclopedia;
     // summoned soldier archetypes are friendly units and are intentionally not
     // mixed into the monster list.
@@ -127,12 +156,12 @@ function buildEncyclopediaCatalog(account) {
         entryId: `wave:${definition.waveNumber}`,
         kind: 'wave_minion',
         displayName: `第${definition.waveNumber}波怪物`,
-        unlocked: true,
+        unlocked: encounteredWaves.has(definition.waveNumber),
     }));
     const bosses = boss_catalog_1.BOSS_DEFINITIONS.map((definition) => ({
         ...definition,
         entryId: definition.bossDefinitionId,
-        unlocked: true,
+        unlocked: encounteredBosses.has(definition.bossDefinitionId),
     }));
     return {
         schemaVersion: encyclopedia_1.ENCYCLOPEDIA_SCHEMA_VERSION,

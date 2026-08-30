@@ -15,7 +15,7 @@
     "test:balance:full": "ts-node src/pve-v2/full-build-balance-full.ts",
     "test:reconnect": "ts-node src/network/reconnect-smoke.ts",
     "test:protocol": "ts-node src/network/combat-event-protocol-smoke.ts",
-    "test:release": "ts-node src/release/migration-static-smoke.ts && ts-node src/release/persistence-fault-drill-smoke.ts",
+    "test:release": "ts-node src/release/migration-static-smoke.ts && ts-node src/release/persistence-fault-drill-smoke.ts && ts-node src/release/pve-v2-boundary-smoke.ts",
     "release:verify": "pnpm test:ci && pnpm test:release",
     "release:verify:full": "pnpm release:verify && pnpm test:balance:full",
     "test:ci": "pnpm check && pnpm build && pnpm test:config && pnpm test:auth && pnpm test:reconnect && pnpm test:protocol && pnpm test:smoke && pnpm test:balance",

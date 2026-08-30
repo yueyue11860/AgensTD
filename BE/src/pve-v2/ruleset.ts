@@ -3,7 +3,7 @@ import type { PveBalanceProfile } from './balance-catalog'
 
 /**
  * 新版 PVE 的稳定规则身份。任何破坏确定性回放/结算口径的规则变更都必须升级此值。
- * legacy WaveManager 没有这个身份，因此不能伪装成新版对局。
+ * 旧版波次调度器没有这个身份，因此不能伪装成新版对局。
  */
 export const PVE_COMBAT_RULESET_VERSION = 'pve-v2.3.0' as const
 export const PVE_MATCH_CONFIG_SNAPSHOT_SCHEMA_VERSION = 1 as const

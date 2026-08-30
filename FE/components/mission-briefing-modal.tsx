@@ -43,12 +43,12 @@ function GeneralSelectionPanel({
         <div><span>GENERAL POOL</span><strong>本局神将预选</strong></div>
         <small>{selected.size}/{config.maxPerMatch}</small>
       </div>
-      <p>{config.unlockStateKnown ? '仅可选择已解锁神将；开局后预选池锁定。' : '账户未提供解锁矩阵，暂按兼容模式展示；开局时由服务端校验。'}</p>
+      <p>{config.unlockStateKnown ? '仅可选择已解锁神将；开局后预选池锁定。' : '正在等待账户解锁矩阵；未确认解锁状态的神将暂不可选。'}</p>
       <div className="mission-general-grid">
         {generals.map((general) => {
           const explicitlyLocked = config.unlockStateKnown
             ? general.unlocked === false || !config.unlockedGeneralIds.includes(general.generalId)
-            : general.unlocked === false
+            : general.unlocked !== true
           const disabled = explicitlyLocked || (!selected.has(general.generalId) && !canSelect)
           return (
             <button
@@ -147,10 +147,14 @@ export function MissionBriefingModal({
   engineError,
 }: MissionBriefingModalProps) {
   const dialogRef = useModalFocus()
-  const availableGeneralIds = generals.filter((general) => {
-    if (generalSelection.unlockStateKnown) return general.unlocked !== false && generalSelection.unlockedGeneralIds.includes(general.generalId)
-    return general.unlocked !== false
-  }).map((general) => general.generalId)
+  // Fail closed when the account unlock matrix is unavailable.  A plain
+  // catalog entry is not evidence that a locked general may enter this match;
+  // the server will also enforce the same rule at the snapshot boundary.
+  const availableGeneralIds = generals.filter((general) => (
+    generalSelection.unlockStateKnown
+      ? general.unlocked !== false && generalSelection.unlockedGeneralIds.includes(general.generalId)
+      : general.unlocked === true
+  )).map((general) => general.generalId)
   const [selectedGeneralIds, setSelectedGeneralIds] = useState<string[]>(() => availableGeneralIds.slice(0, generalSelection.maxPerMatch))
 
   useEffect(() => {

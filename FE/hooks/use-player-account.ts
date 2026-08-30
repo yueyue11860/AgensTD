@@ -117,6 +117,8 @@ export interface PlayerAccountData {
 }
 
 export interface EncyclopediaCatalogData {
+  schemaVersion: 1
+  catalogVersion: 'encyclopedia-v1'
   generals: Array<GeneralCatalogEntry & { unlocked: boolean }>
   items: Array<ItemCatalogEntry & { unlocked: boolean }>
   weapons: Array<WeaponCatalogEntry & { unlocked: boolean }>
@@ -218,6 +220,14 @@ function normalizeGeneral(value: unknown): GeneralCatalogEntry | null {
 
 function normalizeEncyclopedia(payload: unknown): EncyclopediaCatalogData | undefined {
   if (!isRecord(payload)) return undefined
+  if (payload.schemaVersion !== 1 || payload.catalogVersion !== 'encyclopedia-v1') return undefined
+  // A V2 projection is complete only when every catalog bucket is present.
+  // Treat partial/empty envelopes from stale deployments as invalid so the
+  // dedicated `/account/encyclopedia` endpoint can supply the full catalog.
+  if (!['generals', 'items', 'weapons', 'minions', 'bosses'].every((key) => Array.isArray(payload[key]))) return undefined
+  const minionCatalog = Array.isArray(payload.minions) ? payload.minions : []
+  const bossCatalog = Array.isArray(payload.bosses) ? payload.bosses : []
+  if (minionCatalog.length === 0 || bossCatalog.length === 0) return undefined
   const normalizeRows = (value: unknown) => Array.isArray(value) ? value.filter(isRecord) : []
   const generals = normalizeRows(payload.generals).flatMap((row) => {
     const entry = normalizeGeneral(row)
@@ -232,7 +242,7 @@ function normalizeEncyclopedia(payload: unknown): EncyclopediaCatalogData | unde
     return entry ? [{ ...entry, unlocked: row.unlocked === true }] : []
   })
   const rows = (key: string) => normalizeRows(payload[key]).map((row) => ({ ...row, unlocked: row.unlocked === true }))
-  return { generals, items, weapons, minions: rows('minions'), bosses: rows('bosses') }
+  return { schemaVersion: 1, catalogVersion: 'encyclopedia-v1', generals, items, weapons, minions: rows('minions'), bosses: rows('bosses') }
 }
 
 function normalizeEntitlement(value: unknown): PurchaseEntitlement | null {
@@ -290,10 +300,14 @@ function normalizeResponse(payload: unknown): PlayerAccountData | null {
     const id = typeof entry.generalId === 'string' ? entry.generalId : typeof entry.id === 'string' ? entry.id : null
     return id ? [id] : []
   })
+  // The dedicated encyclopedia endpoint is account-scoped and carries the
+  // same unlock projection.  Use it when a stale `/account` envelope omits
+  // `generalUnlock`, so the match preselection cannot expose the full catalog.
+  const encyclopediaUnlockedGeneralIds = encyclopedia?.generals.flatMap((entry) => entry.unlocked === true ? [entry.generalId] : []) ?? []
   const rawUnlockedGenerals = generalAccount?.unlockedGeneralIds
     ?? generalUnlock?.unlockedGeneralIds
     ?? account.unlockedGeneralIds
-    ?? catalogUnlockedGeneralIds
+    ?? (catalogUnlockedGeneralIds.length > 0 ? catalogUnlockedGeneralIds : encyclopediaUnlockedGeneralIds)
   const hasExplicitUnlockIds = Array.isArray(rawUnlockedGenerals)
   const unlockedGeneralIds = stringArray(rawUnlockedGenerals)
   const rawMaxPerMatch = generalAccount?.maxPerMatch ?? payload.generalSelectionMaxPerMatch
@@ -360,7 +374,9 @@ function normalizeResponse(payload: unknown): PlayerAccountData | null {
     },
     generalSelection: {
       maxPerMatch,
-      unlockStateKnown: hasExplicitUnlockIds || rawGeneralCatalog.some((entry) => isRecord(entry) && typeof entry.unlocked === 'boolean'),
+      unlockStateKnown: hasExplicitUnlockIds
+        || rawGeneralCatalog.some((entry) => isRecord(entry) && typeof entry.unlocked === 'boolean')
+        || encyclopediaUnlockedGeneralIds.length > 0,
       unlockedGeneralIds,
     },
     encyclopedia,
@@ -437,11 +453,35 @@ export function usePlayerAccount() {
     return payload
   }, [apiBase, token])
 
+  // Some rolling deployments expose the account and encyclopedia routes from
+  // different handlers.  Read the dedicated projection when the account
+  // envelope does not contain a valid V2 catalog, while keeping the account
+  // request authoritative for all other data.  A failed fallback must never
+  // make an otherwise valid account unavailable.
+  const loadAccountPayload = useCallback(async () => {
+    const payload = await call('/account')
+    if (isRecord(payload) && normalizeEncyclopedia(payload.encyclopedia)) return payload
+    try {
+      const encyclopediaPayload = await call('/account/encyclopedia')
+      const fallback = isRecord(encyclopediaPayload) && 'encyclopedia' in encyclopediaPayload
+        ? encyclopediaPayload.encyclopedia
+        : encyclopediaPayload
+      if (normalizeEncyclopedia(fallback)) {
+        return { ...(isRecord(payload) ? payload : {}), encyclopedia: fallback }
+      }
+    } catch {
+      // The dedicated endpoint is additive; older/stale servers may not have
+      // it yet. Continue with the account payload and let the caller render
+      // the rest of the account normally.
+    }
+    return payload
+  }, [call])
+
   const refresh = useCallback(async () => {
     setIsLoading(true)
     setError(null)
     try {
-      const payload = await call('/account')
+      const payload = await loadAccountPayload()
       const normalized = normalizeResponse(payload)
       if (!normalized) throw new Error('账户服务返回了不可识别的数据。')
       setData(normalized)
@@ -451,7 +491,7 @@ export function usePlayerAccount() {
     } finally {
       setIsLoading(false)
     }
-  }, [call])
+  }, [loadAccountPayload])
 
   useEffect(() => { void refresh() }, [refresh])
 
@@ -512,7 +552,7 @@ export function usePlayerAccount() {
       const normalized = normalizeOffers(payload)
       setOffers(normalized)
       // 首次生成固定候选会提升服务端账户版本，购买前必须静默同步新 CAS 版本。
-      const accountPayload = await call('/account')
+      const accountPayload = await loadAccountPayload()
       const nextData = normalizeResponse(accountPayload)
       if (nextData) setData(nextData)
       if (normalized.length === 0) setNotice('该购买权暂无可用候选。')
@@ -524,7 +564,7 @@ export function usePlayerAccount() {
     } finally {
       setIsMutating(false)
     }
-  }, [call])
+  }, [call, loadAccountPayload])
 
   const purchaseOffer = useCallback(async (entitlementId: string, offerId: string) => {
     if (!data) return { ok: false, message: '账户尚未加载。' }

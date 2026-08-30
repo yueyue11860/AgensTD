@@ -42,8 +42,26 @@ async function main(): Promise<void> {
     assert.ok(Array.isArray(body.encyclopedia.generals))
     assert.ok(Array.isArray(body.encyclopedia.minions))
     assert.ok(Array.isArray(body.encyclopedia.bosses))
+    const minions = body.encyclopedia.minions as Array<Record<string, unknown>>
+    const bosses = body.encyclopedia.bosses as Array<Record<string, unknown>>
+    assert.ok(minions.length > 0, 'HTTP projection must include the full PVE V2 monster catalog')
+    assert.ok(bosses.length > 0, 'HTTP projection must include the full PVE V2 Boss catalog')
+    assert.equal(minions.every((entry) => entry.unlocked === false), true, 'new account monsters start grey/locked')
+    assert.equal(bosses.every((entry) => entry.unlocked === false), true, 'new account Bosses start grey/locked')
     const general = (body.encyclopedia.generals as Array<Record<string, unknown>>)[0]
     assert.equal(typeof general.unlocked, 'boolean')
+
+    // The primary account envelope consumed by the frontend must carry the
+    // same projection (the dedicated endpoint is only a compatibility path).
+    const accountResponse = await fetch(`http://127.0.0.1:${address.port}/api/account`, {
+      headers: { Authorization: 'Bearer encyclopedia-token' },
+    })
+    assert.equal(accountResponse.status, 200)
+    const accountBody = await accountResponse.json() as { ok: boolean; encyclopedia?: { minions?: unknown[]; bosses?: unknown[] } }
+    assert.equal(accountBody.ok, true)
+    assert.ok(accountBody.encyclopedia, 'primary account envelope must include encyclopedia')
+    assert.equal(accountBody.encyclopedia?.minions?.length, minions.length)
+    assert.equal(accountBody.encyclopedia?.bosses?.length, bosses.length)
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
