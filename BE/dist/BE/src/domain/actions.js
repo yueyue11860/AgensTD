@@ -57,6 +57,10 @@ function parseClientAction(payload) {
                     expectedItemRuntimeVersion: payload.expectedItemRuntimeVersion,
                 }
                 : null;
+        case 'SET_TUTORIAL_PAUSED':
+            return typeof payload.paused === 'boolean'
+                ? { action: 'SET_TUTORIAL_PAUSED', paused: payload.paused }
+                : null;
         case 'DEPLOY_TRAY_PIECE':
             return Number.isInteger(payload.trayIndex)
                 && typeof payload.x === 'number'

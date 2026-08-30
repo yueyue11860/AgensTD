@@ -8,6 +8,7 @@ const action_submission_1 = require("./action-submission");
 const gateway_auth_1 = require("./gateway-auth");
 const unlock_logic_1 = require("../core/unlock-logic");
 const types_1 = require("../account-v1/types");
+const service_1 = require("../account-v1/service");
 const player_account_adapters_1 = require("../data/player-account-adapters");
 const types_2 = require("../item-v1/types");
 const account_1 = require("../item-v1/account");
@@ -157,7 +158,35 @@ function createRestApiRouter(engine, roomManager, config, limiter, replayRecorde
         try {
             const account = await accountService.getOrCreate(principal.playerId);
             const pveProgression = await accountService.getPveProgression(principal.playerId);
-            response.json({ ok: true, account: publicAccount(account), pveProgression, catalogs: player_account_adapters_1.ACCOUNT_CATALOGS });
+            // Keep the legacy `account` envelope while exposing the authoritative
+            // roster and unlock projection explicitly for newer clients.
+            const encyclopedia = (0, player_account_adapters_1.buildEncyclopediaCatalog)(account);
+            response.json({
+                ok: true,
+                account: publicAccount(account),
+                generalUnlock: account.generalUnlock,
+                generals: player_account_adapters_1.ACCOUNT_CATALOGS.generals,
+                generalSelectionMaxPerMatch: service_1.MAX_GENERAL_SELECTIONS_PER_MATCH,
+                pveProgression,
+                catalogs: player_account_adapters_1.ACCOUNT_CATALOGS,
+                // Additive projection for encyclopedia-capable clients. Existing
+                // clients continue to consume `catalogs` unchanged.
+                encyclopedia,
+            });
+        }
+        catch (error) {
+            sendAccountError(response, error);
+        }
+    });
+    router.get('/account/encyclopedia', async (request, response) => {
+        const principal = await resolvePrincipal(request, config);
+        if (!principal)
+            return rejectUnauthorized(response);
+        if (!accountService)
+            return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' });
+        try {
+            const account = await accountService.getOrCreate(principal.playerId);
+            response.json({ ok: true, encyclopedia: (0, player_account_adapters_1.buildEncyclopediaCatalog)(account) });
         }
         catch (error) {
             sendAccountError(response, error);
@@ -266,6 +295,9 @@ function createRestApiRouter(engine, roomManager, config, limiter, replayRecorde
                 }
             }
             const current = await accountService.getOrCreate(principal.playerId);
+            if (!current.generalUnlock.unlockedGeneralIds.includes(generalId)) {
+                throw new types_1.AccountDomainError('INVALID_ACCOUNT_MUTATION', `general ${generalId} is not unlocked for this account`);
+            }
             if (current.idempotencyByRequestId[requestId]) {
                 readStoredSubsystemReplay(current, requestId, 'save_weapon_payload', expectedAccountVersion, {
                     kind: 'weapon_loadout', generalId, expectedLoadoutVersion, slots,

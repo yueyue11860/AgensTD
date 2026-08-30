@@ -65,7 +65,7 @@ async function main(): Promise<void> {
   assert.deepEqual(createdA.item.unlockedActiveItemIds, ['change_character_brush', 'cultivation_pill'])
   assert.deepEqual(createdA.item.unlockedPassiveItemIds, ['traveling_kitchen', 'talent_registry', 'reserve_expansion_talisman'])
   assert.deepEqual(createdA, createdB, '并发初始化必须只发一次默认包')
-  assert.equal(createdA.schemaVersion, 2)
+  assert.equal(createdA.schemaVersion, 3)
   assert.deepEqual((await service.getPveProgression(createdA.playerId)).clearedStageKeys, [])
 
   assert.equal(settlementRewardTier(4, 'defeat', false), 'wave_0_4')
@@ -176,6 +176,8 @@ async function main(): Promise<void> {
     resolveItem(itemId: string): JsonObject { return { itemId, resolved: true } },
     resolveWeapon(weaponId: string): JsonObject { return { weaponId, resolved: true } },
   })
+  assert.deepEqual(snapshot.selectedGeneralIds, account.generalUnlock.unlockedGeneralIds)
+  assert.deepEqual(snapshot.unlockedGeneralIds, account.generalUnlock.unlockedGeneralIds)
   const accountAfterSnapshot = await service.getOrCreate(account.playerId)
   const sameSnapshot = await service.createBuildSnapshot({
     requestId: 'snapshot:another-request-is-ignored-after-lock',
@@ -218,15 +220,46 @@ async function main(): Promise<void> {
   )
   const progressionAccount = await progressionService.getOrCreate('progression-player')
   assert.equal(progressionAccount.pveProgress.clearsByStageKey['easy:1']?.clearCount, 1)
+  assert.ok(progressionAccount.generalUnlock.unlockedGeneralIds.includes('nazha'), '首次简单关通关应发放确定的二字神将')
+  assert.equal(
+    progressionAccount.generalUnlock.unlockedGeneralIds.filter((generalId) => generalId === 'nazha').length,
+    1,
+    '重复结算不得重复发放神将解锁',
+  )
+
+  await progressionService.settleMatch({
+    requestId: 'settle:normal-1:first-clear',
+    matchId: 'normal-1:first-clear',
+    playerId: 'progression-player',
+    reason: 'victory',
+    highestCompletedWave: 20,
+    officialVictory: true,
+    stageSelection: { levelId: 1, difficulty: 'normal' },
+    retainedWeaponFragments: {},
+  })
+  const progressionAfterNormal = await progressionService.getOrCreate('progression-player')
+  assert.ok(progressionAfterNormal.generalUnlock.unlockedGeneralIds.includes('sha_wujing'), '普通关首通应发放三字神将')
 
   const migrationStore = new MemoryPlayerAccountStore()
   const legacy = createLegacyAccount('legacy-player')
   await migrationStore.createIfAbsent(legacy)
   const migrated = await new PlayerAccountService(migrationStore, catalog).getOrCreate('legacy-player')
-  assert.equal(migrated.schemaVersion, 2)
+  assert.equal(migrated.schemaVersion, 3)
   assert.equal(migrated.wallet.gold, 77)
   assert.equal(migrated.wallet.honor, 0, 'legacy accounts gain an explicit honor wallet during migration')
+  assert.equal(migrated.generalUnlock.starterClaimed, true)
+  assert.ok(migrated.generalUnlock.unlockedGeneralIds.length >= 3)
   assert.deepEqual(migrated.pveProgress.clearsByStageKey, {}, '不迁移旧版可伪造的关卡进度')
+
+  const partialStore = new MemoryPlayerAccountStore()
+  const partial = structuredClone(createDefaultPlayerAccount('partial-player')) as unknown as Record<string, unknown>
+  partial.generalUnlock = { version: 1, unlockedGeneralIds: ['houyi', 'future_general_from_old_catalog'], starterClaimed: false }
+  await partialStore.createIfAbsent(partial as unknown as PlayerAccountRecord)
+  const partialMigrated = await new PlayerAccountService(partialStore, catalog).getOrCreate('partial-player')
+  assert.equal(partialMigrated.generalUnlock.starterClaimed, true)
+  assert.ok(partialMigrated.generalUnlock.unlockedGeneralIds.includes('houyi'))
+  assert.ok(partialMigrated.generalUnlock.unlockedGeneralIds.includes('chang_e'))
+  assert.equal(partialMigrated.generalUnlock.unlockedGeneralIds.includes('future_general_from_old_catalog'), false)
 
   console.log('account-v1 smoke passed')
 }
@@ -236,6 +269,7 @@ function createLegacyAccount(playerId: string): PlayerAccountRecord {
   account.schemaVersion = 1
   ;(account.wallet as { gold: number }).gold = 77
   delete account.pveProgress
+  delete account.generalUnlock
   return account as unknown as PlayerAccountRecord
 }
 

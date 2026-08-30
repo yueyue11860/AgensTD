@@ -86,6 +86,7 @@ import type {
   PveGeneralStatusSnapshot,
   PveEffectZoneSnapshot,
   PveGameRuntimeOptions,
+  PveGeneralSelection,
   PveLaneRoute,
   PveLaneSlot,
   PvePiece,
@@ -173,6 +174,8 @@ interface PlayerRuntime {
   passiveItems: PassiveRuleProjection | null
   itemRuntime: ItemRuntimeAggregate | null
   weaponSnapshot: MatchWeaponLoadoutSnapshot | null
+  unlockedGeneralIds: string[]
+  selectedGeneralIds: string[]
 }
 
 interface EnemyRuntime extends PveEnemySnapshot {
@@ -261,6 +264,8 @@ interface PveRuntimeCheckpointV1 {
   laneWaves: LaneWaveRuntime[]
   currentTick: number
   status: PveRuntimeSnapshot['status']
+  /** Added after v1 checkpoints were already in circulation. */
+  tutorialPaused?: boolean
   result: PveRuntimeSnapshot['result']
   currentWaveNumber: number
   pendingWaveNumber: number | null
@@ -360,6 +365,22 @@ function validateRuntimeOptions(options: PveGameRuntimeOptions): void {
   }
 }
 
+function normalizeGeneralSelection(
+  selection: PveGeneralSelection | undefined,
+  catalog: Readonly<Record<string, GeneralDefinition>>,
+): { unlockedGeneralIds: string[], selectedGeneralIds: string[] } {
+  const all = Object.keys(catalog).sort()
+  if (!selection) return { unlockedGeneralIds: all, selectedGeneralIds: all }
+  const unlocked = [...new Set(selection.unlockedGeneralIds)].sort()
+  const selected = [...new Set(selection.selectedGeneralIds)].sort()
+  if (selected.length === 0) throw new Error('EMPTY_SELECTED_GENERAL')
+  if (unlocked.some((id) => !catalog[id])) throw new Error('UNKNOWN_UNLOCKED_GENERAL')
+  if (selected.some((id) => !catalog[id])) throw new Error('UNKNOWN_SELECTED_GENERAL')
+  const unlockedSet = new Set(unlocked)
+  if (selected.some((id) => !unlockedSet.has(id))) throw new Error('SELECTED_GENERAL_NOT_UNLOCKED')
+  return { unlockedGeneralIds: unlocked, selectedGeneralIds: selected }
+}
+
 export class PveGameRuntime {
   private readonly tickRateMs: number
 
@@ -380,6 +401,8 @@ export class PveGameRuntime {
   private readonly isDeployableCell: (slot: PveLaneSlot, x: number, y: number) => boolean
 
   private readonly initialCharacterTokens: Map<string, number>
+
+  private readonly generalSelections: Readonly<Record<string, PveGeneralSelection>>
 
   private readonly waveGlyphPools: readonly (readonly string[])[] | null
 
@@ -452,6 +475,8 @@ export class PveGameRuntime {
 
   private status: PveRuntimeSnapshot['status'] = 'waiting'
 
+  private tutorialPaused = false
+
   private result: PveRuntimeSnapshot['result'] = null
 
   private currentWaveNumber = 0
@@ -510,13 +535,14 @@ export class PveGameRuntime {
     this.eventHistoryLimit = Math.max(20, options.eventHistoryLimit ?? 300)
     this.eventObserver = options.eventObserver ?? null
     this.generalCatalog = options.generalCatalog ?? GENERAL_CATALOG
+    this.generalSelections = structuredClone(options.generalSelections ?? {})
     this.itemLoadoutSnapshots = structuredClone(options.itemLoadoutSnapshots ?? {})
     this.weaponLoadoutSnapshots = structuredClone(options.weaponLoadoutSnapshots ?? {})
     this.generalFormations = new GeneralFormationManager(this.generalCatalog)
     this.bossRuntime = new BossCombatRuntimeV1(this.tickRateMs)
   }
 
-  registerPlayer(playerId: string, slot: PveLaneSlot): PveRuntimeResult {
+  registerPlayer(playerId: string, slot: PveLaneSlot, selection?: PveGeneralSelection): PveRuntimeResult {
     if (this.status !== 'waiting') {
       return this.commandResult(false, 'MATCH_ALREADY_STARTED')
     }
@@ -536,6 +562,17 @@ export class PveGameRuntime {
       return this.commandResult(false, 'LOADOUT_PLAYER_MISMATCH')
     }
     const passiveItems = itemSnapshot ? projectPassiveItemRules(this.seed, itemSnapshot) : null
+    let normalizedSelection: { unlockedGeneralIds: string[], selectedGeneralIds: string[] }
+    try {
+      normalizedSelection = normalizeGeneralSelection(selection ?? this.generalSelections[playerId], this.generalCatalog)
+    } catch (error) {
+      return this.commandResult(false, error instanceof Error ? error.message : 'INVALID_GENERAL_SELECTION')
+    }
+    const selectedTokenCounts: Record<string, number> = {}
+    for (const generalId of normalizedSelection.selectedGeneralIds) {
+      const definition = this.generalCatalog[generalId]
+      for (const glyph of definition.recipe.glyphs) selectedTokenCounts[glyph] = (selectedTokenCounts[glyph] ?? 0) + 1
+    }
     const player: PlayerRuntime = {
       playerId,
       slot,
@@ -549,13 +586,17 @@ export class PveGameRuntime {
       reserve: Array<PvePiece | null>(RESERVE_SIZE + (passiveItems?.reserveCapacityBonus ?? 0)).fill(null),
       discardedCharacters: [],
       board: new Map(),
-      remainingCharacterTokens: new Map(this.initialCharacterTokens),
+      remainingCharacterTokens: selection || this.generalSelections[playerId]
+        ? sanitizeCharacterTokens(selectedTokenCounts)
+        : new Map(this.initialCharacterTokens),
       clearedWaves: new Set(),
       noCharacterPaidRecruitBatches: 0,
       itemSnapshot,
       passiveItems,
       itemRuntime: itemSnapshot ? createItemRuntimeAggregate(this.seed, itemSnapshot) : null,
       weaponSnapshot,
+      unlockedGeneralIds: normalizedSelection.unlockedGeneralIds,
+      selectedGeneralIds: normalizedSelection.selectedGeneralIds,
     }
     this.players.set(playerId, player)
     this.slotAssignments.set(slot, playerId)
@@ -632,6 +673,9 @@ export class PveGameRuntime {
       }
       else {
         switch (action.type) {
+          case 'SET_TUTORIAL_PAUSED':
+            result = this.setTutorialPaused(action)
+            break
           case 'RECRUIT_BATCH':
             result = this.handleRecruit(player, action)
             break
@@ -671,7 +715,7 @@ export class PveGameRuntime {
   }
 
   tick(): PveRuntimeSnapshot {
-    if (this.status !== 'running') {
+    if (this.status !== 'running' || this.tutorialPaused) {
       return this.snapshot()
     }
 
@@ -718,6 +762,7 @@ export class PveGameRuntime {
       seed: this.seed,
       rngState: this.prng.snapshot(),
       status: this.status,
+      tutorialPaused: this.tutorialPaused,
       result: this.result ? { ...this.result } : null,
       balance: {
         profileId: this.balanceProfile.profileId,
@@ -832,6 +877,7 @@ export class PveGameRuntime {
       enemySequence: this.enemySequence,
       eventSequence: this.eventSequence,
       effectSequence: this.effectSequence,
+      tutorialPaused: this.tutorialPaused,
     }
     return structuredClone(checkpoint) as unknown as Record<string, unknown>
   }
@@ -854,6 +900,8 @@ export class PveGameRuntime {
     for (const stored of checkpoint.players) {
       const player: PlayerRuntime = {
         ...structuredClone(stored),
+        unlockedGeneralIds: stored.unlockedGeneralIds ?? Object.keys(this.generalCatalog).sort(),
+        selectedGeneralIds: stored.selectedGeneralIds ?? Object.keys(this.generalCatalog).sort(),
         board: new Map(stored.board.map(([key, value]) => [key, structuredClone(value)])),
         remainingCharacterTokens: new Map(stored.remainingCharacterTokens),
         clearedWaves: new Set(stored.clearedWaves),
@@ -902,9 +950,18 @@ export class PveGameRuntime {
     this.enemySequence = checkpoint.enemySequence
     this.eventSequence = checkpoint.eventSequence
     this.effectSequence = checkpoint.effectSequence
+    this.tutorialPaused = checkpoint.tutorialPaused === true
     this.prng.restore(checkpoint.rngState)
     this.seed = checkpoint.seed
     this.recentEvents.length = 0
+  }
+
+  private setTutorialPaused(action: Extract<PveRuntimeAction, { type: 'SET_TUTORIAL_PAUSED' }>): PveRuntimeResult {
+    if (this.status !== 'running') return this.actionResult(action, false, 'MATCH_NOT_RUNNING')
+    if (action.paused && this.currentWaveNumber > 5) return this.actionResult(action, false, 'TUTORIAL_WINDOW_EXPIRED')
+    this.tutorialPaused = action.paused
+    this.emit(action.paused ? 'TUTORIAL_PAUSED' : 'TUTORIAL_RESUMED', { paused: action.paused }, { actionId: action.actionId })
+    return this.actionResult(action, true, action.paused ? 'TUTORIAL_PAUSED' : 'TUTORIAL_RESUMED')
   }
 
   discardPresentationEvents(): void {
@@ -3571,6 +3628,7 @@ export class PveGameRuntime {
       [...player.board.values()].filter((entry) => isSoldier(entry.piece)).length,
       player.populationCap,
       this.currentTick,
+      new Set(player.selectedGeneralIds),
     )
     if (!result.ok) return result
 
@@ -4010,6 +4068,8 @@ export class PveGameRuntime {
       activeSynergies,
       remainingCharacterTokens,
       clearedWaves: [...player.clearedWaves].sort((left, right) => left - right),
+      unlockedGeneralIds: [...player.unlockedGeneralIds],
+      selectedGeneralIds: [...player.selectedGeneralIds],
     }
   }
 

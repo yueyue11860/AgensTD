@@ -1,8 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PlayerAccountService = void 0;
+exports.PlayerAccountService = exports.MAX_GENERAL_SELECTIONS_PER_MATCH = exports.DEFAULT_STARTER_GENERAL_IDS = void 0;
+exports.createDefaultGeneralUnlockState = createDefaultGeneralUnlockState;
 exports.createDefaultPlayerAccount = createDefaultPlayerAccount;
 exports.settlementRewardTier = settlementRewardTier;
+const roster_1 = require("../core/hero-v1/roster");
 const pve_stage_config_1 = require("../../../shared/contracts/pve-stage-config");
 const unlock_logic_1 = require("../core/unlock-logic");
 const types_1 = require("./types");
@@ -12,7 +14,39 @@ const DEFAULT_PASSIVE_ITEMS = [
     'talent_registry',
     'reserve_expansion_talisman',
 ];
+/** Starter roster is intentionally small and restricted to two-character generals. */
+exports.DEFAULT_STARTER_GENERAL_IDS = ['houyi', 'chang_e', 'yangjian'];
+const KNOWN_GENERAL_IDS = new Set(roster_1.GENERAL_ROSTER.map((entry) => entry.generalId));
+/** Deterministic first-clear rewards for the unlockable general roster. */
+const GENERAL_UNLOCK_REWARDS = Object.freeze({
+    'easy:1': 'nazha',
+    'easy:3': 'lei_gong',
+    'easy:5': 'dian_mu',
+    'easy:7': 'lijing',
+    'easy:10': 'shou_xing',
+    'normal:1': 'sha_wujing',
+    'normal:2': 'zhu_bajie',
+    'normal:3': 'zhen_yuanzi',
+    'normal:4': 'sunwukong',
+    'normal:6': 'tang_sanzang',
+    'normal:8': 'bai_longma',
+    'normal:10': 'pi_lanpo',
+    'hard:1': 'yu_huang_dadi',
+    'hard:2': 'ru_lai_fozu',
+    'hard:3': 'pu_ti_laozu',
+    'hard:4': 'tai_yi_zhenren',
+    'hard:5': 'guan_yin_pusa',
+    'hard:6': 'tai_shang_laojun',
+});
 const MAX_CAS_RETRIES = 12;
+exports.MAX_GENERAL_SELECTIONS_PER_MATCH = 6;
+function createDefaultGeneralUnlockState() {
+    return {
+        version: 1,
+        unlockedGeneralIds: [...exports.DEFAULT_STARTER_GENERAL_IDS],
+        starterClaimed: true,
+    };
+}
 function nowIso() {
     return new Date().toISOString();
 }
@@ -58,6 +92,21 @@ function isPveProgressPayload(value) {
         && candidate.clearsByStageKey !== null
         && !Array.isArray(candidate.clearsByStageKey);
 }
+function isGeneralUnlockState(value) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value))
+        return false;
+    const candidate = value;
+    return Number.isSafeInteger(candidate.version)
+        && candidate.version >= 1
+        && Array.isArray(candidate.unlockedGeneralIds)
+        && candidate.unlockedGeneralIds.length > 0
+        && candidate.unlockedGeneralIds.every(id => typeof id === 'string' && id.length > 0)
+        && typeof candidate.starterClaimed === 'boolean';
+}
+function isKnownGeneralUnlockState(value) {
+    return isGeneralUnlockState(value)
+        && value.unlockedGeneralIds.every(id => KNOWN_GENERAL_IDS.has(id));
+}
 function createDefaultPlayerAccount(playerId, at = nowIso()) {
     if (!playerId)
         throw new types_1.AccountDomainError('INVALID_ACCOUNT_MUTATION', 'playerId is required');
@@ -91,6 +140,7 @@ function createDefaultPlayerAccount(playerId, at = nowIso()) {
             extensions: {},
         },
         pveProgress: (0, unlock_logic_1.createDefaultPveProgress)(),
+        generalUnlock: createDefaultGeneralUnlockState(),
         createdAt: at,
         updatedAt: at,
     };
@@ -279,6 +329,15 @@ class PlayerAccountService {
                 };
                 next.pveProgress.version += 1;
                 progressionUpdated = true;
+                // Unlocks are deterministic first-clear rewards. Re-clears only
+                // increase the stage clear count and never grant a duplicate unlock.
+                if (!previousClear) {
+                    const rewardGeneralId = GENERAL_UNLOCK_REWARDS[stageKey];
+                    if (rewardGeneralId && !next.generalUnlock.unlockedGeneralIds.includes(rewardGeneralId)) {
+                        next.generalUnlock.unlockedGeneralIds = [...next.generalUnlock.unlockedGeneralIds, rewardGeneralId].sort();
+                        next.generalUnlock.version += 1;
+                    }
+                }
             }
             const settlement = {
                 settlementId,
@@ -430,6 +489,12 @@ class PlayerAccountService {
                 };
             }
             const at = nowIso();
+            const unlockedGeneralIds = [...current.generalUnlock.unlockedGeneralIds];
+            const selectedGeneralIds = [...(input.selectedGeneralIds ?? unlockedGeneralIds.slice(0, exports.MAX_GENERAL_SELECTIONS_PER_MATCH))];
+            if (selectedGeneralIds.length === 0 || selectedGeneralIds.length > exports.MAX_GENERAL_SELECTIONS_PER_MATCH
+                || selectedGeneralIds.some(id => typeof id !== 'string' || !unlockedGeneralIds.includes(id))) {
+                throw new types_1.AccountDomainError('INVALID_ACCOUNT_MUTATION', `selectedGeneralIds must be a non-empty subset of unlocked generals (max ${exports.MAX_GENERAL_SELECTIONS_PER_MATCH})`);
+            }
             const snapshot = {
                 snapshotVersion: 1,
                 snapshotId: `build:${input.matchId}:${input.playerId}`,
@@ -437,6 +502,8 @@ class PlayerAccountService {
                 playerId: input.playerId,
                 accountVersion: current.version,
                 createdAt: at,
+                selectedGeneralIds,
+                unlockedGeneralIds,
                 item: {
                     accountVersion: current.item.version,
                     activeSlots: clone(current.item.loadout.activeSlots),
@@ -489,6 +556,8 @@ class PlayerAccountService {
             const hasValidPveProgress = isPveProgressPayload(candidate.pveProgress);
             if (candidate.schemaVersion === types_1.PLAYER_ACCOUNT_SCHEMA_VERSION
                 && hasValidPveProgress
+                && isKnownGeneralUnlockState(candidate.generalUnlock)
+                && candidate.generalUnlock.starterClaimed
                 && Number.isSafeInteger(wallet?.gold)
                 && Number.isSafeInteger(wallet?.honor)
                 && wallet?.gold >= 0
@@ -509,6 +578,26 @@ class PlayerAccountService {
             // schema for the additive honor-wallet field.
             if (candidate.schemaVersion !== types_1.PLAYER_ACCOUNT_SCHEMA_VERSION || !hasValidPveProgress) {
                 next.pveProgress = (0, unlock_logic_1.createDefaultPveProgress)();
+            }
+            // Accounts created before the general-unlock subsystem did not carry a
+            // roster gate. Grant the deterministic starter set exactly once while
+            // preserving any valid IDs already present in a partially migrated row.
+            if (!isGeneralUnlockState(candidate.generalUnlock)) {
+                next.generalUnlock = createDefaultGeneralUnlockState();
+            }
+            else {
+                const unlock = clone(candidate.generalUnlock);
+                const ids = Array.isArray(unlock.unlockedGeneralIds)
+                    ? unlock.unlockedGeneralIds.filter((id) => typeof id === 'string' && id.length > 0 && KNOWN_GENERAL_IDS.has(id))
+                    : [];
+                if (!unlock.starterClaimed || ids.length === 0) {
+                    for (const starter of exports.DEFAULT_STARTER_GENERAL_IDS)
+                        if (!ids.includes(starter))
+                            ids.push(starter);
+                    unlock.starterClaimed = true;
+                }
+                unlock.unlockedGeneralIds = [...new Set(ids)];
+                next.generalUnlock = unlock;
             }
             for (const settlement of Object.values(next.settlementsById)) {
                 if (typeof settlement.progressionUpdated !== 'boolean')

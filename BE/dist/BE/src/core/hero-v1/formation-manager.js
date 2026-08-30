@@ -19,8 +19,8 @@ class GeneralFormationManager {
     constructor(catalog = catalog_1.GENERAL_CATALOG) {
         this.catalog = catalog;
     }
-    reconcilePlayer(ownerPlayerId, boardCharacters, nonGeneralPopulationUsed, populationCap, currentTick) {
-        const candidates = this.detectCandidates(ownerPlayerId, boardCharacters);
+    reconcilePlayer(ownerPlayerId, boardCharacters, nonGeneralPopulationUsed, populationCap, currentTick, allowedGeneralIds) {
+        const candidates = this.detectCandidates(ownerPlayerId, boardCharacters, allowedGeneralIds);
         const populationUsed = nonGeneralPopulationUsed + candidates.length;
         const previous = this.getActiveFormations(ownerPlayerId);
         if (populationUsed > populationCap) {
@@ -221,13 +221,13 @@ class GeneralFormationManager {
         }
         this.formationSequence = Number(checkpoint.formationSequence);
     }
-    detectCandidates(ownerPlayerId, boardCharacters) {
+    detectCandidates(ownerPlayerId, boardCharacters, allowedGeneralIds) {
         const tokens = boardCharacters
             .filter((token) => token.ownerPlayerId === ownerPlayerId)
             .sort((left, right) => left.y - right.y || left.x - right.x || left.tokenId.localeCompare(right.tokenId));
         const tokenAt = new Map(tokens.map((token) => [cellKey(token.x, token.y), token]));
         const consumedTokenIds = new Set();
-        const definitions = Object.values(this.catalog).sort((left, right) => {
+        const definitions = Object.values(this.catalog).filter((definition) => !allowedGeneralIds || allowedGeneralIds.has(definition.generalId)).sort((left, right) => {
             return right.recipe.glyphs.length - left.recipe.glyphs.length
                 || right.recipe.priority - left.recipe.priority
                 || left.generalId.localeCompare(right.generalId);

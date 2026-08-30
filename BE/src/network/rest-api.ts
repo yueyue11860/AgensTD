@@ -14,8 +14,8 @@ import type { ProgressStore } from '../data/progress-store'
 import type { PlayerType } from '../domain/progress'
 import { checkUnlock } from '../core/unlock-logic'
 import { AccountDomainError, type PlayerAccountRecord } from '../account-v1/types'
-import type { PlayerAccountService } from '../account-v1/service'
-import { ACCOUNT_CATALOGS } from '../data/player-account-adapters'
+import { MAX_GENERAL_SELECTIONS_PER_MATCH, type PlayerAccountService } from '../account-v1/service'
+import { ACCOUNT_CATALOGS, buildEncyclopediaCatalog } from '../data/player-account-adapters'
 import { ITEM_CATALOG_VERSION, type ActiveItemSlots, type PassiveItemSlots, type PlayerItemAccount } from '../item-v1/types'
 import { validateItemLoadout } from '../item-v1/account'
 import { getWeaponDefinition } from '../weapon-v1/catalog'
@@ -202,7 +202,34 @@ export function createRestApiRouter(
     try {
       const account = await accountService.getOrCreate(principal.playerId)
       const pveProgression = await accountService.getPveProgression(principal.playerId)
-      response.json({ ok: true, account: publicAccount(account), pveProgression, catalogs: ACCOUNT_CATALOGS })
+      // Keep the legacy `account` envelope while exposing the authoritative
+      // roster and unlock projection explicitly for newer clients.
+      const encyclopedia = buildEncyclopediaCatalog(account)
+      response.json({
+        ok: true,
+        account: publicAccount(account),
+        generalUnlock: account.generalUnlock,
+        generals: ACCOUNT_CATALOGS.generals,
+        generalSelectionMaxPerMatch: MAX_GENERAL_SELECTIONS_PER_MATCH,
+        pveProgression,
+        catalogs: ACCOUNT_CATALOGS,
+        // Additive projection for encyclopedia-capable clients. Existing
+        // clients continue to consume `catalogs` unchanged.
+        encyclopedia,
+      })
+    }
+    catch (error) {
+      sendAccountError(response, error)
+    }
+  })
+
+  router.get('/account/encyclopedia', async (request, response) => {
+    const principal = await resolvePrincipal(request, config)
+    if (!principal) return rejectUnauthorized(response)
+    if (!accountService) return response.status(503).json({ ok: false, code: 'ACCOUNT_SERVICE_UNAVAILABLE' })
+    try {
+      const account = await accountService.getOrCreate(principal.playerId)
+      response.json({ ok: true, encyclopedia: buildEncyclopediaCatalog(account) })
     }
     catch (error) {
       sendAccountError(response, error)
@@ -307,6 +334,9 @@ export function createRestApiRouter(
         }
       }
       const current = await accountService.getOrCreate(principal.playerId)
+      if (!current.generalUnlock.unlockedGeneralIds.includes(generalId)) {
+        throw new AccountDomainError('INVALID_ACCOUNT_MUTATION', `general ${generalId} is not unlocked for this account`)
+      }
       if (current.idempotencyByRequestId[requestId]) {
         readStoredSubsystemReplay(current, requestId, 'save_weapon_payload', expectedAccountVersion, {
           kind: 'weapon_loadout', generalId, expectedLoadoutVersion, slots,

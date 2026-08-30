@@ -219,6 +219,8 @@ export interface PvePlayerSnapshot {
   activeSynergies: PveActiveSynergySnapshot[]
   remainingCharacterTokens: Record<string, number>
   clearedWaves: number[]
+  unlockedGeneralIds: string[]
+  selectedGeneralIds: string[]
 }
 
 export interface PveRuntimeEvent {
@@ -226,6 +228,8 @@ export interface PveRuntimeEvent {
   tick: number
   type:
     | 'MATCH_STARTED'
+    | 'TUTORIAL_PAUSED'
+    | 'TUTORIAL_RESUMED'
     | 'RECRUITED'
     | 'TRAY_BOARD_SWAPPED'
     | 'RESERVE_BOARD_SWAPPED'
@@ -295,6 +299,7 @@ export interface PveRuntimeSnapshot {
   seed: string
   rngState: number
   status: PveRuntimeStatus
+  tutorialPaused: boolean
   result: {
     outcome: 'victory' | 'defeat'
     reason: string
@@ -444,6 +449,12 @@ export interface UseActiveItemAction {
   expectedItemRuntimeVersion: number
 }
 
+export interface SetTutorialPausedAction {
+  type: 'SET_TUTORIAL_PAUSED'
+  actionId: string
+  paused: boolean
+}
+
 export type PveRuntimeAction =
   | RecruitBatchAction
   | SwapTrayBoardAction
@@ -455,6 +466,7 @@ export type PveRuntimeAction =
   | SetGeneralFixedAction
   | MoveFixedGeneralAction
   | UseActiveItemAction
+  | SetTutorialPausedAction
 
 export interface PveRuntimeResult {
   ok: boolean
@@ -493,5 +505,12 @@ export interface PveGameRuntimeOptions {
   itemLoadoutSnapshots?: Readonly<Record<string, import('../item-v1').MatchItemLoadoutSnapshot>>
   /** 开局时冻结的局外武器配装；对局内不再读账户。 */
   weaponLoadoutSnapshots?: Readonly<Record<string, import('../weapon-v1').MatchWeaponLoadoutSnapshot>>
+  /** 每位玩家开局时冻结的神将解锁/预选池；旧调用未提供时使用全量目录。 */
+  generalSelections?: Readonly<Record<string, PveGeneralSelection>>
+}
+
+export interface PveGeneralSelection {
+  unlockedGeneralIds: readonly string[]
+  selectedGeneralIds: readonly string[]
 }
 import type { GeneralDefinition } from '../core/hero-v1/types'

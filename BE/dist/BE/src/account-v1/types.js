@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AccountDomainError = exports.PLAYER_ACCOUNT_SCHEMA_VERSION = void 0;
-exports.PLAYER_ACCOUNT_SCHEMA_VERSION = 2;
+exports.PLAYER_ACCOUNT_SCHEMA_VERSION = 3;
 class AccountDomainError extends Error {
     code;
     constructor(code, message) {

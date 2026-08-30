@@ -181,6 +181,7 @@ function canvasColor(value: number, alpha = 1) {
 }
 
 const SOLDIER_BLUE = 0x60a5fa
+const GENERAL_GLYPH_GOLD = 0xf4d06f
 const GENERAL_QUALITY_COLORS = {
   purple: 0xa78bfa,
   orange: 0xfb923c,
@@ -232,6 +233,7 @@ export class BattlefieldScene extends Phaser.Scene {
   private pointerDownCell: BattlefieldGridPosition | null = null
   private pointerDownScreen: BattlefieldGridPosition | null = null
   private cameraViewMode: BattlefieldViewMode = 'full'
+  private initialFocusCell: BattlefieldGridPosition | null = null
   private readonly activeGesturePointers = new Map<number, { x: number, y: number }>()
   private readonly gestureConsumedPointers = new Set<number>()
   private panPointerId: number | null = null
@@ -273,6 +275,7 @@ export class BattlefieldScene extends Phaser.Scene {
     this.createAmbientMotes()
     this.bindPointerInput()
     this.setViewMode('full')
+    if (this.initialFocusCell) this.setViewMode('focus', this.initialFocusCell)
     if (this.latestSnapshot) this.renderSnapshot(this.latestSnapshot)
     if (this.isEnemyPresentationFixtureEnabled()) this.drawEnemyPresentationFixture()
     if (this.isGeneralManifestationFixtureEnabled()) this.drawGeneralManifestationFixture()
@@ -453,11 +456,18 @@ export class BattlefieldScene extends Phaser.Scene {
       const focus = requestedFocus
         ? { x: gridToPixel(requestedFocus.x) + BATTLEFIELD_CELL_SIZE / 2, y: gridToPixel(requestedFocus.y) + BATTLEFIELD_CELL_SIZE / 2 }
         : this.resolveFocusPoint()
-      const zoom = Math.max(1.35, camera.zoom)
+      const zoom = Math.min(BATTLEFIELD_MAX_ZOOM, Math.max(1.5, camera.zoom))
       camera.setZoom(zoom).centerOn(focus.x, focus.y)
     }
     this.notifyCameraViewChange()
     return this.getCameraViewState()
+  }
+
+  /** Stores the player's quadrant focus even when React calls this before
+   * Phaser has finished creating the scene. */
+  setInitialFocusCell(cell: BattlefieldGridPosition | null) {
+    this.initialFocusCell = cell
+    if (cell && this.sys.isActive()) this.setViewMode('focus', cell)
   }
 
   zoomBy(delta: number, screenPoint = { x: BATTLEFIELD_SIZE / 2, y: BATTLEFIELD_SIZE / 2 }) {
@@ -704,7 +714,8 @@ export class BattlefieldScene extends Phaser.Scene {
     this.input.on('wheel', (pointer: Phaser.Input.Pointer, _objects: unknown[], _deltaX: number, deltaY: number) => {
       if (deltaY === 0) return
       pointer.event?.preventDefault()
-      this.zoomBy(deltaY < 0 ? 0.14 : -0.14, { x: pointer.x, y: pointer.y })
+      const delta = Phaser.Math.Clamp(-deltaY * 0.0015, -0.12, 0.12)
+      this.zoomBy(delta, { x: pointer.x, y: pointer.y })
     })
     this.inputZone.on('pointermove', (pointer: Phaser.Input.Pointer, localX: number, localY: number) => {
       if (this.activeGesturePointers.has(pointer.id)) {
@@ -722,6 +733,16 @@ export class BattlefieldScene extends Phaser.Scene {
           this.gestureConsumedPointers.add(pointer.id)
         }
         return
+      }
+      if (pointer.isDown && pointer.leftButtonDown() && this.pointerDownScreen) {
+        const distance = Phaser.Math.Distance.Between(this.pointerDownScreen.x, this.pointerDownScreen.y, pointer.x, pointer.y)
+        if (distance > 6) {
+          this.panPointerId = pointer.id
+          this.gestureConsumedPointers.add(pointer.id)
+          this.panBy(this.pointerDownScreen.x - pointer.x, this.pointerDownScreen.y - pointer.y)
+          this.pointerDownScreen = { x: pointer.x, y: pointer.y }
+          return
+        }
       }
       const cell = this.positionToCell(localX, localY)
       const nextKey = cell ? coordKey(cell.x, cell.y) : null
@@ -982,24 +1003,25 @@ export class BattlefieldScene extends Phaser.Scene {
 
   private drawPiece(view: PieceView, piece: BattlefieldPieceState) {
     const size = BATTLEFIELD_CELL_SIZE - ENTITY_INSET * 2
-    const color = piece.generalId
+    const accentColor = piece.generalId
       ? GENERAL_QUALITY_COLORS[piece.generalQuality ?? 'purple']
       : piece.kind === 'character' ? 0x67e8f9 : SOLDIER_BLUE
+    const glyphColor = piece.kind === 'character' ? GENERAL_GLYPH_GOLD : SOLDIER_BLUE
     view.body.clear()
     view.body.fillStyle(0x07111f, 0.94)
     view.body.fillRoundedRect(ENTITY_INSET, ENTITY_INSET, size, size, 5)
     // Inner tint and corner glints give units a readable material identity at a glance.
-    view.body.fillStyle(color, piece.generalId ? 0.16 : 0.09)
+    view.body.fillStyle(accentColor, piece.generalId ? 0.16 : 0.09)
     view.body.fillRoundedRect(ENTITY_INSET + 2, ENTITY_INSET + 2, size - 4, size - 4, 4)
-    view.body.lineStyle(piece.generalFixed ? 3 : 2, color, 0.95)
+    view.body.lineStyle(piece.generalFixed ? 3 : 2, accentColor, 0.95)
     view.body.strokeRoundedRect(ENTITY_INSET + 1, ENTITY_INSET + 1, size - 2, size - 2, 5)
     view.body.lineStyle(1, 0xffffff, 0.2)
     view.body.lineBetween(ENTITY_INSET + 5, ENTITY_INSET + 3, ENTITY_INSET + size - 7, ENTITY_INSET + 3)
     if (piece.generalId) {
-      view.body.lineStyle(1, color, 0.72)
+      view.body.lineStyle(1, accentColor, 0.72)
       view.body.strokeCircle(BATTLEFIELD_CELL_SIZE / 2, BATTLEFIELD_CELL_SIZE / 2, size * 0.38)
     }
-    view.glyph.setText(piece.glyph).setColor(Phaser.Display.Color.IntegerToColor(color).rgba)
+    view.glyph.setText(piece.glyph).setColor(Phaser.Display.Color.IntegerToColor(glyphColor).rgba)
     view.level
       .setText(piece.kind === 'soldier' ? `${piece.level ?? 1}` : piece.generalId ? piece.generalFixed ? '固' : '将' : '')
       .setVisible(piece.kind === 'soldier' || Boolean(piece.generalId))

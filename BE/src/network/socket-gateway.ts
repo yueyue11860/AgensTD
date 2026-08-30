@@ -279,8 +279,17 @@ export class SocketGateway {
       this.handleBuildTower(socket, payload)
     })
 
-    socket.on('START_MATCH', () => {
-      this.handleStartMatch(socket)
+    socket.on('START_MATCH', (payload: unknown) => {
+      this.handleStartMatch(socket, payload)
+    })
+
+    socket.on('SET_GENERAL_SELECTION', (payload: unknown) => {
+      const joinedContext = this.getJoinedContext(socket)
+      const ids = payload && typeof payload === 'object' ? (payload as { selectedGeneralIds?: unknown }).selectedGeneralIds : null
+      if (!joinedContext || !Array.isArray(ids) || ids.some((id) => typeof id !== 'string')
+        || !joinedContext.room.setPlayerGeneralSelection(joinedContext.identity.playerId, ids as string[])) {
+        this.emitEngineError(socket, 'BAD_PAYLOAD', 'selectedGeneralIds 无效')
+      }
     })
 
     socket.on('SELECT_LEVEL', (payload: unknown) => {
@@ -638,13 +647,29 @@ export class SocketGateway {
     })
   }
 
-  private handleStartMatch(socket: Socket) {
+  private handleStartMatch(socket: Socket, payload?: unknown) {
     const joinedContext = this.getJoinedContext(socket)
     if (!joinedContext) {
       this.emitEngineError(socket, 'NOT_IN_ROOM', '请先发送 JOIN_ROOM 加入房间')
       return
     }
 
+    const raw = payload
+    if (raw && typeof raw === 'object' && Array.isArray((raw as { selectedGeneralIds?: unknown }).selectedGeneralIds)) {
+      const requested = (raw as { selectedGeneralIds: unknown[] }).selectedGeneralIds
+      if (requested.length === 0 || requested.some((id) => typeof id !== 'string')) {
+        this.emitEngineError(socket, 'BAD_PAYLOAD', 'selectedGeneralIds 无效')
+        return
+      }
+      const accepted = joinedContext.room.setPlayerGeneralSelection(
+        joinedContext.identity.playerId,
+        requested as string[],
+      )
+      if (!accepted) {
+        this.emitEngineError(socket, 'BAD_PAYLOAD', 'selectedGeneralIds 无效或超过本局上限')
+        return
+      }
+    }
     void this.beginRoomCountdown(joinedContext, socket)
   }
 
@@ -664,6 +689,16 @@ export class SocketGateway {
     if (!selection) {
       this.emitEngineError(socket, 'BAD_PAYLOAD', '缺少或无效的 levelId、difficulty')
       return
+    }
+
+    if (joinedContext.room.getPhase() !== 'playing'
+      && payload && typeof payload === 'object' && Array.isArray((payload as { selectedGeneralIds?: unknown }).selectedGeneralIds)) {
+      const selected = (payload as { selectedGeneralIds: unknown[] }).selectedGeneralIds
+      if (selected.some((id) => typeof id !== 'string')
+        || !joinedContext.room.setPlayerGeneralSelection(joinedContext.identity.playerId, selected as string[])) {
+        this.emitEngineError(socket, 'BAD_PAYLOAD', 'selectedGeneralIds 无效')
+        return
+      }
     }
 
     const levelConfig = LEVEL_CONFIGS[selection.levelId]

@@ -47,6 +47,16 @@ export interface GeneralCatalogEntry {
   name: string
   archetype: GeneralArchetype
   quality?: string
+  /** Optional server-authoritative unlock state. Omitted by legacy servers. */
+  unlocked?: boolean
+}
+
+export interface GeneralSelectionConfig {
+  /** Maximum generals that may be selected for a single match. */
+  maxPerMatch: number
+  /** Whether the server sent an authoritative unlock matrix. */
+  unlockStateKnown: boolean
+  unlockedGeneralIds: string[]
 }
 
 export interface PurchaseEntitlement {
@@ -101,6 +111,17 @@ export interface PlayerAccountData {
     weapons: WeaponCatalogEntry[]
     generals: GeneralCatalogEntry[]
   }
+  generalSelection: GeneralSelectionConfig
+  /** Account-scoped full encyclopedia projection (newer servers). */
+  encyclopedia?: EncyclopediaCatalogData
+}
+
+export interface EncyclopediaCatalogData {
+  generals: Array<GeneralCatalogEntry & { unlocked: boolean }>
+  items: Array<ItemCatalogEntry & { unlocked: boolean }>
+  weapons: Array<WeaponCatalogEntry & { unlocked: boolean }>
+  minions: Array<Record<string, unknown> & { unlocked: boolean }>
+  bosses: Array<Record<string, unknown> & { unlocked: boolean }>
 }
 
 interface MutationResult {
@@ -186,7 +207,32 @@ function normalizeGeneral(value: unknown): GeneralCatalogEntry | null {
   const name = typeof value.name === 'string' ? value.name : typeof value.displayName === 'string' ? value.displayName : null
   const archetype = normalizeArchetype(value.archetype ?? value.profession)
   if (!generalId || !name || !archetype) return null
-  return { generalId, name, archetype, quality: typeof value.quality === 'string' ? value.quality : undefined }
+  return {
+    generalId,
+    name,
+    archetype,
+    quality: typeof value.quality === 'string' ? value.quality : undefined,
+    unlocked: typeof value.unlocked === 'boolean' ? value.unlocked : undefined,
+  }
+}
+
+function normalizeEncyclopedia(payload: unknown): EncyclopediaCatalogData | undefined {
+  if (!isRecord(payload)) return undefined
+  const normalizeRows = (value: unknown) => Array.isArray(value) ? value.filter(isRecord) : []
+  const generals = normalizeRows(payload.generals).flatMap((row) => {
+    const entry = normalizeGeneral(row)
+    return entry ? [{ ...entry, unlocked: row.unlocked === true }] : []
+  })
+  const items = normalizeRows(payload.items).flatMap((row) => {
+    const entry = normalizeItem(row)
+    return entry ? [{ ...entry, unlocked: row.unlocked === true }] : []
+  })
+  const weapons = normalizeRows(payload.weapons).flatMap((row) => {
+    const entry = normalizeWeapon(row)
+    return entry ? [{ ...entry, unlocked: row.unlocked === true }] : []
+  })
+  const rows = (key: string) => normalizeRows(payload[key]).map((row) => ({ ...row, unlocked: row.unlocked === true }))
+  return { generals, items, weapons, minions: rows('minions'), bosses: rows('bosses') }
 }
 
 function normalizeEntitlement(value: unknown): PurchaseEntitlement | null {
@@ -224,6 +270,37 @@ function normalizeResponse(payload: unknown): PlayerAccountData | null {
   const itemLoadout = isRecord(item.loadout) ? item.loadout : {}
   const weapon = isRecord(account.weapon) ? account.weapon : isRecord(account.weapons) ? account.weapons : {}
   const catalogs = isRecord(payload.catalogs) ? payload.catalogs : {}
+  const encyclopedia = normalizeEncyclopedia(payload.encyclopedia)
+  const rawGeneralCatalog = Array.isArray(catalogs.generals)
+    ? catalogs.generals
+    : Array.isArray(payload.generals)
+      ? payload.generals
+      : []
+  const generalAccount = isRecord(account.general) ? account.general : null
+  const generalUnlock = isRecord(account.generalUnlock)
+    ? account.generalUnlock
+    : isRecord(payload.generalUnlock)
+      ? payload.generalUnlock
+      : null
+  // Some deployments project unlock state directly onto catalog entries
+  // instead of returning a separate ID list. Normalize that projection into
+  // the same authoritative set consumed by the arsenal UI.
+  const catalogUnlockedGeneralIds = rawGeneralCatalog.flatMap((entry) => {
+    if (!isRecord(entry) || entry.unlocked !== true) return []
+    const id = typeof entry.generalId === 'string' ? entry.generalId : typeof entry.id === 'string' ? entry.id : null
+    return id ? [id] : []
+  })
+  const rawUnlockedGenerals = generalAccount?.unlockedGeneralIds
+    ?? generalUnlock?.unlockedGeneralIds
+    ?? account.unlockedGeneralIds
+    ?? catalogUnlockedGeneralIds
+  const hasExplicitUnlockIds = Array.isArray(rawUnlockedGenerals)
+  const unlockedGeneralIds = stringArray(rawUnlockedGenerals)
+  const rawMaxPerMatch = generalAccount?.maxPerMatch ?? payload.generalSelectionMaxPerMatch
+  const catalogGeneralCount = rawGeneralCatalog.length
+  const maxPerMatch = typeof rawMaxPerMatch === 'number' && Number.isFinite(rawMaxPerMatch)
+    ? Math.max(1, Math.min(12, Math.floor(rawMaxPerMatch)))
+    : Math.max(1, catalogGeneralCount || 21)
   const pveProgression = isRecord(payload.pveProgression) ? payload.pveProgression : {}
   const progressionStages = Array.isArray(pveProgression.stages) ? pveProgression.stages.flatMap((value): PveStageAccess[] => {
     if (!isRecord(value) || typeof value.levelId !== 'number') return []
@@ -279,8 +356,14 @@ function normalizeResponse(payload: unknown): PlayerAccountData | null {
     catalogs: {
       items: (Array.isArray(catalogs.items) ? catalogs.items : []).map(normalizeItem).filter((entry): entry is ItemCatalogEntry => entry !== null),
       weapons: (Array.isArray(catalogs.weapons) ? catalogs.weapons : []).map(normalizeWeapon).filter((entry): entry is WeaponCatalogEntry => entry !== null),
-      generals: (Array.isArray(catalogs.generals) ? catalogs.generals : []).map(normalizeGeneral).filter((entry): entry is GeneralCatalogEntry => entry !== null),
+      generals: rawGeneralCatalog.map(normalizeGeneral).filter((entry): entry is GeneralCatalogEntry => entry !== null),
     },
+    generalSelection: {
+      maxPerMatch,
+      unlockStateKnown: hasExplicitUnlockIds || rawGeneralCatalog.some((entry) => isRecord(entry) && typeof entry.unlocked === 'boolean'),
+      unlockedGeneralIds,
+    },
+    encyclopedia,
   }
 }
 

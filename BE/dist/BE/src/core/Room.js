@@ -5,6 +5,7 @@ exports.createFixedRoomLayout = createFixedRoomLayout;
 const arena_layout_1 = require("../config/arena-layout");
 const grid_map_1 = require("./grid-map");
 const game_engine_1 = require("./game-engine");
+const service_1 = require("../account-v1/service");
 const password_1 = require("../security/password");
 exports.ROOM_SLOT_ORDER = ['P1', 'P2', 'P3', 'P4'];
 const MIN_ROOM_WIDTH = arena_layout_1.ARENA_GRID_SIZE;
@@ -68,6 +69,8 @@ class Room {
      */
     stageSelectionsByMatchId = new Map();
     matchBuildSnapshots = new Map();
+    /** 玩家在房间内为本局预选的神将；倒计时锁定时转入不可变 build snapshot。 */
+    pendingGeneralSelections = new Map();
     constructor(id, config, options, accountRuntime) {
         this.accountRuntime = accountRuntime;
         this.id = id;
@@ -247,6 +250,28 @@ class Room {
         const snapshot = this.matchBuildSnapshots.get(playerId);
         return snapshot ? structuredClone(snapshot) : null;
     }
+    setPlayerGeneralSelection(playerId, selectedGeneralIds) {
+        if (!this.getConnectedPlayerIds().includes(playerId) || this.getPhase() === 'playing')
+            return false;
+        if (!Array.isArray(selectedGeneralIds)
+            || selectedGeneralIds.length === 0
+            || selectedGeneralIds.length > service_1.MAX_GENERAL_SELECTIONS_PER_MATCH
+            || selectedGeneralIds.some((id) => typeof id !== 'string'))
+            return false;
+        const normalized = [...new Set(selectedGeneralIds)].sort();
+        const locked = this.matchBuildSnapshots.get(playerId);
+        if (locked?.unlockedGeneralIds
+            && normalized.some((generalId) => !locked.unlockedGeneralIds.includes(generalId)))
+            return false;
+        this.pendingGeneralSelections.set(playerId, normalized);
+        // Selection may arrive after START_MATCH locked the account build snapshot
+        // (the usual SELECT_LEVEL flow). Keep the room/engine snapshot in sync until ignite.
+        if (locked && this.phase !== 'playing') {
+            this.matchBuildSnapshots.set(playerId, { ...locked, selectedGeneralIds: normalized });
+            this.engine.setMatchBuildSnapshots(Object.fromEntries([...this.matchBuildSnapshots.entries()].map(([id, snapshot]) => [id, structuredClone(snapshot)])));
+        }
+        return true;
+    }
     /**
      * 权威结算钩子。调用方必须传入已由战斗服务确认的碎片，
      * Room 不会从 UI 或不完整快照猜测掉落。
@@ -290,6 +315,7 @@ class Room {
             passwordCredential: this.passwordCredential ? structuredClone(this.passwordCredential) : null,
             stageSelectionsByMatchId: [...this.stageSelectionsByMatchId.entries()].map(([matchId, selection]) => [matchId, structuredClone(selection)]),
             matchBuildSnapshots: [...this.matchBuildSnapshots.entries()].map(([playerId, snapshot]) => [playerId, structuredClone(snapshot)]),
+            pendingGeneralSelections: [...this.pendingGeneralSelections.entries()].map(([playerId, ids]) => [playerId, [...ids]]),
             engine: this.engine.exportPveCheckpointPayload(),
         };
     }
@@ -328,12 +354,16 @@ class Room {
         for (const [playerId, snapshot] of checkpoint.matchBuildSnapshots) {
             this.matchBuildSnapshots.set(playerId, structuredClone(snapshot));
         }
+        this.pendingGeneralSelections.clear();
+        for (const [playerId, ids] of checkpoint.pendingGeneralSelections ?? [])
+            this.pendingGeneralSelections.set(playerId, [...ids]);
         this.engine.restorePveCheckpointPayload(checkpoint.engine);
     }
     destroy() {
         this.pendingStageSelection = null;
         this.activeStageSelection = null;
         this.stageSelectionsByMatchId.clear();
+        this.pendingGeneralSelections.clear();
         this.countdownPreparing = false;
         if (this.countdownTimer) {
             clearTimeout(this.countdownTimer);
@@ -356,6 +386,7 @@ class Room {
                     matchId,
                     playerId,
                     expectedAccountVersion: account.version,
+                    selectedGeneralIds: this.pendingGeneralSelections.get(playerId),
                 }, this.accountRuntime.buildResolver);
             }));
             const connectedAfterRead = this.getConnectedPlayerIds().sort();

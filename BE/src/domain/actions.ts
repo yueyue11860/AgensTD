@@ -13,6 +13,7 @@ import type {
   SetGeneralFixedAction,
   MoveFixedGeneralAction,
   UseActiveItemAction,
+  SetTutorialPausedAction,
 } from '../../../shared/contracts/game'
 
 export type {
@@ -29,6 +30,7 @@ export type {
   SetGeneralFixedAction,
   MoveFixedGeneralAction,
   UseActiveItemAction,
+  SetTutorialPausedAction,
 } from '../../../shared/contracts/game'
 
 export type ClientAction = GameAction
@@ -99,6 +101,10 @@ export function parseClientAction(payload: unknown): ClientAction | null {
             target: payload.target as UseActiveItemAction['target'],
             expectedItemRuntimeVersion: payload.expectedItemRuntimeVersion as number,
           }
+        : null
+    case 'SET_TUTORIAL_PAUSED':
+      return typeof payload.paused === 'boolean'
+        ? { action: 'SET_TUTORIAL_PAUSED', paused: payload.paused }
         : null
     case 'DEPLOY_TRAY_PIECE':
       return Number.isInteger(payload.trayIndex)

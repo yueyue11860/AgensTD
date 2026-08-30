@@ -179,8 +179,16 @@ class SocketGateway {
         socket.on('BUILD_TOWER', (payload) => {
             this.handleBuildTower(socket, payload);
         });
-        socket.on('START_MATCH', () => {
-            this.handleStartMatch(socket);
+        socket.on('START_MATCH', (payload) => {
+            this.handleStartMatch(socket, payload);
+        });
+        socket.on('SET_GENERAL_SELECTION', (payload) => {
+            const joinedContext = this.getJoinedContext(socket);
+            const ids = payload && typeof payload === 'object' ? payload.selectedGeneralIds : null;
+            if (!joinedContext || !Array.isArray(ids) || ids.some((id) => typeof id !== 'string')
+                || !joinedContext.room.setPlayerGeneralSelection(joinedContext.identity.playerId, ids)) {
+                this.emitEngineError(socket, 'BAD_PAYLOAD', 'selectedGeneralIds 无效');
+            }
         });
         socket.on('SELECT_LEVEL', (payload) => {
             void this.handleSelectLevel(socket, payload);
@@ -507,11 +515,24 @@ class SocketGateway {
             type: payload.towerType,
         });
     }
-    handleStartMatch(socket) {
+    handleStartMatch(socket, payload) {
         const joinedContext = this.getJoinedContext(socket);
         if (!joinedContext) {
             this.emitEngineError(socket, 'NOT_IN_ROOM', '请先发送 JOIN_ROOM 加入房间');
             return;
+        }
+        const raw = payload;
+        if (raw && typeof raw === 'object' && Array.isArray(raw.selectedGeneralIds)) {
+            const requested = raw.selectedGeneralIds;
+            if (requested.length === 0 || requested.some((id) => typeof id !== 'string')) {
+                this.emitEngineError(socket, 'BAD_PAYLOAD', 'selectedGeneralIds 无效');
+                return;
+            }
+            const accepted = joinedContext.room.setPlayerGeneralSelection(joinedContext.identity.playerId, requested);
+            if (!accepted) {
+                this.emitEngineError(socket, 'BAD_PAYLOAD', 'selectedGeneralIds 无效或超过本局上限');
+                return;
+            }
         }
         void this.beginRoomCountdown(joinedContext, socket);
     }
@@ -529,6 +550,15 @@ class SocketGateway {
         if (!selection) {
             this.emitEngineError(socket, 'BAD_PAYLOAD', '缺少或无效的 levelId、difficulty');
             return;
+        }
+        if (joinedContext.room.getPhase() !== 'playing'
+            && payload && typeof payload === 'object' && Array.isArray(payload.selectedGeneralIds)) {
+            const selected = payload.selectedGeneralIds;
+            if (selected.some((id) => typeof id !== 'string')
+                || !joinedContext.room.setPlayerGeneralSelection(joinedContext.identity.playerId, selected)) {
+                this.emitEngineError(socket, 'BAD_PAYLOAD', 'selectedGeneralIds 无效');
+                return;
+            }
         }
         const levelConfig = level_config_1.LEVEL_CONFIGS[selection.levelId];
         if (!levelConfig) {

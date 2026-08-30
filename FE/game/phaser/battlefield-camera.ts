@@ -1,5 +1,5 @@
 export const BATTLEFIELD_MIN_ZOOM = 1
-export const BATTLEFIELD_MAX_ZOOM = 2.2
+export const BATTLEFIELD_MAX_ZOOM = 2
 
 export interface BattlefieldCameraTransform {
   zoom: number

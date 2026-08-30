@@ -101,6 +101,15 @@ function runPveV2SmokeChecks() {
         targetY: 15,
     }).code, 'CELL_NOT_DEPLOYABLE');
     strict_1.default.equal(runtime.start().ok, true);
+    const tickBeforeTutorialPause = runtime.snapshot().tick;
+    strict_1.default.equal(runtime.handleAction('player-1', { type: 'SET_TUTORIAL_PAUSED', actionId: 'tutorial-pause-1', paused: true }).ok, true);
+    strict_1.default.equal(runtime.snapshot().tutorialPaused, true);
+    runtime.tick();
+    strict_1.default.equal(runtime.snapshot().tick, tickBeforeTutorialPause);
+    strict_1.default.equal(runtime.handleAction('player-1', { type: 'SET_TUTORIAL_PAUSED', actionId: 'tutorial-resume-1', paused: false }).ok, true);
+    runtime.tick();
+    strict_1.default.equal(runtime.snapshot().tick, tickBeforeTutorialPause + 1);
+    snapshot = runtime.snapshot();
     for (let tick = 0; tick < 12000 && runtime.snapshot().status !== 'finished'; tick += 1) {
         runtime.tick();
     }

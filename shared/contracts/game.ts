@@ -1,3 +1,5 @@
+export type { GeneralUnlockState, GeneralPool } from './general'
+
 export type PlayerKind = 'human' | 'agent'
 
 export type CellKind = 'path' | 'build' | 'blocked' | 'relay' | 'gate' | 'core' | 'hazard'
@@ -159,6 +161,11 @@ export interface UseActiveItemAction {
   expectedItemRuntimeVersion: number
 }
 
+export interface SetTutorialPausedAction {
+  action: 'SET_TUTORIAL_PAUSED'
+  paused: boolean
+}
+
 export type PveGameAction =
   | RecruitBatchAction
   | DeployTrayPieceAction
@@ -170,6 +177,7 @@ export type PveGameAction =
   | SetGeneralFixedAction
   | MoveFixedGeneralAction
   | UseActiveItemAction
+  | SetTutorialPausedAction
 
 export type GameAction =
   | BuildTowerAction
@@ -477,6 +485,9 @@ export interface PvePlayerState {
   /** 已实际清完的波次；波次可重叠，不能由最高波次反推。 */
   clearedWaves: number[]
   highestCompletedWave: number
+  /** 开局冻结的局外解锁与本局预选池；旧快照可缺省。 */
+  unlockedGeneralIds?: string[]
+  selectedGeneralIds?: string[]
 }
 
 export interface PveLaneWaveState {
@@ -510,6 +521,7 @@ export interface PveMatchState {
     initialWaveNumber: number
   }
   phase: 'waiting' | 'running' | 'finished'
+  tutorialPaused?: boolean
   tick: number
   players: PvePlayerState[]
   boardPieces: PveBoardPieceState[]
@@ -549,6 +561,7 @@ export interface PveMatchStatePatch {
   enemyCount: number
   maxCapacity: number
   overloadCountdownSec: number
+  tutorialPaused?: boolean
   playerDelta?: PveCollectionDelta<PvePlayerState>
   boardPieceDelta?: PveCollectionDelta<PveBoardPieceState>
   pveEnemyDelta?: PveCollectionDelta<PveEnemyState>

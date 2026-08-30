@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft,
   Backpack,
+  BookOpen,
   Check,
   ChevronRight,
   Coins,
@@ -21,6 +22,7 @@ import {
   usePlayerAccount,
   type GeneralArchetype,
   type GeneralCatalogEntry,
+  type GeneralSelectionConfig,
   type ItemCatalogEntry,
   type PlayerMetaAccount,
   type PurchaseEntitlement,
@@ -87,6 +89,10 @@ function MetaNav({ mode }: { mode: MetaSystemMode }) {
           </Link>
         )
       })}
+      <Link to="/codex" aria-label="全量图鉴" className="meta-nav-link">
+        <BookOpen className="h-4 w-4" />
+        <span>全量图鉴</span>
+      </Link>
     </nav>
   )
 }
@@ -252,44 +258,53 @@ function WeaponCard({ weapon, account, general, equipped, busy, onEquip, onCraft
   )
 }
 
-function ArsenalView({ account, weapons, generals, busy, onSave, onCraft }: {
+function ArsenalView({ account, weapons, generals, generalSelection, busy, onSave, onCraft }: {
   account: PlayerMetaAccount
   weapons: WeaponCatalogEntry[]
   generals: GeneralCatalogEntry[]
+  generalSelection?: GeneralSelectionConfig
   busy: boolean
   onSave: (generalId: string, slots: [string | null, string | null]) => Promise<unknown>
   onCraft: (weaponId: string) => Promise<unknown>
 }) {
+  const unlockConfig = generalSelection ?? { maxPerMatch: 6, unlockStateKnown: false, unlockedGeneralIds: [] }
+  const isGeneralUnlocked = (entry: GeneralCatalogEntry) => unlockConfig.unlockStateKnown
+    ? entry.unlocked !== false && unlockConfig.unlockedGeneralIds.includes(entry.generalId)
+    // Arsenal is an owned-inventory surface. If the server cannot provide an
+    // authoritative unlock matrix, fail closed instead of leaking the full
+    // catalog (the codex can render locked entries separately).
+    : entry.unlocked === true
+  const unlockedGenerals = generals.filter(isGeneralUnlocked)
   const selectionStorageKey = `agenstd.arsenal-selection.${encodeURIComponent(account.playerId)}`
   const [generalId, setGeneralId] = useState(() => {
     if (typeof window !== 'undefined') {
       try {
         const stored = window.sessionStorage.getItem(selectionStorageKey)
-        if (stored && generals.some((entry) => entry.generalId === stored)) return stored
+        if (stored && unlockedGenerals.some((entry) => entry.generalId === stored)) return stored
       } catch { /* storage can be unavailable in privacy mode */ }
     }
-    return generals[0]?.generalId ?? ''
+    return unlockedGenerals[0]?.generalId ?? ''
   })
   const [editingSlot, setEditingSlot] = useState<0 | 1>(0)
-  const general = generals.find((entry) => entry.generalId === generalId) ?? generals[0]
+  const general = unlockedGenerals.find((entry) => entry.generalId === generalId) ?? unlockedGenerals[0]
   const persisted = general ? account.weapon.loadoutsByGeneralId[general.generalId]?.slots ?? [null, null] : [null, null]
   const [slots, setSlots] = useState<[string | null, string | null]>(persisted as [string | null, string | null])
 
   useEffect(() => {
-    if (!generals.some((entry) => entry.generalId === generalId)) {
-      setGeneralId(generals[0]?.generalId ?? '')
+    if (!unlockedGenerals.some((entry) => entry.generalId === generalId)) {
+      setGeneralId(unlockedGenerals[0]?.generalId ?? '')
       return
     }
     try { window.sessionStorage.setItem(selectionStorageKey, generalId) }
     catch { /* storage can be unavailable in privacy mode */ }
-  }, [generalId, generals, selectionStorageKey])
+  }, [generalId, generals, selectionStorageKey, unlockedGenerals])
 
   useEffect(() => {
     if (!general) return
     setSlots(account.weapon.loadoutsByGeneralId[general.generalId]?.slots ?? [null, null])
   }, [general, account.weapon.loadoutsByGeneralId, account.version])
 
-  if (!general) return <p className="meta-inline-empty">服务端尚未下发 21 名神将目录，无法编辑武器方案。</p>
+  if (!general || unlockedGenerals.length === 0) return <p className="meta-inline-empty">当前账户暂无已解锁神将，无法编辑武器方案。</p>
 
   function equip(weapon: WeaponCatalogEntry) {
     const otherSlot = editingSlot === 0 ? 1 : 0
@@ -299,20 +314,26 @@ function ArsenalView({ account, weapons, generals, busy, onSave, onCraft }: {
     setSlots(next)
   }
 
-  const orderedWeapons = [...weapons].sort((left, right) => {
-    const leftCompatible = isCompatible(left, general) ? 0 : 1
-    const rightCompatible = isCompatible(right, general) ? 0 : 1
+  // Keep the arsenal narrower than the codex: only compatible weapons that
+  // the account owns (unlocked or with any fragments banked) are candidates.
+  const candidateWeapons = weapons.filter((weapon) => {
+    if (!isCompatible(weapon, general)) return false
+    const unlocked = account.weapon.unlockedWeaponIds.includes(weapon.weaponId)
+    const fragments = account.weapon.fragmentBalances[weapon.weaponId] ?? 0
+    return unlocked || fragments > 0
+  })
+  const orderedWeapons = [...candidateWeapons].sort((left, right) => {
     const qualityOrder: WeaponQuality[] = ['red', 'orange', 'purple', 'blue', 'green']
-    return leftCompatible - rightCompatible || qualityOrder.indexOf(left.quality) - qualityOrder.indexOf(right.quality) || left.name.localeCompare(right.name)
+    return qualityOrder.indexOf(left.quality) - qualityOrder.indexOf(right.quality) || left.name.localeCompare(right.name)
   })
 
   return (
     <div className="meta-arsenal-layout">
       <aside className="meta-panel meta-general-list">
-        <div className="meta-panel-heading"><div><span>GENERAL ROSTER</span><h2>21 名神将</h2></div><small>{generals.length}/21</small></div>
-        <div>{generals.map((entry) => (
+        <div className="meta-panel-heading"><div><span>GENERAL ROSTER</span><h2>已解锁神将</h2></div><small>{unlockedGenerals.length}/{generals.length}</small></div>
+        <div>{unlockedGenerals.map((entry) => (
           <button type="button" key={entry.generalId} onClick={() => setGeneralId(entry.generalId)} className={cx('meta-general-row', entry.generalId === general.generalId && 'meta-general-row-active')}>
-            <span>{entry.name.slice(0, 1)}</span><div><strong>{entry.name}</strong><small>{ARCHETYPE_LABEL[entry.archetype]} · {entry.quality ?? '神将'}</small></div><ChevronRight className="h-4 w-4" />
+            <span>{entry.name.slice(0, 1)}</span><div><strong>{entry.name}</strong><small>{`${ARCHETYPE_LABEL[entry.archetype]} · ${entry.quality ?? '神将'}`}</small></div><ChevronRight className="h-4 w-4" />
           </button>
         ))}</div>
       </aside>
@@ -332,7 +353,7 @@ function ArsenalView({ account, weapons, generals, busy, onSave, onCraft }: {
         <div className="meta-compatibility-hint"><Sparkles className="h-4 w-4" /><span>已优先展示{ARCHETYPE_LABEL[general.archetype]}适配武器；红色专武只能由对应神将佩戴。已解锁通用武器可被多名神将同时配置。</span></div>
         {orderedWeapons.length > 0 ? <div className="meta-weapon-grid">{orderedWeapons.map((weapon) => (
           <WeaponCard key={weapon.weaponId} weapon={weapon} account={account} general={general} equipped={slots[editingSlot] === weapon.weaponId} busy={busy} onEquip={() => equip(weapon)} onCraft={() => void onCraft(weapon.weaponId)} />
-        ))}</div> : <p className="meta-inline-empty">服务端尚未下发武器目录。</p>}
+        ))}</div> : <p className="meta-inline-empty">当前神将暂无已拥有或已有碎片的适配武器。</p>}
       </section>
     </div>
   )
@@ -404,7 +425,7 @@ export function MetaSystemPage({ mode }: { mode: MetaSystemMode }) {
         {service.isLoading && !service.data ? <LoadingState /> : !service.data ? <ApiEmptyState error={service.error} onRetry={() => void service.refresh()} /> : (
           <>
             {mode === 'build' ? <ItemBuildView account={service.data.account} items={service.data.catalogs.items} busy={service.isMutating} onSave={service.saveItemLoadout} /> : null}
-            {mode === 'arsenal' ? <ArsenalView account={service.data.account} weapons={service.data.catalogs.weapons} generals={service.data.catalogs.generals} busy={service.isMutating} onSave={service.saveWeaponLoadout} onCraft={service.craftWeapon} /> : null}
+            {mode === 'arsenal' ? <ArsenalView account={service.data.account} weapons={service.data.catalogs.weapons} generals={service.data.catalogs.generals} generalSelection={service.data.generalSelection} busy={service.isMutating} onSave={service.saveWeaponLoadout} onCraft={service.craftWeapon} /> : null}
             {mode === 'shop' ? <ShopView account={service.data.account} entitlements={service.data.account.entitlements} offers={service.offers} busy={service.isMutating} onLoadOffers={service.loadOffers} onPurchase={service.purchaseOffer} /> : null}
           </>
         )}

@@ -274,7 +274,10 @@ class GameEngine {
         this.playerSlots.clear();
         for (const { playerId, slotId } of assignments) {
             this.playerSlots.set(playerId, slotId);
-            this.pveRuntime.registerPlayer(playerId, slotId);
+            const build = this.matchBuildSnapshots[playerId];
+            this.pveRuntime.registerPlayer(playerId, slotId, build?.unlockedGeneralIds && build?.selectedGeneralIds
+                ? { unlockedGeneralIds: build.unlockedGeneralIds, selectedGeneralIds: build.selectedGeneralIds }
+                : undefined);
         }
         this.syncPveRuntimeState();
     }
@@ -340,6 +343,30 @@ class GameEngine {
         if (this.pveStarted)
             throw new Error('MATCH_BUILD_SNAPSHOTS_LOCKED');
         this.matchBuildSnapshots = structuredClone(snapshots);
+    }
+    /**
+     * Apply the room's final pre-match general selections after the account build
+     * snapshot has been locked, but before the PVE runtime is started.  Level
+     * selection happens after START_MATCH in the current room lifecycle, so this
+     * keeps the immutable account snapshot while still freezing the in-match pool
+     * at the authoritative ignite boundary.
+     */
+    setMatchGeneralSelections(selections) {
+        if (this.pveStarted)
+            throw new Error('MATCH_GENERAL_SELECTIONS_LOCKED');
+        const next = structuredClone(this.matchBuildSnapshots);
+        for (const [playerId, selectedGeneralIds] of Object.entries(selections)) {
+            const build = next[playerId];
+            if (!build)
+                continue;
+            const unlocked = new Set(build.unlockedGeneralIds ?? []);
+            const selected = [...new Set(selectedGeneralIds)].sort();
+            if (selected.length === 0 || selected.some((generalId) => !unlocked.has(generalId))) {
+                throw new Error('INVALID_MATCH_GENERAL_SELECTION');
+            }
+            next[playerId] = { ...build, selectedGeneralIds: selected };
+        }
+        this.matchBuildSnapshots = next;
     }
     onTick(listener, options) {
         this.tickListeners.set(listener, options?.label ?? `tick-listener-${this.tickListeners.size + 1}`);
@@ -451,7 +478,10 @@ class GameEngine {
         this.waveManager = this.createWaveManager(this.config.waveConfigs, this.playerCount);
         this.pveRuntime = this.createPveRuntime();
         for (const [playerId, slotId] of this.playerSlots.entries()) {
-            this.pveRuntime.registerPlayer(playerId, slotId);
+            const build = this.matchBuildSnapshots[playerId];
+            this.pveRuntime.registerPlayer(playerId, slotId, build?.unlockedGeneralIds && build?.selectedGeneralIds
+                ? { unlockedGeneralIds: build.unlockedGeneralIds, selectedGeneralIds: build.selectedGeneralIds }
+                : undefined);
         }
         this.pveStarted = false;
         this.actionSequence = 0;
@@ -624,6 +654,7 @@ class GameEngine {
             case 'SET_GENERAL_FIXED':
             case 'MOVE_FIXED_GENERAL':
             case 'USE_ACTIVE_ITEM':
+            case 'SET_TUTORIAL_PAUSED':
                 this.handlePveAction(queuedAction);
                 return;
         }
@@ -738,6 +769,12 @@ class GameEngine {
                     itemId: action.itemId,
                     target: action.target,
                     expectedItemRuntimeVersion: action.expectedItemRuntimeVersion,
+                };
+            case 'SET_TUTORIAL_PAUSED':
+                return {
+                    type: 'SET_TUTORIAL_PAUSED',
+                    actionId: queuedAction.id,
+                    paused: action.paused,
                 };
             default:
                 return null;
@@ -949,7 +986,10 @@ class GameEngine {
         if (!slot) {
             return;
         }
-        this.pveRuntime.registerPlayer(playerId, slot);
+        const build = this.matchBuildSnapshots[playerId];
+        this.pveRuntime.registerPlayer(playerId, slot, build?.unlockedGeneralIds && build?.selectedGeneralIds
+            ? { unlockedGeneralIds: build.unlockedGeneralIds, selectedGeneralIds: build.selectedGeneralIds }
+            : undefined);
         this.syncPveRuntimeState();
     }
     createPveRuntime(levelId, difficulty = 'easy') {
@@ -996,6 +1036,12 @@ class GameEngine {
             waveGlyphPools: stageDefinition?.waveGlyphPools,
             itemLoadoutSnapshots,
             weaponLoadoutSnapshots,
+            generalSelections: Object.fromEntries(Object.entries(this.matchBuildSnapshots)
+                .filter(([, build]) => build.unlockedGeneralIds && build.selectedGeneralIds)
+                .map(([playerId, build]) => [playerId, {
+                    unlockedGeneralIds: build.unlockedGeneralIds,
+                    selectedGeneralIds: build.selectedGeneralIds,
+                }])),
         });
     }
     projectPveSnapshot(snapshot) {
@@ -1070,6 +1116,8 @@ class GameEngine {
             })),
             clearedWaves: [...player.clearedWaves],
             highestCompletedWave: player.clearedWaves.length > 0 ? Math.max(...player.clearedWaves) : 0,
+            unlockedGeneralIds: [...player.unlockedGeneralIds],
+            selectedGeneralIds: [...player.selectedGeneralIds],
         }));
         const boardPieces = snapshot.players.flatMap((player) => player.boardPieces.map(({ piece, x, y }) => {
             const formation = formationByPieceId.get(piece.id);
@@ -1109,6 +1157,7 @@ class GameEngine {
             combatRulesetVersion: snapshot.combatRulesetVersion,
             configSnapshot: structuredClone(snapshot.configSnapshot),
             phase: snapshot.status,
+            tutorialPaused: snapshot.tutorialPaused,
             tick: snapshot.tick,
             players,
             boardPieces,
@@ -1419,7 +1468,10 @@ class GameEngine {
         this.syncMapCells();
         this.pveRuntime = this.createPveRuntime(levelId, difficulty);
         for (const [playerId, slotId] of this.playerSlots.entries()) {
-            this.pveRuntime.registerPlayer(playerId, slotId);
+            const build = this.matchBuildSnapshots[playerId];
+            this.pveRuntime.registerPlayer(playerId, slotId, build?.unlockedGeneralIds && build?.selectedGeneralIds
+                ? { unlockedGeneralIds: build.unlockedGeneralIds, selectedGeneralIds: build.selectedGeneralIds }
+                : undefined);
         }
         this.pveStarted = true;
         this.pveRuntime.start();

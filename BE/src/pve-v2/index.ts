@@ -68,6 +68,7 @@ export {
   settleEnemySlowBps,
 } from './boss-runtime'
 export { runBossRuntimeSmokeChecks } from './boss-runtime-smoke'
+export { runGeneralSelectionSmoke } from './general-selection-smoke'
 export {
   runPureSoldierMonteCarlo,
   simulateFixedSoldierWave,
@@ -81,6 +82,7 @@ export type {
 } from './balance-simulator'
 export type {
   PveGameRuntimeOptions,
+  PveGeneralSelection,
   PveEnemySnapshot,
   PveBossActiveCastSnapshot,
   PveLaneRoute,
@@ -88,6 +90,7 @@ export type {
   PvePiece,
   PvePlayerSnapshot,
   PveRuntimeAction,
+  SetTutorialPausedAction,
   PveRuntimeEvent,
   PveRuntimeResult,
   PveRuntimeSnapshot,

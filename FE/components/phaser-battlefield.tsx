@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useRef } from 'react'
 import Phaser from 'phaser'
 import type { PveSceneTheme } from '../../shared/contracts/pve-stage-config'
-import { BATTLEFIELD_SIZE, BattlefieldScene, type BattlefieldCameraViewState, type BattlefieldSceneUiState } from '../game/phaser/battlefield-scene'
+import { BATTLEFIELD_SIZE, BattlefieldScene, type BattlefieldSceneUiState } from '../game/phaser/battlefield-scene'
 import type { BattlefieldGridPosition, BattlefieldInteractionBridge, BattlefieldSnapshot } from '../game/phaser/battlefield-model'
 import { moveBattlefieldCursor, type BattlefieldCursorDirection } from '../game/accessibility/battlefield-accessibility'
 import type { ClientActionIntent } from '../game/presentation/client-action-intents'
@@ -16,24 +16,27 @@ interface PhaserBattlefieldProps extends BattlefieldInteractionBridge {
   placementMode: boolean
   canPreviewAtHoveredCell: boolean
   clientActionIntents?: readonly ClientActionIntent[]
+  showCameraHint?: boolean
   /** 预留给 HUD 设置；不传时使用安全的轻音量默认值。 */
   muted?: boolean
   masterVolume?: number
   /** 每次重连 full snapshot 递增；变化时仅建立表现基线，不重播历史事件。 */
   presentationSyncRevision?: number
+  initialFocusCell?: BattlefieldGridPosition | null
   accessibilitySummaryId: string
   accessibilityLabel: string
   onCancelInteraction: () => void
 }
 
-export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hoveredCell, selectedPieceId, selectedPieceCell = null, placementMode, canPreviewAtHoveredCell, clientActionIntents = [], muted = false, masterVolume = 0.45, presentationSyncRevision = 0, accessibilitySummaryId, accessibilityLabel, onCancelInteraction, onCellClick, onCellHover, onCellLeave }: PhaserBattlefieldProps) {
+export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hoveredCell, selectedPieceId, selectedPieceCell = null, placementMode, canPreviewAtHoveredCell, clientActionIntents = [], showCameraHint = false, muted = false, masterVolume = 0.45, presentationSyncRevision = 0, initialFocusCell = null, accessibilitySummaryId, accessibilityLabel, onCancelInteraction, onCellClick, onCellHover, onCellLeave }: PhaserBattlefieldProps) {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const sceneRef = useRef<BattlefieldScene | null>(null)
   const callbacksRef = useRef<BattlefieldInteractionBridge>({ onCellClick, onCellHover, onCellLeave })
   const cancelInteractionRef = useRef(onCancelInteraction)
   const appliedPresentationSyncRevisionRef = useRef(presentationSyncRevision)
   const pointerCellKeyRef = useRef<string | null>(null)
-  const [cameraView, setCameraView] = useState<BattlefieldCameraViewState>({ mode: 'full', zoom: 1, scrollX: 0, scrollY: 0 })
+  const pointerDownRef = useRef<{ x: number, y: number } | null>(null)
+  const dragConsumedRef = useRef(false)
   callbacksRef.current = { onCellClick, onCellHover, onCellLeave }
   cancelInteractionRef.current = onCancelInteraction
 
@@ -45,7 +48,7 @@ export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hovered
       onCellHover: (x, y) => callbacksRef.current.onCellHover(x, y),
       onCellLeave: () => callbacksRef.current.onCellLeave(),
     }
-    const scene = new BattlefieldScene(terrainMatrix, bridge, sceneTheme, setCameraView)
+    const scene = new BattlefieldScene(terrainMatrix, bridge, sceneTheme)
     sceneRef.current = scene
     const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
     const navigatorWithMemory = navigator as Navigator & { deviceMemory?: number }
@@ -128,12 +131,10 @@ export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hovered
     sceneRef.current?.setUiState(uiState)
   }, [canPreviewAtHoveredCell, hoveredCell, placementMode, selectedPieceId])
 
-  const viewportPercent = 100 / cameraView.zoom
-  const minimapStyle = {
-    '--battlefield-minimap-left': `${cameraView.scrollX / BATTLEFIELD_SIZE * 100}%`,
-    '--battlefield-minimap-top': `${cameraView.scrollY / BATTLEFIELD_SIZE * 100}%`,
-    '--battlefield-minimap-size': `${viewportPercent}%`,
-  } as CSSProperties
+  useEffect(() => {
+    sceneRef.current?.setInitialFocusCell(initialFocusCell)
+  }, [initialFocusCell?.x, initialFocusCell?.y])
+
   const focusCamera = () => {
     const selected = selectedPieceCell ?? snapshot?.pieces.find(piece => piece.entityId === selectedPieceId)
     sceneRef.current?.setViewMode('focus', selected ? { x: selected.x, y: selected.y } : hoveredCell)
@@ -183,12 +184,12 @@ export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hovered
             }
             if (event.key === '+' || event.key === '=') {
               event.preventDefault()
-              sceneRef.current?.zoomBy(0.18)
+              sceneRef.current?.zoomBy(0.1)
               return
             }
             if (event.key === '-' || event.key === '_') {
               event.preventDefault()
-              sceneRef.current?.zoomBy(-0.18)
+              sceneRef.current?.zoomBy(-0.1)
               return
             }
             if (event.key === '0') {
@@ -226,8 +227,16 @@ export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hovered
             }
           }}
           onPointerDown={(event) => event.currentTarget.focus({ preventScroll: true })}
+          onPointerDownCapture={(event) => {
+            pointerDownRef.current = { x: event.clientX, y: event.clientY }
+            dragConsumedRef.current = false
+          }}
           onPointerMove={(event) => {
             if (event.pointerType === 'touch' && event.isPrimary === false) return
+            const start = pointerDownRef.current
+            if (start && event.buttons === 1 && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 6) {
+              dragConsumedRef.current = true
+            }
             const cell = cellAtClientPoint(event.currentTarget, event.clientX, event.clientY)
             const nextKey = cell ? `${cell.x}:${cell.y}` : null
             if (nextKey === pointerCellKeyRef.current) return
@@ -240,7 +249,14 @@ export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hovered
             pointerCellKeyRef.current = null
             callbacksRef.current.onCellLeave()
           }}
+          onPointerUpCapture={() => {
+            pointerDownRef.current = null
+          }}
           onClick={(event) => {
+            if (dragConsumedRef.current) {
+              dragConsumedRef.current = false
+              return
+            }
             const cell = cellAtClientPoint(event.currentTarget, event.clientX, event.clientY)
             if (cell) callbacksRef.current.onCellClick(cell.x, cell.y)
           }}
@@ -264,27 +280,7 @@ export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hovered
             if (cell) callbacksRef.current.onCellClick(cell.x, cell.y)
           }}
         />
-        <div className="gaming-camera-controls" role="group" aria-label="战场视角控制">
-          <button type="button" onClick={() => sceneRef.current?.setViewMode('full')} aria-pressed={cameraView.mode === 'full'} title="显示全部29×29战场（0）">全阵</button>
-          <button type="button" onClick={focusCamera} aria-pressed={cameraView.mode === 'focus'} title="聚焦当前选择（F）">聚焦</button>
-          <button type="button" onClick={() => sceneRef.current?.zoomBy(-0.18)} aria-label="缩小战场" title="缩小（-）">−</button>
-          <output aria-live="polite" aria-label="战场缩放比例">{Math.round(cameraView.zoom * 100)}%</output>
-          <button type="button" onClick={() => sceneRef.current?.zoomBy(0.18)} aria-label="放大战场" title="放大（+）">＋</button>
-        </div>
-        {cameraView.zoom > 1.01 ? (
-          <button
-            type="button"
-            className="gaming-battlefield-minimap"
-            style={minimapStyle}
-            aria-label="当前为聚焦视图，点击恢复全阵"
-            title="点击恢复全阵"
-            onClick={() => sceneRef.current?.setViewMode('full')}
-          >
-            <span className="gaming-battlefield-minimap-route" />
-            <span className="gaming-battlefield-minimap-viewport" />
-          </button>
-        ) : null}
-        <p className="gaming-camera-hint">滚轮缩放 · 双指缩放平移 · Shift+方向键平移</p>
+        {showCameraHint ? <p className="gaming-camera-hint gaming-camera-hint-visible">滚轮缩放 · 按住左键拖动 · Shift+方向键平移</p> : null}
       </div>
     </section>
   )

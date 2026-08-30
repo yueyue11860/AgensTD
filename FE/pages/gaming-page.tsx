@@ -249,6 +249,7 @@ interface ServerDrivenGameState {
   tick: number
   tickRateMs: number
   status: MatchStatus
+  tutorialPaused: boolean
   boardPieces: ServerBoardPieceState[]
   enemies: ServerEnemyState[]
   tray: Array<ServerTrayPieceState | null>
@@ -299,56 +300,6 @@ const GENERAL_ARCHETYPE_LABELS = {
   summon: '召唤',
   control: '控制',
 } as const
-
-const STATUS_LABELS: Record<string, string> = {
-  slow: '减速',
-  stun: '眩晕',
-  root: '定身',
-  suppress: '压制',
-  vulnerable: '易损',
-  armor_break: '破甲',
-}
-
-const COMBAT_EVENT_LABELS: Record<string, string> = {
-  GENERAL_SKILL_CAST: '神将释放技能',
-  GENERAL_EFFECT_APPLIED: '神将效果生效',
-  STATUS_APPLIED: '控制效果施加',
-  STATUS_EXPIRED: '控制效果结束',
-  PATH_DISPLACED: '小怪被位移',
-  SUMMON_SPAWNED: '召唤物登场',
-  SUMMON_EXPIRED: '召唤物退场',
-  ZONE_SPAWNED: '效果区域生成',
-  ZONE_EXPIRED: '效果区域消散',
-  SYNERGY_ACTIVATED: '羁绊激活',
-  SYNERGY_DEACTIVATED: '羁绊解除',
-  ACTIVE_ITEM_USED: '主动道具生效',
-  ACTIVE_ITEM_REJECTED: '主动道具使用失败',
-  BOSS_SPAWNED: 'Boss 登场',
-  BOSS_CAST_WARNING: 'Boss 技能预警',
-  BOSS_SKILL_CAST: 'Boss 释放技能',
-  BOSS_SKILL_ENDED: 'Boss 技能结束',
-  BOSS_PHASE_CHANGED: 'Boss 进入新阶段',
-  BOSS_SKILL_PLUGIN_ERROR: 'Boss 技能异常',
-  BOSS_DIED: 'Boss 已击败',
-}
-
-function combatEventDisplay(event: ServerCombatEventState) {
-  const base = COMBAT_EVENT_LABELS[event.type] ?? event.type
-  const bossName = typeof event.data.bossName === 'string'
-    ? event.data.bossName
-    : typeof event.data.bossDefinitionId === 'string'
-      ? event.data.bossDefinitionId
-      : ''
-  const skillName = typeof event.data.skillName === 'string'
-    ? event.data.skillName
-    : typeof event.data.skillId === 'string'
-      ? event.data.skillId
-      : ''
-  if (bossName && skillName) return `${base} · ${bossName}「${skillName}」`
-  if (skillName) return `${base} · ${skillName}`
-  if (bossName) return `${base} · ${bossName}`
-  return base
-}
 
 const ACTIVE_ITEM_PRESENTATION: Record<string, { name: string; targetingKind: ServerActiveItemState['targetingKind'] }> = {
   change_character_brush: { name: '点将笔', targetingKind: 'character_token' },
@@ -805,6 +756,7 @@ function normalizeSyncState(payload: unknown, playerId: string): ServerDrivenGam
     tick: candidate.tick,
     tickRateMs: Math.max(1, readNumber(candidate, 'tickRateMs', 100)),
     status: candidate.status === 'running' || candidate.status === 'finished' ? candidate.status : 'waiting',
+    tutorialPaused: candidate.tutorialPaused === true || (pve !== null && pve.tutorialPaused === true),
     boardPieces,
     enemies,
     tray,
@@ -1015,7 +967,7 @@ function TeammateConnectionRow({ slot, selfPlayerId }: { slot: RoomConnectionSlo
   )
 }
 
-function GamingBoard({ gameState, sceneTheme, selectedPieceId, selectedObjectLabel, executableActions, placementMode, allowAnyTargetCell, hoveredCell, clientActionIntents, audioMuted, audioMasterVolume, presentationSyncRevision, onCellClick, onCellHover, onCellLeave, onCancelInteraction }: {
+function GamingBoard({ gameState, sceneTheme, selectedPieceId, selectedObjectLabel, executableActions, placementMode, allowAnyTargetCell, hoveredCell, clientActionIntents, showCameraHint, audioMuted, audioMasterVolume, presentationSyncRevision, initialFocusCell, onCellClick, onCellHover, onCellLeave, onCancelInteraction }: {
   gameState: ServerDrivenGameState | null
   sceneTheme?: PveSceneTheme | null
   selectedPieceId: string | null
@@ -1025,9 +977,11 @@ function GamingBoard({ gameState, sceneTheme, selectedPieceId, selectedObjectLab
   allowAnyTargetCell?: boolean
   hoveredCell: { x: number; y: number } | null
   clientActionIntents: readonly ClientActionIntent[]
+  showCameraHint: boolean
   audioMuted: boolean
   audioMasterVolume: number
   presentationSyncRevision: number
+  initialFocusCell: { x: number, y: number } | null
   onCellClick: (x: number, y: number) => void
   onCellHover: (x: number, y: number) => void
   onCellLeave: () => void
@@ -1084,9 +1038,11 @@ function GamingBoard({ gameState, sceneTheme, selectedPieceId, selectedObjectLab
         placementMode={placementMode}
         canPreviewAtHoveredCell={canPreviewAtHoveredCell}
         clientActionIntents={clientActionIntents}
+        showCameraHint={showCameraHint}
         muted={audioMuted}
         masterVolume={audioMasterVolume}
         presentationSyncRevision={presentationSyncRevision}
+        initialFocusCell={initialFocusCell}
         accessibilitySummaryId={summaryId}
         accessibilityLabel={`29×29西游汉字战场，第 ${gameState?.currentWave.index ?? 0} 波。方向键移动格游标，Enter 或空格执行，Escape 取消。`}
         onCancelInteraction={onCancelInteraction}
@@ -1115,6 +1071,7 @@ export function GamingPage() {
   const combatEventStreamRef = useRef(createCombatEventStreamState())
   const playerAccount = usePlayerAccount()
   const lastItemRejectionRef = useRef<string | null>(null)
+  const tutorialPauseStepRef = useRef<string | null>(null)
   const [gameState, setGameState] = useState<ServerDrivenGameState | null>(null)
   const [combatAudioPreferences, setCombatAudioPreferences] = useState(readCombatAudioPreferences)
   const [roomPhase, setRoomPhase] = useState<RoomPhase>('lobby')
@@ -1136,6 +1093,16 @@ export function GamingPage() {
   const [roomSlots, setRoomSlots] = useState<RoomConnectionSlot[]>([])
   const [connectionRecovery, setConnectionRecovery] = useState<ConnectionRecoveryState>(() => createConnectionRecoveryState())
   const reconnectRemainingSeconds = useDeadlineCountdown(connectionRecovery.deadlineAt)
+
+  const initialFocusCell = mySlot === 'P1'
+    ? { x: 7, y: 21 }
+    : mySlot === 'P2'
+      ? { x: 21, y: 21 }
+      : mySlot === 'P3'
+        ? { x: 21, y: 7 }
+        : mySlot === 'P4'
+          ? { x: 7, y: 7 }
+          : null
 
   const isHost = hostPlayerId ? hostPlayerId === playerId : mySlot === 'P1'
   const interactionLocked = connectionRecovery.phase !== 'ready'
@@ -1199,6 +1166,26 @@ export function GamingPage() {
     selectedTrayIndex,
   } : null, [gameState, selectedTrayIndex])
   const onboarding = usePveOnboarding(playerId, onboardingObservation)
+  const showCameraHint = onboarding.visible && onboarding.currentStep === 'deploy'
+
+  useEffect(() => {
+    const tutorialVisible = Boolean(
+      onboarding.visible
+      && !interactionLocked
+      && !shouldShowMissionBriefing
+      && !gameState?.result,
+    )
+    const step = onboarding.currentStep
+    if (!tutorialVisible || !step || !gameState || gameState.status !== 'running') return
+    if (tutorialPauseStepRef.current === step) return
+
+    // Every newly shown teaching step pauses the authoritative runtime before
+    // the player has to read or act. Resume is explicit and is not immediately
+    // undone until the coach advances to a different step.
+    tutorialPauseStepRef.current = step
+    onboarding.pause()
+    if (!gameState.tutorialPaused) emitAction({ action: 'SET_TUTORIAL_PAUSED', paused: true })
+  }, [gameState, onboarding.currentStep, onboarding.visible, interactionLocked, shouldShowMissionBriefing])
 
   useEffect(() => {
     const root = document.getElementById('root')
@@ -1526,6 +1513,36 @@ export function GamingPage() {
       payload,
     })
     return true
+  }
+
+  function sendTutorialPause(paused: boolean) {
+    if (gameState?.status !== 'running') return
+    emitAction({ action: 'SET_TUTORIAL_PAUSED', paused })
+  }
+
+  function pauseOnboarding() {
+    onboarding.pause()
+    sendTutorialPause(true)
+  }
+
+  function resumeOnboarding() {
+    onboarding.resume()
+    sendTutorialPause(false)
+  }
+
+  function skipAllOnboarding() {
+    onboarding.skipAll()
+    tutorialPauseStepRef.current = null
+    sendTutorialPause(false)
+  }
+
+  function skipOnboardingStep() {
+    const isLastStep = onboarding.currentStep === 'boss-warning'
+    onboarding.skipStep()
+    if (isLastStep) {
+      tutorialPauseStepRef.current = null
+      sendTutorialPause(false)
+    }
   }
 
   function handleRecruit() {
@@ -1946,7 +1963,15 @@ export function GamingPage() {
       setError('权威战局尚未恢复，请等待重连完成。')
       return
     }
+    // `selectedGeneralIds` is an additive payload field. Legacy gateways parse only
+    // levelId/difficulty; upgraded gateways can atomically lock this pool.
     socket.emit('SELECT_LEVEL', selection)
+  }
+
+  function handleSelectGenerals(generalIds: string[]) {
+    const socket = socketRef.current
+    if (!socket?.connected || interactionLocked || awaitingCheckpointRef.current) return
+    socket.emit('SET_GENERAL_SELECTION', { selectedGeneralIds: generalIds })
   }
 
   return (
@@ -2025,11 +2050,11 @@ export function GamingPage() {
         step={onboarding.currentStep}
         facts={onboarding.facts}
         visible={onboarding.visible && !interactionLocked && !shouldShowMissionBriefing && !gameState?.result}
-        paused={onboarding.paused && Boolean(onboarding.facts?.running) && !gameState?.result}
-        onSkipStep={onboarding.skipStep}
-        onSkipAll={onboarding.skipAll}
-        onPause={onboarding.pause}
-        onResume={onboarding.resume}
+        paused={(gameState?.tutorialPaused || onboarding.paused) && Boolean(onboarding.facts?.running) && !gameState?.result}
+        onSkipStep={skipOnboardingStep}
+        onSkipAll={skipAllOnboarding}
+        onPause={pauseOnboarding}
+        onResume={resumeOnboarding}
       />
 
       <section className="gaming-shell" aria-busy={interactionLocked} style={interactionLocked ? { pointerEvents: 'none' } : undefined}>
@@ -2100,6 +2125,17 @@ export function GamingPage() {
               </div>
             </div>
           )}
+          <details className="gaming-command-synergy gaming-info-fold" data-onboarding-anchor="synergy">
+            <summary><span>已激活羁绊</span><small>{gameState?.activeSynergies.length ?? 0}</small></summary>
+            <div className="gaming-synergy-list">
+              {(gameState?.activeSynergies.length ?? 0) > 0 ? gameState?.activeSynergies.map((synergy) => (
+                <div className="gaming-synergy-entry" key={synergy.synergyId}>
+                  <div><strong>{synergy.name}</strong><span>Lv.{synergy.level}</span></div>
+                  <p>成员：{synergy.contributingGeneralIds.map(generalDisplayName).join('、') || '等待成员投影'}</p>
+                </div>
+              )) : <p className="gaming-synergy-empty">当前阵容暂无已激活羁绊</p>}
+            </div>
+          </details>
           <CrisisWarning
             overloadTicks={gameState?.overloadTicks ?? 0}
             overloadCountdownSec={gameState?.overloadCountdownSec ?? 0}
@@ -2325,7 +2361,7 @@ export function GamingPage() {
                   selectedGeneralProgress && `gaming-general-card gaming-general-quality-${selectedGeneralProgress.quality}`,
                 )}>
                   <div className="gaming-piece-summary">
-                    <span className="gaming-piece-summary-glyph">{selectedFormationGlyphs.length > 0 ? selectedFormationGlyphs.join('') : selectedPiece.glyph}</span>
+                    <span className={cx('gaming-piece-summary-glyph', selectedPiece.kind === 'character' && 'gaming-piece-summary-glyph-character')}>{selectedFormationGlyphs.length > 0 ? selectedFormationGlyphs.join('') : selectedPiece.glyph}</span>
                     <div>
                       <p className="font-semibold text-white">{selectedFormation?.name ?? (selectedPiece.kind === 'soldier' ? SOLDIER_LABELS[selectedPiece.soldierType ?? ''] ?? '天兵' : '神将字符')}</p>
                       <p className="text-xs text-cyan-100/65">{selectedGeneralProgress
@@ -2379,65 +2415,16 @@ export function GamingPage() {
             allowAnyTargetCell={targetingItemSlot !== null}
             hoveredCell={hoveredCell}
             clientActionIntents={clientActionIntents}
+            showCameraHint={showCameraHint}
             audioMuted={combatAudioPreferences.muted}
             audioMasterVolume={combatAudioPreferences.masterVolume}
             presentationSyncRevision={connectionRecovery.syncRevision}
+            initialFocusCell={initialFocusCell}
             onCellClick={handleCellClick}
             onCellHover={(x, y) => setHoveredCell((current) => current?.x === x && current.y === y ? current : { x, y })}
             onCellLeave={() => setHoveredCell((current) => current === null ? current : null)}
             onCancelInteraction={cancelBattlefieldInteraction}
           />
-
-          <aside className="gaming-side-rail gaming-side-rail-right" aria-label="情境情报抽屉">
-            <details className="gaming-panel-card gaming-info-fold" data-onboarding-anchor="synergy">
-              <summary><span>已激活羁绊</span><small>{gameState?.activeSynergies.length ?? 0}</small></summary>
-              <div className="gaming-synergy-list">
-                {(gameState?.activeSynergies.length ?? 0) > 0 ? gameState?.activeSynergies.map((synergy) => (
-                  <div className="gaming-synergy-entry" key={synergy.synergyId}>
-                    <div><strong>{synergy.name}</strong><span>Lv.{synergy.level}</span></div>
-                    <p>成员：{synergy.contributingGeneralIds.map(generalDisplayName).join('、') || '等待成员投影'}</p>
-                  </div>
-                )) : <p className="gaming-synergy-empty">当前阵容暂无已激活羁绊</p>}
-              </div>
-            </details>
-            <details className="gaming-panel-card gaming-info-fold">
-              <summary><span>战斗效果</span><small>{(gameState?.summonedUnits.length ?? 0) + (gameState?.zones.length ?? 0) + (gameState?.statuses.length ?? 0)}</small></summary>
-              <div className="gaming-effect-summary" aria-label="召唤物、效果区域和敌人状态">
-                <span><strong>{gameState?.summonedUnits.length ?? 0}</strong><small>召唤物</small></span>
-                <span><strong>{gameState?.zones.length ?? 0}</strong><small>效果区域</small></span>
-                <span><strong>{gameState?.statuses.length ?? 0}</strong><small>状态层</small></span>
-              </div>
-              {(gameState?.statuses.length ?? 0) > 0 ? (
-                <div className="gaming-effect-list">
-                  {gameState?.statuses.slice(0, 5).map((status) => (
-                    <p key={status.instanceId}>
-                      <strong>{STATUS_LABELS[status.statusId] ?? status.statusId}</strong>
-                      <span>{gameState.enemies.find((enemy) => enemy.entityId === status.enemyId)?.glyph ?? '怪'} · {status.stacks > 1 ? `${status.stacks}层 · ` : ''}{status.magnitude !== 0 ? `强度 ${status.magnitude}` : '生效中'}</span>
-                    </p>
-                  ))}
-                  {gameState && gameState.statuses.length > 5 ? <small>另有 {gameState.statuses.length - 5} 个状态，战场上以黄字标记</small> : null}
-                </div>
-              ) : <p className="gaming-synergy-empty gaming-effect-empty">当前没有持续中的控制或易损效果</p>}
-              {(gameState?.recentEvents.length ?? 0) > 0 ? (
-                <div className="gaming-event-list">
-                  {[...(gameState?.recentEvents ?? [])].slice(-4).reverse().map((event) => (
-                    <p key={event.id}><span>{combatEventDisplay(event)}</span><small>T{event.tick}</small></p>
-                  ))}
-                </div>
-              ) : null}
-            </details>
-            <details className="gaming-panel-card gaming-info-fold">
-              <summary><span>操作提示</span><small>点击展开</small></summary>
-              <div className="gaming-operation-guide">
-                <p>托盘天兵 → 同类同级天兵：直接升级</p>
-                <p>托盘、备战席、棋盘任意两处可交换或合成</p>
-                <p>备战席单位不占人口</p>
-                <p>流放：清空备战席中的全部单位</p>
-                <p>2/3/4 字神将按配方横向连续排列自动组成；固定后可整体迁移</p>
-              </div>
-            </details>
-            {selectedLevelPreview ? <details className="gaming-panel-card gaming-info-fold"><summary><span>关卡情报</span><small>PVE-{selectedLevelPreview.levelId}</small></summary><h2 className="mt-2 text-lg font-semibold text-white">{selectedLevelPreview.label} · {{ easy: '简单', normal: '普通', hard: '困难' }[selectedLevelPreview.difficulty]}</h2><p className="mt-2 text-sm leading-6 text-slate-300">{selectedLevelPreview.description}</p></details> : null}
-          </aside>
         </div>
       </section>
 
@@ -2445,7 +2432,17 @@ export function GamingPage() {
         <LeaveConfirmDialog onCancel={() => setIsLeaveConfirmOpen(false)} onConfirm={leaveGame} />
       ) : null}
 
-      {shouldShowMissionBriefing ? <MissionBriefingModal isHost={isHost} playerKind={playerKind} stageAccess={playerAccount.data?.pveProgression.stages ?? []} progressionLoading={playerAccount.isLoading} onSelectLevel={handleSelectLevel} engineError={error ?? playerAccount.error} /> : null}
+      {shouldShowMissionBriefing ? <MissionBriefingModal
+        isHost={isHost}
+        playerKind={playerKind}
+        stageAccess={playerAccount.data?.pveProgression.stages ?? []}
+        progressionLoading={playerAccount.isLoading}
+        generals={playerAccount.data?.catalogs.generals}
+        generalSelection={playerAccount.data?.generalSelection}
+        onSelectGenerals={handleSelectGenerals}
+        onSelectLevel={handleSelectLevel}
+        engineError={error ?? playerAccount.error}
+      /> : null}
       {gameState?.result?.outcome ? <GameOverOverlay outcome={gameState.result.outcome} currentLevelId={selectedLevelInfo?.levelId ?? null} matchId={gameState.matchId} onReplay={leaveGame} onAdjustBuild={() => navigate('/build')} onLeave={returnHome} /> : null}
     </main>
   )

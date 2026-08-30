@@ -1,31 +1,31 @@
 {
-  "_combat-event-stream-gndJbacP.js": {
-    "file": "assets/combat-event-stream-gndJbacP.js",
+  "_combat-event-stream-C0558fuu.js": {
+    "file": "assets/combat-event-stream-C0558fuu.js",
     "name": "combat-event-stream",
     "imports": [
       "_react-vendor-VCeWi7p5.js"
     ]
   },
-  "_cx-BiP10JOn.js": {
-    "file": "assets/cx-BiP10JOn.js",
+  "_cx-BIp_nODo.js": {
+    "file": "assets/cx-BIp_nODo.js",
     "name": "cx",
     "imports": [
-      "_ui-vendor-ZGroOlBN.js"
+      "_ui-vendor-BAMkfEFe.js"
     ]
   },
-  "_gaming-page-BOjwslWt.js": {
-    "file": "assets/gaming-page-BOjwslWt.js",
+  "_gaming-page-C937PVJG.js": {
+    "file": "assets/gaming-page-C937PVJG.js",
     "name": "gaming-page",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
       "_react-vendor-VCeWi7p5.js",
       "_realtime-vendor-Ba-X_5Ya.js",
-      "_cx-BiP10JOn.js",
+      "_cx-BIp_nODo.js",
       "_use-modal-focus-D2CAbj4Z.js",
-      "_ui-vendor-ZGroOlBN.js",
-      "_use-player-account-6VJpKKgJ.js",
-      "_combat-event-stream-gndJbacP.js"
+      "_ui-vendor-BAMkfEFe.js",
+      "_use-player-account-3i1_7Gu5.js",
+      "_combat-event-stream-C0558fuu.js"
     ],
     "dynamicImports": [
       "components/phaser-battlefield.tsx"
@@ -54,8 +54,8 @@
     "file": "assets/supabase-vendor-DiOMTyHL.js",
     "name": "supabase-vendor"
   },
-  "_ui-vendor-ZGroOlBN.js": {
-    "file": "assets/ui-vendor-ZGroOlBN.js",
+  "_ui-vendor-BAMkfEFe.js": {
+    "file": "assets/ui-vendor-BAMkfEFe.js",
     "name": "ui-vendor",
     "imports": [
       "_react-vendor-VCeWi7p5.js"
@@ -68,8 +68,8 @@
       "_react-vendor-VCeWi7p5.js"
     ]
   },
-  "_use-player-account-6VJpKKgJ.js": {
-    "file": "assets/use-player-account-6VJpKKgJ.js",
+  "_use-player-account-3i1_7Gu5.js": {
+    "file": "assets/use-player-account-3i1_7Gu5.js",
     "name": "use-player-account",
     "imports": [
       "_react-vendor-VCeWi7p5.js",
@@ -77,87 +77,102 @@
     ]
   },
   "components/phaser-battlefield.tsx": {
-    "file": "assets/phaser-battlefield-CUBxhTCR.js",
+    "file": "assets/phaser-battlefield-BYrh-N8L.js",
     "name": "phaser-battlefield",
     "src": "components/phaser-battlefield.tsx",
     "isDynamicEntry": true,
     "imports": [
       "_react-vendor-VCeWi7p5.js",
       "_phaser-vendor-BTGbtjln.js",
-      "_gaming-page-BOjwslWt.js",
+      "_gaming-page-C937PVJG.js",
       "index.html",
-      "_ui-vendor-ZGroOlBN.js",
+      "_ui-vendor-BAMkfEFe.js",
       "_supabase-vendor-DiOMTyHL.js",
       "_realtime-vendor-Ba-X_5Ya.js",
-      "_cx-BiP10JOn.js",
+      "_cx-BIp_nODo.js",
       "_use-modal-focus-D2CAbj4Z.js",
-      "_use-player-account-6VJpKKgJ.js",
-      "_combat-event-stream-gndJbacP.js"
+      "_use-player-account-3i1_7Gu5.js",
+      "_combat-event-stream-C0558fuu.js"
     ]
   },
   "components/require-auth.tsx": {
-    "file": "assets/require-auth-B--LcfNn.js",
+    "file": "assets/require-auth-BkcXnqoH.js",
     "name": "require-auth",
     "src": "components/require-auth.tsx",
     "isDynamicEntry": true,
     "imports": [
       "_react-vendor-VCeWi7p5.js",
       "index.html",
-      "_ui-vendor-ZGroOlBN.js",
+      "_ui-vendor-BAMkfEFe.js",
       "_supabase-vendor-DiOMTyHL.js"
     ]
   },
   "index.html": {
-    "file": "assets/index-YS3VIffk.js",
+    "file": "assets/index-BOJD3OG2.js",
     "name": "index",
     "src": "index.html",
     "isEntry": true,
     "imports": [
       "_react-vendor-VCeWi7p5.js",
-      "_ui-vendor-ZGroOlBN.js",
+      "_ui-vendor-BAMkfEFe.js",
       "_supabase-vendor-DiOMTyHL.js"
     ],
     "dynamicImports": [
       "components/require-auth.tsx",
       "pages/tower-defense-frontend-page.tsx",
-      "_gaming-page-BOjwslWt.js",
+      "_gaming-page-C937PVJG.js",
       "pages/meta-system-page.tsx",
+      "pages/codex-page.tsx",
       "pages/pvp-page.tsx"
     ],
     "css": [
-      "assets/index-BraNiQrd.css"
+      "assets/index-CGHSMh3Y.css"
+    ]
+  },
+  "pages/codex-page.tsx": {
+    "file": "assets/codex-page-Cyc73wnV.js",
+    "name": "codex-page",
+    "src": "pages/codex-page.tsx",
+    "isDynamicEntry": true,
+    "imports": [
+      "_react-vendor-VCeWi7p5.js",
+      "_use-player-account-3i1_7Gu5.js",
+      "_cx-BIp_nODo.js",
+      "_ui-vendor-BAMkfEFe.js",
+      "index.html",
+      "_supabase-vendor-DiOMTyHL.js"
     ]
   },
   "pages/meta-system-page.tsx": {
-    "file": "assets/meta-system-page-DaINazQv.js",
+    "file": "assets/meta-system-page-ComcS1Kf.js",
     "name": "meta-system-page",
     "src": "pages/meta-system-page.tsx",
     "isDynamicEntry": true,
     "imports": [
       "_react-vendor-VCeWi7p5.js",
-      "_cx-BiP10JOn.js",
-      "_use-player-account-6VJpKKgJ.js",
-      "_ui-vendor-ZGroOlBN.js",
+      "_cx-BIp_nODo.js",
+      "_use-player-account-3i1_7Gu5.js",
+      "_ui-vendor-BAMkfEFe.js",
       "index.html",
       "_supabase-vendor-DiOMTyHL.js"
     ]
   },
   "pages/pvp-page.tsx": {
-    "file": "assets/pvp-page-CpWNfpYb.js",
+    "file": "assets/pvp-page-B9fgLuHY.js",
     "name": "pvp-page",
     "src": "pages/pvp-page.tsx",
     "isDynamicEntry": true,
     "imports": [
       "_react-vendor-VCeWi7p5.js",
       "index.html",
-      "_cx-BiP10JOn.js",
+      "_cx-BIp_nODo.js",
       "_use-modal-focus-D2CAbj4Z.js",
-      "_ui-vendor-ZGroOlBN.js",
+      "_ui-vendor-BAMkfEFe.js",
       "_supabase-vendor-DiOMTyHL.js"
     ]
   },
   "pages/tower-defense-frontend-page.tsx": {
-    "file": "assets/tower-defense-frontend-page-Bnjq2kLo.js",
+    "file": "assets/tower-defense-frontend-page-DGCRGZvn.js",
     "name": "tower-defense-frontend-page",
     "src": "pages/tower-defense-frontend-page.tsx",
     "isDynamicEntry": true,
@@ -165,10 +180,10 @@
       "_react-vendor-VCeWi7p5.js",
       "index.html",
       "_realtime-vendor-Ba-X_5Ya.js",
-      "_combat-event-stream-gndJbacP.js",
-      "_cx-BiP10JOn.js",
+      "_combat-event-stream-C0558fuu.js",
+      "_cx-BIp_nODo.js",
       "_use-modal-focus-D2CAbj4Z.js",
-      "_ui-vendor-ZGroOlBN.js",
+      "_ui-vendor-BAMkfEFe.js",
       "_markdown-vendor-Dq1ApwnB.js",
       "_supabase-vendor-DiOMTyHL.js"
     ]

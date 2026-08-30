@@ -1,4 +1,6 @@
 import type { PlayerAccountStore } from '../data/player-account-store'
+import type { GeneralUnlockState } from '../../../shared/contracts/general'
+import { GENERAL_ROSTER } from '../core/hero-v1/roster'
 import {
   isPveStageSelection,
   pveStageKey,
@@ -33,7 +35,40 @@ const DEFAULT_PASSIVE_ITEMS = [
   'talent_registry',
   'reserve_expansion_talisman',
 ] as const
+/** Starter roster is intentionally small and restricted to two-character generals. */
+export const DEFAULT_STARTER_GENERAL_IDS = ['houyi', 'chang_e', 'yangjian'] as const
+const KNOWN_GENERAL_IDS: ReadonlySet<string> = new Set(GENERAL_ROSTER.map((entry) => entry.generalId))
+/** Deterministic first-clear rewards for the unlockable general roster. */
+const GENERAL_UNLOCK_REWARDS: Readonly<Record<string, string>> = Object.freeze({
+  'easy:1': 'nazha',
+  'easy:3': 'lei_gong',
+  'easy:5': 'dian_mu',
+  'easy:7': 'lijing',
+  'easy:10': 'shou_xing',
+  'normal:1': 'sha_wujing',
+  'normal:2': 'zhu_bajie',
+  'normal:3': 'zhen_yuanzi',
+  'normal:4': 'sunwukong',
+  'normal:6': 'tang_sanzang',
+  'normal:8': 'bai_longma',
+  'normal:10': 'pi_lanpo',
+  'hard:1': 'yu_huang_dadi',
+  'hard:2': 'ru_lai_fozu',
+  'hard:3': 'pu_ti_laozu',
+  'hard:4': 'tai_yi_zhenren',
+  'hard:5': 'guan_yin_pusa',
+  'hard:6': 'tai_shang_laojun',
+})
 const MAX_CAS_RETRIES = 12
+export const MAX_GENERAL_SELECTIONS_PER_MATCH = 6
+
+export function createDefaultGeneralUnlockState(): GeneralUnlockState {
+  return {
+    version: 1,
+    unlockedGeneralIds: [...DEFAULT_STARTER_GENERAL_IDS],
+    starterClaimed: true,
+  }
+}
 
 export interface SettleMatchInput {
   requestId: string
@@ -85,6 +120,8 @@ export interface CreateBuildSnapshotInput {
   matchId: string
   playerId: string
   expectedAccountVersion: number
+  /** Optional explicit roster selection; defaults to the first six unlocked generals. */
+  selectedGeneralIds?: readonly string[]
 }
 
 export interface ApplyPvpRewardInput {
@@ -155,6 +192,22 @@ function isPveProgressPayload(value: unknown): boolean {
     && !Array.isArray(candidate.clearsByStageKey)
 }
 
+function isGeneralUnlockState(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const candidate = value as { version?: unknown; unlockedGeneralIds?: unknown; starterClaimed?: unknown }
+  return Number.isSafeInteger(candidate.version)
+    && (candidate.version as number) >= 1
+    && Array.isArray(candidate.unlockedGeneralIds)
+    && candidate.unlockedGeneralIds.length > 0
+    && candidate.unlockedGeneralIds.every(id => typeof id === 'string' && id.length > 0)
+    && typeof candidate.starterClaimed === 'boolean'
+}
+
+function isKnownGeneralUnlockState(value: unknown): boolean {
+  return isGeneralUnlockState(value)
+    && (value as { unlockedGeneralIds: unknown[] }).unlockedGeneralIds.every(id => KNOWN_GENERAL_IDS.has(id as string))
+}
+
 export function createDefaultPlayerAccount(playerId: string, at = nowIso()): PlayerAccountRecord {
   if (!playerId) throw new AccountDomainError('INVALID_ACCOUNT_MUTATION', 'playerId is required')
   return {
@@ -187,6 +240,7 @@ export function createDefaultPlayerAccount(playerId: string, at = nowIso()): Pla
       extensions: {},
     },
     pveProgress: createDefaultPveProgress(),
+    generalUnlock: createDefaultGeneralUnlockState(),
     createdAt: at,
     updatedAt: at,
   }
@@ -385,6 +439,15 @@ export class PlayerAccountService {
         }
         next.pveProgress.version += 1
         progressionUpdated = true
+        // Unlocks are deterministic first-clear rewards. Re-clears only
+        // increase the stage clear count and never grant a duplicate unlock.
+        if (!previousClear) {
+          const rewardGeneralId = GENERAL_UNLOCK_REWARDS[stageKey]
+          if (rewardGeneralId && !next.generalUnlock.unlockedGeneralIds.includes(rewardGeneralId)) {
+            next.generalUnlock.unlockedGeneralIds = [...next.generalUnlock.unlockedGeneralIds, rewardGeneralId].sort()
+            next.generalUnlock.version += 1
+          }
+        }
       }
       const settlement: MatchPlayerSettlement = {
         settlementId,
@@ -540,6 +603,12 @@ export class PlayerAccountService {
         }
       }
       const at = nowIso()
+      const unlockedGeneralIds = [...current.generalUnlock.unlockedGeneralIds]
+      const selectedGeneralIds = [...(input.selectedGeneralIds ?? unlockedGeneralIds.slice(0, MAX_GENERAL_SELECTIONS_PER_MATCH))]
+      if (selectedGeneralIds.length === 0 || selectedGeneralIds.length > MAX_GENERAL_SELECTIONS_PER_MATCH
+        || selectedGeneralIds.some(id => typeof id !== 'string' || !unlockedGeneralIds.includes(id))) {
+        throw new AccountDomainError('INVALID_ACCOUNT_MUTATION', `selectedGeneralIds must be a non-empty subset of unlocked generals (max ${MAX_GENERAL_SELECTIONS_PER_MATCH})`)
+      }
       const snapshot: MatchBuildSnapshot = {
         snapshotVersion: 1,
         snapshotId: `build:${input.matchId}:${input.playerId}`,
@@ -547,6 +616,8 @@ export class PlayerAccountService {
         playerId: input.playerId,
         accountVersion: current.version,
         createdAt: at,
+        selectedGeneralIds,
+        unlockedGeneralIds,
         item: {
           accountVersion: current.item.version,
           activeSlots: clone(current.item.loadout.activeSlots),
@@ -603,6 +674,7 @@ export class PlayerAccountService {
         playerId?: unknown
         schemaVersion?: unknown
         pveProgress?: unknown
+        generalUnlock?: unknown
         version?: unknown
         wallet?: unknown
       }
@@ -613,6 +685,8 @@ export class PlayerAccountService {
       const hasValidPveProgress = isPveProgressPayload(candidate.pveProgress)
       if (candidate.schemaVersion === PLAYER_ACCOUNT_SCHEMA_VERSION
         && hasValidPveProgress
+        && isKnownGeneralUnlockState(candidate.generalUnlock)
+        && (candidate.generalUnlock as { starterClaimed: boolean }).starterClaimed
         && Number.isSafeInteger(wallet?.gold)
         && Number.isSafeInteger(wallet?.honor)
         && (wallet?.gold as number) >= 0
@@ -634,6 +708,23 @@ export class PlayerAccountService {
       // schema for the additive honor-wallet field.
       if (candidate.schemaVersion !== PLAYER_ACCOUNT_SCHEMA_VERSION || !hasValidPveProgress) {
         next.pveProgress = createDefaultPveProgress()
+      }
+      // Accounts created before the general-unlock subsystem did not carry a
+      // roster gate. Grant the deterministic starter set exactly once while
+      // preserving any valid IDs already present in a partially migrated row.
+      if (!isGeneralUnlockState(candidate.generalUnlock)) {
+        next.generalUnlock = createDefaultGeneralUnlockState()
+      } else {
+        const unlock = clone(candidate.generalUnlock) as GeneralUnlockState
+        const ids = Array.isArray(unlock.unlockedGeneralIds)
+          ? unlock.unlockedGeneralIds.filter((id): id is string => typeof id === 'string' && id.length > 0 && KNOWN_GENERAL_IDS.has(id))
+          : []
+        if (!unlock.starterClaimed || ids.length === 0) {
+          for (const starter of DEFAULT_STARTER_GENERAL_IDS) if (!ids.includes(starter)) ids.push(starter)
+          unlock.starterClaimed = true
+        }
+        unlock.unlockedGeneralIds = [...new Set(ids)]
+        next.generalUnlock = unlock
       }
       for (const settlement of Object.values(next.settlementsById)) {
         if (typeof settlement.progressionUpdated !== 'boolean') settlement.progressionUpdated = false

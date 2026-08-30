@@ -108,6 +108,23 @@ function validateRuntimeOptions(options) {
         throw new Error('initialWaveNumber must be between 1 and maxWaves');
     }
 }
+function normalizeGeneralSelection(selection, catalog) {
+    const all = Object.keys(catalog).sort();
+    if (!selection)
+        return { unlockedGeneralIds: all, selectedGeneralIds: all };
+    const unlocked = [...new Set(selection.unlockedGeneralIds)].sort();
+    const selected = [...new Set(selection.selectedGeneralIds)].sort();
+    if (selected.length === 0)
+        throw new Error('EMPTY_SELECTED_GENERAL');
+    if (unlocked.some((id) => !catalog[id]))
+        throw new Error('UNKNOWN_UNLOCKED_GENERAL');
+    if (selected.some((id) => !catalog[id]))
+        throw new Error('UNKNOWN_SELECTED_GENERAL');
+    const unlockedSet = new Set(unlocked);
+    if (selected.some((id) => !unlockedSet.has(id)))
+        throw new Error('SELECTED_GENERAL_NOT_UNLOCKED');
+    return { unlockedGeneralIds: unlocked, selectedGeneralIds: selected };
+}
 class PveGameRuntime {
     tickRateMs;
     seed;
@@ -119,6 +136,7 @@ class PveGameRuntime {
     laneRoutes;
     isDeployableCell;
     initialCharacterTokens;
+    generalSelections;
     waveGlyphPools;
     /** 本局冻结后的数值表，不会随账户解锁或配置热更改变。 */
     balanceProfile;
@@ -155,6 +173,7 @@ class PveGameRuntime {
     laneWaves = [];
     currentTick = 0;
     status = 'waiting';
+    tutorialPaused = false;
     result = null;
     currentWaveNumber = 0;
     pendingWaveNumber = null;
@@ -199,12 +218,13 @@ class PveGameRuntime {
         this.eventHistoryLimit = Math.max(20, options.eventHistoryLimit ?? 300);
         this.eventObserver = options.eventObserver ?? null;
         this.generalCatalog = options.generalCatalog ?? catalog_1.GENERAL_CATALOG;
+        this.generalSelections = structuredClone(options.generalSelections ?? {});
         this.itemLoadoutSnapshots = structuredClone(options.itemLoadoutSnapshots ?? {});
         this.weaponLoadoutSnapshots = structuredClone(options.weaponLoadoutSnapshots ?? {});
         this.generalFormations = new formation_manager_1.GeneralFormationManager(this.generalCatalog);
         this.bossRuntime = new boss_runtime_1.BossCombatRuntimeV1(this.tickRateMs);
     }
-    registerPlayer(playerId, slot) {
+    registerPlayer(playerId, slot, selection) {
         if (this.status !== 'waiting') {
             return this.commandResult(false, 'MATCH_ALREADY_STARTED');
         }
@@ -223,6 +243,19 @@ class PveGameRuntime {
             return this.commandResult(false, 'LOADOUT_PLAYER_MISMATCH');
         }
         const passiveItems = itemSnapshot ? (0, item_v1_1.projectPassiveItemRules)(this.seed, itemSnapshot) : null;
+        let normalizedSelection;
+        try {
+            normalizedSelection = normalizeGeneralSelection(selection ?? this.generalSelections[playerId], this.generalCatalog);
+        }
+        catch (error) {
+            return this.commandResult(false, error instanceof Error ? error.message : 'INVALID_GENERAL_SELECTION');
+        }
+        const selectedTokenCounts = {};
+        for (const generalId of normalizedSelection.selectedGeneralIds) {
+            const definition = this.generalCatalog[generalId];
+            for (const glyph of definition.recipe.glyphs)
+                selectedTokenCounts[glyph] = (selectedTokenCounts[glyph] ?? 0) + 1;
+        }
         const player = {
             playerId,
             slot,
@@ -236,13 +269,17 @@ class PveGameRuntime {
             reserve: Array(RESERVE_SIZE + (passiveItems?.reserveCapacityBonus ?? 0)).fill(null),
             discardedCharacters: [],
             board: new Map(),
-            remainingCharacterTokens: new Map(this.initialCharacterTokens),
+            remainingCharacterTokens: selection || this.generalSelections[playerId]
+                ? sanitizeCharacterTokens(selectedTokenCounts)
+                : new Map(this.initialCharacterTokens),
             clearedWaves: new Set(),
             noCharacterPaidRecruitBatches: 0,
             itemSnapshot,
             passiveItems,
             itemRuntime: itemSnapshot ? (0, item_v1_1.createItemRuntimeAggregate)(this.seed, itemSnapshot) : null,
             weaponSnapshot,
+            unlockedGeneralIds: normalizedSelection.unlockedGeneralIds,
+            selectedGeneralIds: normalizedSelection.selectedGeneralIds,
         };
         this.players.set(playerId, player);
         this.slotAssignments.set(slot, playerId);
@@ -312,6 +349,9 @@ class PveGameRuntime {
             }
             else {
                 switch (action.type) {
+                    case 'SET_TUTORIAL_PAUSED':
+                        result = this.setTutorialPaused(action);
+                        break;
                     case 'RECRUIT_BATCH':
                         result = this.handleRecruit(player, action);
                         break;
@@ -349,7 +389,7 @@ class PveGameRuntime {
         return { ...result, details: result.details ? { ...result.details } : undefined };
     }
     tick() {
-        if (this.status !== 'running') {
+        if (this.status !== 'running' || this.tutorialPaused) {
             return this.snapshot();
         }
         this.currentTick += 1;
@@ -390,6 +430,7 @@ class PveGameRuntime {
             seed: this.seed,
             rngState: this.prng.snapshot(),
             status: this.status,
+            tutorialPaused: this.tutorialPaused,
             result: this.result ? { ...this.result } : null,
             balance: {
                 profileId: this.balanceProfile.profileId,
@@ -502,6 +543,7 @@ class PveGameRuntime {
             enemySequence: this.enemySequence,
             eventSequence: this.eventSequence,
             effectSequence: this.effectSequence,
+            tutorialPaused: this.tutorialPaused,
         };
         return structuredClone(checkpoint);
     }
@@ -523,6 +565,8 @@ class PveGameRuntime {
         for (const stored of checkpoint.players) {
             const player = {
                 ...structuredClone(stored),
+                unlockedGeneralIds: stored.unlockedGeneralIds ?? Object.keys(this.generalCatalog).sort(),
+                selectedGeneralIds: stored.selectedGeneralIds ?? Object.keys(this.generalCatalog).sort(),
                 board: new Map(stored.board.map(([key, value]) => [key, structuredClone(value)])),
                 remainingCharacterTokens: new Map(stored.remainingCharacterTokens),
                 clearedWaves: new Set(stored.clearedWaves),
@@ -575,9 +619,19 @@ class PveGameRuntime {
         this.enemySequence = checkpoint.enemySequence;
         this.eventSequence = checkpoint.eventSequence;
         this.effectSequence = checkpoint.effectSequence;
+        this.tutorialPaused = checkpoint.tutorialPaused === true;
         this.prng.restore(checkpoint.rngState);
         this.seed = checkpoint.seed;
         this.recentEvents.length = 0;
+    }
+    setTutorialPaused(action) {
+        if (this.status !== 'running')
+            return this.actionResult(action, false, 'MATCH_NOT_RUNNING');
+        if (action.paused && this.currentWaveNumber > 5)
+            return this.actionResult(action, false, 'TUTORIAL_WINDOW_EXPIRED');
+        this.tutorialPaused = action.paused;
+        this.emit(action.paused ? 'TUTORIAL_PAUSED' : 'TUTORIAL_RESUMED', { paused: action.paused }, { actionId: action.actionId });
+        return this.actionResult(action, true, action.paused ? 'TUTORIAL_PAUSED' : 'TUTORIAL_RESUMED');
     }
     discardPresentationEvents() {
         this.recentEvents.length = 0;
@@ -2948,7 +3002,7 @@ class PveGameRuntime {
                     x: entry.x,
                     y: entry.y,
                 }]
-            : []), [...player.board.values()].filter((entry) => isSoldier(entry.piece)).length, player.populationCap, this.currentTick);
+            : []), [...player.board.values()].filter((entry) => isSoldier(entry.piece)).length, player.populationCap, this.currentTick, new Set(player.selectedGeneralIds));
         if (!result.ok)
             return result;
         for (const generalId of result.activatedGeneralIds) {
@@ -3362,6 +3416,8 @@ class PveGameRuntime {
             activeSynergies,
             remainingCharacterTokens,
             clearedWaves: [...player.clearedWaves].sort((left, right) => left - right),
+            unlockedGeneralIds: [...player.unlockedGeneralIds],
+            selectedGeneralIds: [...player.selectedGeneralIds],
         };
     }
     nextRecruitCost(player) {

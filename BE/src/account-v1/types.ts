@@ -1,6 +1,7 @@
 import type { PveStageKey, PveStageSelection } from '../../../shared/contracts/pve-stage-config'
+import type { GeneralUnlockState } from '../../../shared/contracts/general'
 
-export const PLAYER_ACCOUNT_SCHEMA_VERSION = 2 as const
+export const PLAYER_ACCOUNT_SCHEMA_VERSION = 3 as const
 
 export type JsonPrimitive = string | number | boolean | null
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[]
@@ -144,6 +145,9 @@ export interface MatchBuildSnapshot {
   playerId: string
   accountVersion: number
   createdAt: string
+  /** 神将解锁与本局预选池快照；旧快照缺失时运行时回退全量目录。 */
+  unlockedGeneralIds?: readonly string[]
+  selectedGeneralIds?: readonly string[]
   item: {
     accountVersion: number
     activeSlots: readonly [string | null, string | null]
@@ -189,6 +193,8 @@ export interface PlayerAccountRecord {
   item: ItemAccountPayload
   weapon: WeaponAccountPayload
   pveProgress: PveProgressPayload
+  /** Durable general unlocks; migrated from legacy accounts on first read. */
+  generalUnlock: GeneralUnlockState
   createdAt: string
   updatedAt: string
 }

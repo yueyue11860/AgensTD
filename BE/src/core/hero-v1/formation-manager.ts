@@ -47,8 +47,9 @@ export class GeneralFormationManager {
     nonGeneralPopulationUsed: number,
     populationCap: number,
     currentTick: number,
+    allowedGeneralIds?: ReadonlySet<string>,
   ): FormationReconcileResult {
-    const candidates = this.detectCandidates(ownerPlayerId, boardCharacters)
+    const candidates = this.detectCandidates(ownerPlayerId, boardCharacters, allowedGeneralIds)
     const populationUsed = nonGeneralPopulationUsed + candidates.length
     const previous = this.getActiveFormations(ownerPlayerId)
     if (populationUsed > populationCap) {
@@ -274,13 +275,14 @@ export class GeneralFormationManager {
   private detectCandidates(
     ownerPlayerId: string,
     boardCharacters: readonly HeroCharacterToken[],
+    allowedGeneralIds?: ReadonlySet<string>,
   ): FormationCandidate[] {
     const tokens = boardCharacters
       .filter((token) => token.ownerPlayerId === ownerPlayerId)
       .sort((left, right) => left.y - right.y || left.x - right.x || left.tokenId.localeCompare(right.tokenId))
     const tokenAt = new Map(tokens.map((token) => [cellKey(token.x, token.y), token]))
     const consumedTokenIds = new Set<string>()
-    const definitions = Object.values(this.catalog).sort((left, right) => {
+    const definitions = Object.values(this.catalog).filter((definition) => !allowedGeneralIds || allowedGeneralIds.has(definition.generalId)).sort((left, right) => {
       return right.recipe.glyphs.length - left.recipe.glyphs.length
         || right.recipe.priority - left.recipe.priority
         || left.generalId.localeCompare(right.generalId)

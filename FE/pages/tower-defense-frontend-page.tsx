@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Backpack,
+  BookOpen,
   ChevronDown,
   ChevronLeft,
   ChevronUp,
@@ -947,6 +948,7 @@ export function TowerDefenseFrontendPage() {
           <button type="button" aria-label="道具构筑" onClick={() => navigate('/build')}><Backpack className="h-4 w-4" /><span>道具构筑</span></button>
           <button type="button" aria-label="神将武库" onClick={() => navigate('/arsenal')}><Swords className="h-4 w-4" /><span>神将武库</span></button>
           <button type="button" aria-label="金币商店" onClick={() => navigate('/shop')}><ShoppingBag className="h-4 w-4" /><span>金币商店</span></button>
+          <button type="button" aria-label="全量图鉴" onClick={() => navigate('/codex')}><BookOpen className="h-4 w-4" /><span>全量图鉴</span></button>
         </nav>
 
         <section className="celestial-mode-grid split-container">

@@ -121,6 +121,15 @@ export function runPveV2SmokeChecks(): {
     targetY: 15,
   }).code, 'CELL_NOT_DEPLOYABLE')
   assert.equal(runtime.start().ok, true)
+  const tickBeforeTutorialPause = runtime.snapshot().tick
+  assert.equal(runtime.handleAction('player-1', { type: 'SET_TUTORIAL_PAUSED', actionId: 'tutorial-pause-1', paused: true }).ok, true)
+  assert.equal(runtime.snapshot().tutorialPaused, true)
+  runtime.tick()
+  assert.equal(runtime.snapshot().tick, tickBeforeTutorialPause)
+  assert.equal(runtime.handleAction('player-1', { type: 'SET_TUTORIAL_PAUSED', actionId: 'tutorial-resume-1', paused: false }).ok, true)
+  runtime.tick()
+  assert.equal(runtime.snapshot().tick, tickBeforeTutorialPause + 1)
+  snapshot = runtime.snapshot()
   for (let tick = 0; tick < 12000 && runtime.snapshot().status !== 'finished'; tick += 1) {
     runtime.tick()
   }

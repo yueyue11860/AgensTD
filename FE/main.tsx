@@ -21,6 +21,10 @@ const MetaSystemPage = lazy(async () => {
   const module = await import('./pages/meta-system-page')
   return { default: module.MetaSystemPage }
 })
+const CodexPage = lazy(async () => {
+  const module = await import('./pages/codex-page')
+  return { default: module.CodexPage }
+})
 const PvpPage = lazy(async () => {
   const module = await import('./pages/pvp-page')
   return { default: module.PvpPage }
@@ -52,6 +56,7 @@ createRoot(rootElement).render(
         <Route path="/build" element={<RequireAuth><MetaSystemPage mode="build" /></RequireAuth>} />
         <Route path="/arsenal" element={<RequireAuth><MetaSystemPage mode="arsenal" /></RequireAuth>} />
         <Route path="/shop" element={<RequireAuth><MetaSystemPage mode="shop" /></RequireAuth>} />
+        <Route path="/codex" element={<RequireAuth><CodexPage /></RequireAuth>} />
         <Route path="/pvp" element={<RequireAuth><PvpPage /></RequireAuth>} />
         <Route path="/pvp/matchmaking" element={<RequireAuth><PvpPage /></RequireAuth>} />
         <Route path="/pvp/rooms" element={<RequireAuth><PvpPage /></RequireAuth>} />
