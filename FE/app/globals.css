@@ -7730,3 +7730,225 @@ body.crisis-overload-active {
     transition: none;
   }
 }
+
+/* ═══════════════════════ UI MOTION PASS ═══════════════════════
+ * Lightweight, compositor-friendly feedback for every interactive surface.
+ * Animations are intentionally short so game state remains readable while
+ * clicks, panel changes and rewards still feel tactile.
+ */
+
+@keyframes ui-fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes ui-pop-in {
+  0% { opacity: 0; transform: scale(.92); }
+  70% { opacity: 1; transform: scale(1.03); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes ui-pulse-ring {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(103, 232, 249, .26), 0 0 18px rgba(103, 232, 249, .12); }
+  50% { box-shadow: 0 0 0 5px rgba(103, 232, 249, 0), 0 0 30px rgba(103, 232, 249, .24); }
+}
+
+@keyframes ui-pulse-ring-defeat {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(248, 113, 113, .24), 0 0 18px rgba(248, 113, 113, .1); }
+  50% { box-shadow: 0 0 0 5px rgba(248, 113, 113, 0), 0 0 28px rgba(248, 113, 113, .2); }
+}
+
+@keyframes ui-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px); }
+  75% { transform: translateX(3px); }
+}
+
+@keyframes ui-alert-enter {
+  0% { opacity: 0; transform: translateY(10px); }
+  45% { opacity: 1; transform: translateY(0); }
+  62% { transform: translateX(-3px); }
+  78% { transform: translateX(3px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+
+/* Tactile click on all game controls (keyboard focus remains visible). */
+.gaming-page button:not(:disabled),
+.mission-briefing-panel button:not(:disabled),
+.game-over-panel button:not(:disabled) {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.gaming-page button:not(:disabled):active,
+.mission-briefing-panel button:not(:disabled):active,
+.game-over-panel button:not(:disabled):active {
+  transform: translateY(1px) scale(.97);
+  transition-duration: 70ms;
+}
+
+/* Build dock expands as a drawer instead of snapping between widths. */
+.gaming-side-rail-build {
+  transition: width 260ms cubic-bezier(.22, 1, .36, 1), box-shadow 260ms ease, background 260ms ease;
+}
+
+.gaming-side-rail-build-expanded .gaming-side-rail-scroll {
+  animation: ui-fade-up 240ms ease both;
+  will-change: transform, opacity;
+}
+
+.gaming-panel-card,
+.gaming-selected-card {
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.gaming-panel-card:hover,
+.gaming-selected-card:hover {
+  border-color: rgba(103, 232, 249, .24);
+  box-shadow: 0 10px 28px rgba(2, 8, 23, .28), inset 0 1px 0 rgba(255, 255, 255, .04);
+}
+
+.gaming-info-fold > summary {
+  cursor: pointer;
+  transition: color 160ms ease, background 160ms ease;
+  border-radius: 9px;
+}
+
+.gaming-info-fold > summary:hover {
+  color: #e0f9ff;
+  background: rgba(34, 211, 238, .05);
+}
+
+.gaming-dock-toggle strong {
+  animation: ui-pop-in 220ms ease both;
+}
+
+/* Cards and dynamic lists settle in with a small stagger. */
+.gaming-side-rail-scroll > .gaming-panel-card,
+.gaming-side-rail-right > .gaming-panel-card {
+  animation: ui-fade-up 360ms ease both;
+  will-change: transform, opacity;
+}
+
+.gaming-side-rail-scroll > .gaming-panel-card:nth-child(2) { animation-delay: 50ms; }
+.gaming-side-rail-scroll > .gaming-panel-card:nth-child(3) { animation-delay: 100ms; }
+.gaming-side-rail-scroll > .gaming-panel-card:nth-child(4) { animation-delay: 150ms; }
+
+.gaming-summon-tray > .gaming-tray-slot,
+.gaming-reserve-row > .gaming-tray-slot {
+  animation: ui-pop-in 260ms ease both;
+  will-change: transform, opacity;
+}
+
+.gaming-summon-tray > .gaming-tray-slot:nth-child(2),
+.gaming-reserve-row > .gaming-tray-slot:nth-child(2) { animation-delay: 45ms; }
+.gaming-summon-tray > .gaming-tray-slot:nth-child(3) { animation-delay: 90ms; }
+.gaming-summon-tray > .gaming-tray-slot:nth-child(4) { animation-delay: 135ms; }
+.gaming-summon-tray > .gaming-tray-slot:nth-child(5) { animation-delay: 180ms; }
+
+.gaming-tray-slot-active,
+.gaming-active-item-targeting {
+  animation: ui-pulse-ring 1.55s ease-in-out infinite;
+}
+
+.gaming-active-item-targeting {
+  border-color: rgba(251, 191, 36, .78);
+  background: linear-gradient(135deg, rgba(120, 53, 15, .38), rgba(8, 47, 73, .35));
+}
+
+.gaming-build-chip-active {
+  animation: ui-pulse-ring 2.2s ease-in-out infinite;
+}
+
+.gaming-effect-list > p,
+.gaming-event-list > p {
+  animation: ui-fade-up 280ms ease both;
+}
+
+.gaming-event-list > p:first-child { animation-duration: 420ms; }
+
+/* Native details panels reveal their body instead of appearing instantly. */
+.gaming-info-fold[open] > :not(summary) {
+  animation: ui-fade-up 260ms ease both;
+}
+
+.gaming-warning-card {
+  animation: ui-alert-enter 740ms ease both;
+}
+
+/* End-of-match reveal: dimmed backdrop, celebratory panel, staggered rewards. */
+.game-over-backdrop {
+  animation: ui-fade-up 260ms ease both;
+}
+
+.game-over-panel {
+  animation: ui-pop-in 420ms cubic-bezier(.22, 1, .36, 1) both;
+  will-change: transform, opacity;
+}
+
+.game-over-icon-wrap {
+  animation: ui-pulse-ring 2.2s ease-in-out infinite;
+}
+
+.game-over-icon-defeat {
+  animation-name: ui-pulse-ring-defeat;
+}
+
+.game-over-reward-list .game-over-reward {
+  animation: ui-fade-up 320ms ease both;
+}
+
+.game-over-reward-list .game-over-reward:nth-child(2) { animation-delay: 70ms; }
+.game-over-reward-list .game-over-reward:nth-child(3) { animation-delay: 140ms; }
+.game-over-reward-list .game-over-reward:nth-child(4) { animation-delay: 210ms; }
+.game-over-reward-list .game-over-reward:nth-child(5) { animation-delay: 280ms; }
+
+.game-over-btn-primary {
+  animation: ui-pulse-ring 2.4s ease-in-out infinite;
+}
+
+/* Mission selection modal and level rows. */
+.mission-briefing-backdrop {
+  animation: ui-fade-up 220ms ease both;
+}
+
+.mission-briefing-panel {
+  animation: ui-pop-in 360ms cubic-bezier(.22, 1, .36, 1) both;
+  will-change: transform, opacity;
+}
+
+.mission-level-row {
+  animation: ui-fade-up 280ms ease both;
+}
+
+.mission-level-row:nth-child(2) { animation-delay: 45ms; }
+.mission-level-row:nth-child(3) { animation-delay: 90ms; }
+.mission-level-row:nth-child(4) { animation-delay: 135ms; }
+.mission-level-row:nth-child(5) { animation-delay: 180ms; }
+
+.mission-difficulty-button:not(:disabled):hover {
+  box-shadow: 0 0 18px rgba(103, 232, 249, .14);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gaming-side-rail-scroll > .gaming-panel-card,
+  .gaming-side-rail-right > .gaming-panel-card,
+  .gaming-summon-tray > .gaming-tray-slot,
+  .gaming-reserve-row > .gaming-tray-slot,
+  .gaming-effect-list > p,
+  .gaming-event-list > p,
+  .gaming-warning-card,
+  .game-over-backdrop,
+  .game-over-panel,
+  .game-over-icon-wrap,
+  .game-over-reward-list .game-over-reward,
+  .game-over-btn-primary,
+  .mission-briefing-backdrop,
+  .mission-briefing-panel,
+  .mission-level-row,
+  .gaming-tray-slot-active,
+  .gaming-active-item-targeting,
+  .gaming-build-chip-active {
+    animation: none !important;
+  }
+  .gaming-side-rail-build { transition: none; }
+}

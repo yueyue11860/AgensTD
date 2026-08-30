@@ -602,13 +602,57 @@ export class BattlefieldPresentationDirector {
     this.scene.time.delayedCall(delay, () => {
       this.host.flashEnemy(cue.targetId, this.duration(cue.critical ? 120 : 80))
       const at = pixel(cue.target)
+      // A hit should read as an event, not just an HP bar update. Keep the
+      // burst local to the target so it remains legible even when many enemies
+      // are on screen (and cheap enough for low-effects mode).
+      this.playImpactBurst(at, cue.critical, cue.sourceStyle)
       const impact = this.borrowGraphics()
       impact.setPosition(at.x, at.y)
       impact.lineStyle(cue.critical ? 4 : 2, cue.critical ? 0xfbbf24 : 0xfca5a5, 0.95)
       impact.strokeCircle(0, 0, cue.critical ? 14 : 9)
       this.scene.tweens.add({ targets: impact, scaleX: 1.7, scaleY: 1.7, alpha: 0, duration: this.duration(cue.critical ? 170 : 110), ease: 'Quad.Out', onComplete: () => this.releaseGraphics(impact) })
+      if (cue.critical && cue.detail !== 'result' && !this.preferences.reducedMotion && !this.preferences.lowEffects) {
+        this.scene.cameras.main.shake(110, 0.0028)
+      }
       if (cue.showText) this.playDamageText(cue.target, cue.amount, cue.critical)
     })
+  }
+
+  /** Short-lived hit sparks with a style-specific accent. */
+  private playImpactBurst(at: { x: number, y: number }, critical: boolean, sourceStyle: SoldierPresentationStyle): void {
+    const count = this.preferences.reducedMotion ? 2 : this.preferences.lowEffects ? 4 : critical ? 10 : 7
+    const color = critical
+      ? 0xfbbf24
+      : sourceStyle === 'bow' ? 0xfde68a
+        : sourceStyle === 'spear' ? 0x7dd3fc
+          : sourceStyle === 'blade' ? 0xe2e8f0
+            : 0xfca5a5
+    for (let index = 0; index < count; index += 1) {
+      const angle = Math.PI * 2 * index / count + Phaser.Math.FloatBetween(-0.18, 0.18)
+      const inner = critical ? 7 : 5
+      const outer = (critical ? 24 : 16) * Phaser.Math.FloatBetween(0.75, 1.15)
+      const spark = this.borrowGraphics()
+      spark.setPosition(at.x, at.y)
+      spark.lineStyle(critical ? 3 : 2, color, critical ? 0.98 : 0.85)
+      spark.lineBetween(0, 0, Math.cos(angle) * inner, Math.sin(angle) * inner)
+      spark.lineStyle(1, 0xffffff, 0.65)
+      spark.lineBetween(Math.cos(angle) * inner, Math.sin(angle) * inner, Math.cos(angle) * (inner + 4), Math.sin(angle) * (inner + 4))
+      if (this.preferences.reducedMotion) {
+        this.scene.time.delayedCall(180, () => this.releaseGraphics(spark))
+        continue
+      }
+      this.scene.tweens.add({
+        targets: spark,
+        x: at.x + Math.cos(angle) * outer,
+        y: at.y + Math.sin(angle) * outer,
+        alpha: 0,
+        scaleX: critical ? 1.2 : 1,
+        scaleY: critical ? 1.2 : 1,
+        duration: this.duration(critical ? 230 : 150),
+        ease: 'Cubic.Out',
+        onComplete: () => this.releaseGraphics(spark),
+      })
+    }
   }
 
   private playDamageText(target: PresentationPoint, amount: number, critical: boolean): void {
@@ -617,7 +661,27 @@ export class BattlefieldPresentationDirector {
     text.setText(`${critical ? '暴击 ' : '−'}${amount}`)
       .setStyle({ color: critical ? '#fde68a' : '#fee2e2', fontFamily: HAN_FONT, fontSize: critical ? '17px' : '12px', fontStyle: 'bold', stroke: '#450a0a', strokeThickness: 3 })
       .setPosition(at.x, at.y - 14)
-    this.scene.tweens.add({ targets: text, y: at.y - (critical ? 44 : 34), alpha: 0, scaleX: critical ? 1.18 : 1, scaleY: critical ? 1.18 : 1, duration: this.duration(420), ease: 'Cubic.Out', onComplete: () => this.releaseText(text) })
+      .setScale(critical ? 0.68 : 0.78)
+    // Overshoot gives the number a tactile “pop” before it floats away.
+    this.scene.tweens.add({
+      targets: text,
+      scaleX: critical ? 1.22 : 1.08,
+      scaleY: critical ? 1.22 : 1.08,
+      duration: this.duration(95),
+      ease: 'Back.Out',
+      onComplete: () => {
+        this.scene.tweens.add({
+          targets: text,
+          y: at.y - (critical ? 48 : 36),
+          alpha: 0,
+          scaleX: critical ? 1.12 : 1,
+          scaleY: critical ? 1.12 : 1,
+          duration: this.duration(360),
+          ease: 'Cubic.Out',
+          onComplete: () => this.releaseText(text),
+        })
+      },
+    })
   }
 
   private playInkDeath(target: PresentationPoint, requestedCount: number, climax: boolean): void {

@@ -72,6 +72,8 @@ interface PieceView {
   generalIdValue: string
   generalQualityValue: string
   fixedValue: boolean
+  idlePhase: number
+  entityIdValue: string
 }
 
 interface DetailedEnemyView {
@@ -153,6 +155,12 @@ function coordKey(x: number, y: number) {
   return `${x}:${y}`
 }
 
+function idlePhaseForEntity(entityId: string) {
+  let hash = 0
+  for (let index = 0; index < entityId.length; index += 1) hash = (hash * 31 + entityId.charCodeAt(index)) | 0
+  return (Math.abs(hash) % 628) / 100
+}
+
 function isCoreCell(x: number, y: number) {
   return x >= 13 && x <= 15 && y >= 13 && y <= 15
 }
@@ -199,6 +207,8 @@ export class BattlefieldScene extends Phaser.Scene {
   private readonly combatAudio = new BattlefieldCombatAudio()
   private presentationDirector: BattlefieldPresentationDirector | null = null
   private terrainLayer!: Phaser.GameObjects.Graphics
+  private ambientLayer!: Phaser.GameObjects.Container
+  private ambientLey!: Phaser.GameObjects.Graphics
   private previewLayer!: Phaser.GameObjects.Graphics
   private zoneLayer!: Phaser.GameObjects.Graphics
   private intentLayer!: Phaser.GameObjects.Graphics
@@ -215,6 +225,7 @@ export class BattlefieldScene extends Phaser.Scene {
   private lastMovementSnapshotTick: number | null = null
   private lastMovementDurationMs = ENEMY_TWEEN_MS
   private readonly summonedUnitViews = new Map<string, SummonedUnitView>()
+  private readonly ambientMotes: Array<{ orb: Phaser.GameObjects.Arc, baseX: number, baseY: number, phase: number, speed: number }> = []
   private latestClientActionIntents: readonly ClientActionIntent[] = []
   private latestClientActionIntentSignature = ''
   private lastHoveredCellKey: string | null = null
@@ -245,6 +256,7 @@ export class BattlefieldScene extends Phaser.Scene {
     this.cameras.main.setBackgroundColor('#0b1121')
     this.cameras.main.setBounds(0, 0, BATTLEFIELD_SIZE, BATTLEFIELD_SIZE)
     this.terrainLayer = this.add.graphics()
+    this.ambientLayer = this.add.container(0, 0).setDepth(4)
     this.previewLayer = this.add.graphics().setDepth(10)
     this.zoneLayer = this.add.graphics().setDepth(15)
     this.intentLayer = this.add.graphics().setDepth(19).setVisible(false)
@@ -258,6 +270,7 @@ export class BattlefieldScene extends Phaser.Scene {
     this.inputZone = this.add.zone(0, 0, BATTLEFIELD_SIZE, BATTLEFIELD_SIZE).setOrigin(0).setDepth(100).setInteractive()
     this.drawTerrain()
     this.bakeTerrainLayer()
+    this.createAmbientMotes()
     this.bindPointerInput()
     this.setViewMode('full')
     if (this.latestSnapshot) this.renderSnapshot(this.latestSnapshot)
@@ -275,9 +288,20 @@ export class BattlefieldScene extends Phaser.Scene {
 
   update(time: number) {
     if (this.latestClientActionIntents.length > 0) {
-      this.intentLayer.setAlpha(0.72 + Math.sin(time / 105) * 0.28)
+      this.intentLayer.setAlpha(this.presentationPreferences.reducedMotion ? 0.9 : 0.72 + Math.sin(time / 105) * 0.28)
     }
+    // Effect zones breathe softly so persistent hazards/auras remain visible
+    // between combat cues without adding another per-zone game object.
+    if (this.zoneLayer) this.zoneLayer.setAlpha(this.presentationPreferences.reducedMotion ? 0.88 : 0.88 + Math.sin(time / 260) * 0.12)
     for (const view of this.enemyViews.values()) {
+      if (view.mode === 'detailed' && view.statusSignature) {
+        // Statuses are persistent feedback; a low-amplitude pulse makes them
+        // readable without competing with one-shot impact VFX.
+        const pulse = this.presentationPreferences.reducedMotion
+          ? 1
+          : 0.72 + Math.sin(time / 180 + view.container.x * 0.01) * 0.2
+        view.statusAura.setAlpha(pulse)
+      }
       if (this.presentationPreferences.reducedMotion || view.movementDurationMs <= 0) {
         view.container.setPosition(view.targetX, view.targetY)
         continue
@@ -287,6 +311,51 @@ export class BattlefieldScene extends Phaser.Scene {
         startedAt: view.movementStartedAt, durationMs: view.movementDurationMs, now: time, reducedMotion: false,
       })
       view.container.setPosition(position.x, position.y)
+    }
+    // Subtle breathing motion keeps the board alive without affecting hit boxes.
+    for (const view of this.pieceViews.values()) {
+      if (this.presentationPreferences.reducedMotion) {
+        view.container.setScale(1)
+        continue
+      }
+      // Let the spawn tween finish before the idle loop takes over scale.
+      if (this.tweens.isTweening(view.container)) continue
+      const selected = view.entityIdValue === this.latestUiState.selectedPieceId
+      const pulse = Math.sin(time / (selected ? 180 : 420) + view.idlePhase)
+      view.container.setScale(1 + (selected ? 0.045 : 0.018) * Math.max(0, pulse))
+    }
+    for (const [entityId, view] of this.summonedUnitViews) {
+      if (this.presentationPreferences.reducedMotion) {
+        view.container.setScale(1)
+        view.glyph.setAlpha(1)
+        continue
+      }
+      // Avoid fighting the summon/move tween on its first frames.
+      if (this.tweens.isTweening(view.container)) continue
+      const seed = idlePhaseForEntity(entityId)
+      const pulse = (Math.sin(time / 360 + seed) + 1) * 0.5
+      view.container.setScale(0.96 + pulse * 0.06)
+      view.glyph.setAlpha(0.78 + pulse * 0.22)
+    }
+    for (const mote of this.ambientMotes) {
+      if (this.presentationPreferences.reducedMotion) {
+        mote.orb.x = mote.baseX
+        mote.orb.y = mote.baseY
+        mote.orb.setAlpha(0.2)
+        mote.orb.setScale(1)
+        continue
+      }
+      const drift = time * mote.speed / 1000 + mote.phase
+      mote.orb.x = mote.baseX + Math.sin(drift * 0.7) * 10
+      mote.orb.y = mote.baseY + Math.cos(drift * 0.9) * 8
+      mote.orb.setAlpha(0.16 + (Math.sin(drift) + 1) * 0.12)
+      mote.orb.setScale(0.8 + (Math.sin(drift * 1.3) + 1) * 0.18)
+    }
+    if (this.ambientLey) this.ambientLey.setAlpha(this.presentationPreferences.reducedMotion ? 0.72 : 0.72 + Math.sin(time / 1500) * 0.16)
+    if (this.latestUiState.placementMode) {
+      this.previewLayer.setAlpha(this.presentationPreferences.reducedMotion ? 0.86 : 0.78 + Math.sin(time / 130) * 0.16)
+    } else {
+      this.previewLayer.setAlpha(1)
     }
   }
 
@@ -595,6 +664,33 @@ export class BattlefieldScene extends Phaser.Scene {
     }
   }
 
+  /** Ambient particles and ley-line rings provide a gentle living backdrop. */
+  private createAmbientMotes() {
+    const [, , accentHex] = this.sceneTheme?.palette ?? ['#0b1121', '#1a233a', '#fb923c']
+    const accentColor = Phaser.Display.Color.HexStringToColor(accentHex).color
+    const center = BATTLEFIELD_SIZE / 2
+    const ley = this.add.graphics().setDepth(3)
+    this.ambientLey = ley
+    ley.lineStyle(2, accentColor, 0.12)
+    ley.strokeCircle(center, center, 132)
+    ley.lineStyle(1, accentColor, 0.1)
+    ley.strokeCircle(center, center, 208)
+    ley.strokeCircle(center, center, 286)
+    ley.lineStyle(1, 0xffffff, 0.045)
+    for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 6) {
+      ley.lineBetween(center, center, center + Math.cos(angle) * 286, center + Math.sin(angle) * 286)
+    }
+    this.ambientLayer.add(ley)
+    const colors = [0xfde68a, 0x67e8f9, 0xa7f3d0, 0xc4b5fd]
+    for (let index = 0; index < 18; index += 1) {
+      const x = 36 + ((index * 97) % (BATTLEFIELD_SIZE - 72))
+      const y = 42 + ((index * 151) % (BATTLEFIELD_SIZE - 84))
+      const orb = this.add.circle(x, y, index % 3 === 0 ? 2 : 1.25, colors[index % colors.length], 0.2).setDepth(4)
+      this.ambientLayer.add(orb)
+      this.ambientMotes.push({ orb, baseX: x, baseY: y, phase: index * 0.83, speed: 8 + (index % 5) * 3 })
+    }
+  }
+
   /** Terrain never changes during a match. Baking thousands of rounded-rectangle
    * commands into one texture turns the per-frame board cost into a single quad. */
   private bakeTerrainLayer() {
@@ -819,6 +915,10 @@ export class BattlefieldScene extends Phaser.Scene {
         this.summonLayer.add(container)
         view = { container, body, glyph, level, glyphValue: unit.glyph, levelValue: unit.ownerLevel }
         this.summonedUnitViews.set(unit.entityId, view)
+        if (!this.presentationPreferences.reducedMotion) {
+          container.setAlpha(0.1).setScale(0.4)
+          this.tweens.add({ targets: container, alpha: 1, scaleX: 1, scaleY: 1, duration: 280, ease: this.presentationPreferences.lowEffects ? 'Linear' : 'Back.Out' })
+        }
       } else {
         this.tweens.killTweensOf(view.container)
         this.tweens.add({ targets: view.container, x: targetX, y: targetY, duration: ENEMY_TWEEN_MS, ease: 'Linear' })
@@ -873,6 +973,8 @@ export class BattlefieldScene extends Phaser.Scene {
       generalIdValue: '',
       generalQualityValue: '',
       fixedValue: false,
+      idlePhase: idlePhaseForEntity(piece.entityId),
+      entityIdValue: piece.entityId,
     }
     this.drawPiece(view, piece)
     return view
@@ -886,8 +988,17 @@ export class BattlefieldScene extends Phaser.Scene {
     view.body.clear()
     view.body.fillStyle(0x07111f, 0.94)
     view.body.fillRoundedRect(ENTITY_INSET, ENTITY_INSET, size, size, 5)
+    // Inner tint and corner glints give units a readable material identity at a glance.
+    view.body.fillStyle(color, piece.generalId ? 0.16 : 0.09)
+    view.body.fillRoundedRect(ENTITY_INSET + 2, ENTITY_INSET + 2, size - 4, size - 4, 4)
     view.body.lineStyle(piece.generalFixed ? 3 : 2, color, 0.95)
     view.body.strokeRoundedRect(ENTITY_INSET + 1, ENTITY_INSET + 1, size - 2, size - 2, 5)
+    view.body.lineStyle(1, 0xffffff, 0.2)
+    view.body.lineBetween(ENTITY_INSET + 5, ENTITY_INSET + 3, ENTITY_INSET + size - 7, ENTITY_INSET + 3)
+    if (piece.generalId) {
+      view.body.lineStyle(1, color, 0.72)
+      view.body.strokeCircle(BATTLEFIELD_CELL_SIZE / 2, BATTLEFIELD_CELL_SIZE / 2, size * 0.38)
+    }
     view.glyph.setText(piece.glyph).setColor(Phaser.Display.Color.IntegerToColor(color).rgba)
     view.level
       .setText(piece.kind === 'soldier' ? `${piece.level ?? 1}` : piece.generalId ? piece.generalFixed ? '固' : '将' : '')
@@ -1046,6 +1157,17 @@ export class BattlefieldScene extends Phaser.Scene {
     const sprite = this.add.image(0, 0, this.compactEnemyTexture(enemy, statusSignature, textureSignature)).setOrigin(0.5)
     const container = this.add.container(x, y, [sprite])
     this.enemyLayer.add(container)
+    if (!this.presentationPreferences.reducedMotion) {
+      container.setAlpha(0.12).setScale(enemy.entityKind === 'boss' ? 0.55 : 0.68)
+      this.tweens.add({
+        targets: container,
+        alpha: 1,
+        scaleX: 1,
+        scaleY: 1,
+        duration: enemy.entityKind === 'boss' ? 420 : 220,
+        ease: this.presentationPreferences.lowEffects ? 'Linear' : 'Back.Out',
+      })
+    }
     return {
       mode: 'compact', container, sprite, textureSignature, visualSignature: textureSignature, statusSignature,
       hp: enemy.hp, maxHp: enemy.maxHp, spawnProtected: Boolean(enemy.spawnProtected),
