@@ -94,6 +94,7 @@ function createServerConfig() {
         mapHeight: readNumber('MAP_HEIGHT', 29, { integer: true, min: 29, max: 200 }),
         playerStartingGold: readNumber('PLAYER_STARTING_GOLD', 200, { integer: true, min: 0, max: 1_000_000_000 }),
         authRequired: process.env.NODE_ENV === 'production' ? true : readBoolean('AUTH_REQUIRED', true),
+        serveFrontend: readBoolean('SERVE_FRONTEND', false),
         actionRateLimitWindowMs: readNumber('ACTION_RATE_LIMIT_WINDOW_MS', 1000, { integer: true, min: 1, max: 600_000 }),
         actionRateLimitMax: readNumber('ACTION_RATE_LIMIT_MAX', 3, { integer: true, min: 1, max: 10_000 }),
         disconnectGraceMs,

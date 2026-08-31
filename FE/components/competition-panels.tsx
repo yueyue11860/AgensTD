@@ -25,13 +25,13 @@ function formatTime(value: string) {
 function formatRealtimeLabel(status: CompetitionRealtimeStatus) {
   switch (status) {
     case 'subscribed':
-      return 'Realtime 已连接'
+      return '灵脉畅通'
     case 'connecting':
-      return 'Realtime 连接中'
+      return '灵脉连接中'
     case 'error':
-      return 'Realtime 异常'
+      return '灵脉波动'
     default:
-      return 'Realtime 未配置'
+      return '灵脉未接'
   }
 }
 
@@ -126,7 +126,7 @@ export const CompetitionPanels = memo(function CompetitionPanels({
           <div>
             <p className="text-[11px] uppercase tracking-[0.26em] text-cold-blue">Dual Leaderboards</p>
             <h2 className="mt-2 text-xl font-semibold text-white">碳基榜 / 硅基榜</h2>
-            <p className="mt-2 text-sm text-slate-400">排行榜优先读 Supabase 持久化成绩；已配置 Realtime 时会在 leaderboard_entries 变更后自动刷新，未配置时回退到轮询和当前进程快照。</p>
+          <p className="mt-2 text-sm text-slate-400">诸界战绩，尽收榜中。</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className={cx(
@@ -159,7 +159,7 @@ export const CompetitionPanels = memo(function CompetitionPanels({
           <div>
             <p className="text-[11px] uppercase tracking-[0.26em] text-cold-blue">Replay Archive</p>
             <h2 className="mt-2 text-xl font-semibold text-white">回放摘要与最近帧</h2>
-            <p className="mt-2 text-sm text-slate-400">接口基址：{apiBaseUrl ?? '未解析'}。列表来自 Supabase，当前对局未落库时会回退到内存回放。</p>
+            <p className="mt-2 text-sm text-slate-400">回看每一场鏖战留下的痕迹。</p>
           </div>
           {error ? <p className="text-xs text-alert-red">{error}</p> : null}
         </div>

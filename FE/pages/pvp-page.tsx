@@ -57,7 +57,7 @@ function formatDuration(durationMs: number) {
 }
 
 function rankName(profile: PvpProfile | null) {
-  if (!profile) return '段位尚未同步'
+  if (!profile) return '未入天榜'
   return `${profile.rating.tier}${profile.rating.division ? ` ${profile.rating.division}` : ''}`
 }
 
@@ -75,7 +75,6 @@ function PvpShell({ children, title, eyebrow, actions }: { children: React.React
     <main className="pvp-page">
       <div className="pvp-grid" />
       <div className="pvp-shell">
-        <div className="pvp-tech-preview" role="status"><ShieldAlert className="h-4 w-4" /><strong>竞技技术预览</strong><span>首版四天兵防守闭环可联调；完整神将池、正式排位与 20 场 E2E 门禁尚未开放。</span></div>
         <header className="pvp-topbar">
           <Link to="/home" className="pvp-back"><ArrowLeft className="h-4 w-4" />返回主页</Link>
           <nav className="pvp-nav" aria-label="PVP 导航">
@@ -101,10 +100,10 @@ function PvpShell({ children, title, eyebrow, actions }: { children: React.React
 }
 
 function ServiceNotice({ error, notice, loading }: { error: string | null; notice: string | null; loading: boolean }) {
-  if (loading) return <div className="pvp-service-state" role="status" aria-live="polite"><LoaderCircle className="h-4 w-4 animate-spin" />正在同步 PVP 权威数据…</div>
+  if (loading) return <div className="pvp-service-state" role="status" aria-live="polite"><LoaderCircle className="h-4 w-4 animate-spin" />正在探查斗法台…</div>
   return (
     <>
-      {error ? <div className="pvp-service-state pvp-service-warning" role="alert"><ShieldAlert className="h-4 w-4" />{error} 当前页保留最后一份权威投影，操作、段位与结算以服务端返回为准。</div> : null}
+      {error ? <div className="pvp-service-state pvp-service-warning" role="alert"><ShieldAlert className="h-4 w-4" />{error}</div> : null}
       {notice ? <div className="pvp-service-state pvp-service-success" role="status" aria-live="polite"><Check className="h-4 w-4" />{notice}</div> : null}
     </>
   )
@@ -139,14 +138,14 @@ function HubPage() {
   const seasonDays = seasonEnds === null ? null : Math.max(0, Math.ceil(seasonEnds / 86_400_000))
 
   return (
-    <PvpShell title="斗法竞技" eyebrow="竞技技术预览 · 真人加载 ACK 与实时状态地基">
+    <PvpShell title="斗法竞技" eyebrow="两界斗法 · 一念落子定胜负">
       <ServiceNotice error={service.error} notice={service.notice} loading={service.isLoading} />
       <section className="pvp-overview-grid">
         <RankCard profile={profile} />
         <article className="pvp-panel pvp-season-card">
           <div><span className="pvp-kicker">ACTIVE SEASON</span><h2>{season?.name ?? '赛季数据待接入'}</h2></div>
           <div className="pvp-season-meta"><Clock3 className="h-5 w-5" /><strong>{seasonDays === null ? '—' : seasonDays}</strong><span>天后结束</span></div>
-          <p>规则版本 {season?.rulesetVersion ?? '—'} · 地图池 {season?.mapIds.length ?? 1}</p>
+          <p>战场 {season?.mapIds.length ?? 1} 处 · 赛季余 {seasonDays === null ? '—' : seasonDays} 日</p>
         </article>
       </section>
 
@@ -155,21 +154,19 @@ function HubPage() {
           <div className="pvp-mode-icon"><Medal className="h-7 w-7" /></div>
           <span className="pvp-kicker">RANKED 1V1</span><h2>排位斗法</h2>
           <p>竞技借用库、配对随机袋与冻结规则快照。胜负会改变当季段位与 LP。</p>
-          {rankedLocked ? <small>{!RANKED_PREVIEW_ENABLED ? '生产环境默认关闭；待完整战斗客户端通过验收后开放。' : '当前未满足教学、构筑或队列处罚条件。'}</small> : <small>测试环境可验证真人匹配、加载 ACK 与实时状态。</small>}
-          <button type="button" disabled={rankedLocked} onClick={() => navigate('/pvp/matchmaking?mode=ranked_1v1')}>{RANKED_PREVIEW_ENABLED ? '进入技术预览' : '排位开发中'}<ChevronRight className="h-4 w-4" /></button>
+          {rankedLocked ? <small>完成入门试炼后解锁</small> : null}
+          <button type="button" disabled={rankedLocked} onClick={() => navigate('/pvp/matchmaking?mode=ranked_1v1')}>{RANKED_PREVIEW_ENABLED ? '踏入排位' : '排位未开'}<ChevronRight className="h-4 w-4" /></button>
         </article>
         <article className="pvp-mode-card">
           <div className="pvp-mode-icon"><Gamepad2 className="h-7 w-7" /></div>
-          <span className="pvp-kicker">CASUAL LOAD LAB</span><h2>休闲加载联调</h2>
-          <p>可联调真人匹配、版本 ACK、四天兵招募/布阵/合成与权威防守，不改变段位。</p>
-          <small>只匹配在线真人，不会使用录像或伪装对手。</small>
-          <button type="button" onClick={() => navigate('/pvp/matchmaking?mode=casual_1v1')}>进入联调匹配<ChevronRight className="h-4 w-4" /></button>
+          <span className="pvp-kicker">CASUAL DUEL</span><h2>散修斗法</h2>
+          <p>轻装上阵，试招、布阵、合字，不计入天梯名次。</p>
+          <button type="button" onClick={() => navigate('/pvp/matchmaking?mode=casual_1v1')}>寻找对手<ChevronRight className="h-4 w-4" /></button>
         </article>
         <article className="pvp-mode-card">
           <div className="pvp-mode-icon"><DoorOpen className="h-7 w-7" /></div>
           <span className="pvp-kicker">CUSTOM ROOM</span><h2>自定义斗法</h2>
-          <p>创建或加入 1v1 标准房，验证准备、加载、断线恢复与首版防守闭环。</p>
-          <small>首发地图：两界斗法台。</small>
+          <p>邀一位同道开局，约战两界斗法台。</p>
           <button type="button" onClick={() => navigate('/pvp/rooms')}>进入房厅<ChevronRight className="h-4 w-4" /></button>
         </article>
       </section>
@@ -200,13 +197,13 @@ function MatchmakingPage() {
   const confirmSeconds = proposal ? Math.max(0, Math.ceil((proposal.confirmDeadlineAt - now) / 1000)) : null
 
   return (
-    <PvpShell title={MODE_LABEL[mode]} eyebrow="MATCHMAKING · 仅真人玩家" actions={<button className="pvp-secondary-button" type="button" onClick={() => navigate('/pvp')}><X className="h-4 w-4" />离开队列页</button>}>
+    <PvpShell title={MODE_LABEL[mode]} eyebrow="寻觅同道 · 斗法将启" actions={<button className="pvp-secondary-button" type="button" onClick={() => navigate('/pvp')}><X className="h-4 w-4" />离开</button>}>
       <ServiceNotice error={service.error} notice={service.notice} loading={service.isLoading} />
       <section className="pvp-matchmaking-stage">
         <div className={cx('pvp-search-orb', ticket && 'pvp-search-orb-active')}><Search className="h-12 w-12" /></div>
         <span className="pvp-kicker">{proposal ? 'MATCH FOUND' : ticket ? 'SEARCHING' : 'READY TO SEARCH'}</span>
         <h2>{proposal ? '已找到势均力敌的对手' : ticket ? '正在寻找真人对手' : '准备进入匹配队列'}</h2>
-        <p>{ticket ? `搜索范围 ±${ticket.searchRange || 100} MMR · 预计 ${ticket.estimatedWaitSeconds || 15} 秒` : '服务器将校验教学、竞技构筑、处罚状态与规则版本。'}</p>
+        <p>{ticket ? `天命寻敌 · 预计 ${ticket.estimatedWaitSeconds || 15} 秒` : '择一斗法门，静候同道。'}</p>
         {ticket ? <div className="pvp-search-timer"><TimerReset className="h-5 w-5" />{proposal ? `${confirmSeconds}s 内确认` : `${searchSeconds}s`}</div> : null}
         <div className="pvp-matchmaking-actions">
           {!ticket ? <button type="button" disabled={service.isMutating} onClick={() => void service.joinQueue(mode)}>确认进入{MODE_LABEL[mode]}</button> : null}
@@ -215,7 +212,7 @@ function MatchmakingPage() {
           {service.acceptedMatch ? <button type="button" onClick={() => navigate(`/pvp/game/${service.acceptedMatch!.matchId}`)}>进入加载界面<ChevronRight className="h-4 w-4" /></button> : null}
         </div>
       </section>
-      <section className="pvp-rule-strip"><span><Shield className="h-4 w-4" />竞技借用库</span><span><CircleDot className="h-4 w-4" />配对随机袋</span><span><Wifi className="h-4 w-4" />目标 RTT &lt;120ms</span><span><Users className="h-4 w-4" />仅真人匹配</span></section>
+      <section className="pvp-rule-strip"><span><Shield className="h-4 w-4" />借法入阵</span><span><CircleDot className="h-4 w-4" />天命随机</span><span><Wifi className="h-4 w-4" />灵脉畅通</span><span><Users className="h-4 w-4" />真人对决</span></section>
     </PvpShell>
   )
 }
@@ -235,11 +232,11 @@ function RoomsPage() {
   }
 
   return (
-    <PvpShell title="自定义斗法房" eyebrow="CUSTOM 1V1 · 标准竞技预设" actions={<button type="button" onClick={() => setIsCreating(true)}><DoorOpen className="h-4 w-4" />创建房间</button>}>
+    <PvpShell title="自定义斗法房" eyebrow="自立战旗 · 邀友入阵" actions={<button type="button" onClick={() => setIsCreating(true)}><DoorOpen className="h-4 w-4" />立旗</button>}>
       <ServiceNotice error={service.error} notice={service.notice} loading={service.isLoading} />
       <section className="pvp-panel pvp-room-list">
         <header><div><span className="pvp-kicker">ROOM DIRECTORY</span><h2>公开房间</h2></div><button className="pvp-icon-button" type="button" onClick={() => void service.refresh()}><RefreshCcw className="h-4 w-4" /></button></header>
-        {service.data.rooms.length ? service.data.rooms.map((room) => <RoomRow key={room.roomId} room={room} onOpen={() => navigate(`/pvp/rooms/${room.roomId}`)} />) : <EmptyState icon={DoorOpen} title="当前没有公开斗法房" copy="创建一间标准 1v1 房，或稍后刷新。自定义房不会伪装成排位赛。" />}
+        {service.data.rooms.length ? service.data.rooms.map((room) => <RoomRow key={room.roomId} room={room} onOpen={() => navigate(`/pvp/rooms/${room.roomId}`)} />) : <EmptyState icon={DoorOpen} title="还没有斗法房" copy="立一面战旗，邀同道入阵。" />}
       </section>
       {isCreating ? <div className="pvp-modal-backdrop"><form ref={createDialogRef} className="pvp-modal" role="dialog" aria-modal="true" aria-labelledby="create-pvp-room-title" tabIndex={-1} onSubmit={(event) => { event.preventDefault(); void create() }}><button aria-label="关闭创建房间弹窗" className="pvp-modal-close" type="button" onClick={() => setIsCreating(false)}><X className="h-4 w-4" /></button><span className="pvp-kicker">CREATE CUSTOM ROOM</span><h2 id="create-pvp-room-title">创建自定义房</h2><label>房间名称<input value={name} onChange={(event) => setName(event.target.value)} maxLength={24} /></label><label>密码（可选）<input value={password} onChange={(event) => setPassword(event.target.value)} maxLength={16} type="password" /></label><label className="pvp-checkbox"><input checked={spectatorsAllowed} onChange={(event) => setSpectatorsAllowed(event.target.checked)} type="checkbox" />允许最多 8 名观众</label><div className="pvp-modal-summary"><Map className="h-4 w-4" />两界斗法台 · 标准 1v1 · 不计段位</div><button disabled={service.isMutating} type="submit">{service.isMutating ? '创建中…' : '创建房间'}</button></form></div> : null}
     </PvpShell>
@@ -265,7 +262,7 @@ function RoomDetailPage({ roomId }: { roomId: string }) {
   }
 
   return (
-    <PvpShell title={room?.roomName ?? '斗法房间'} eyebrow={`CUSTOM ROOM · ${roomId}`} actions={<Link className="pvp-secondary-button" to="/pvp/rooms"><ArrowLeft className="h-4 w-4" />返回房厅</Link>}>
+    <PvpShell title={room?.roomName ?? '斗法房间'} eyebrow="斗法战旗" actions={<Link className="pvp-secondary-button" to="/pvp/rooms"><ArrowLeft className="h-4 w-4" />返回房厅</Link>}>
       <ServiceNotice error={service.error} notice={service.notice} loading={service.isLoading} />
       <section className="pvp-room-stage">
         <article className="pvp-panel pvp-room-side"><span className="pvp-side-label">A 方</span><PlayerSlot player={room?.players.find((player) => player.side === 'A')} /></article>
@@ -275,7 +272,7 @@ function RoomDetailPage({ roomId }: { roomId: string }) {
       <section className="pvp-panel pvp-room-controls">
         <div><Eye className="h-5 w-5" /><span>{room?.spectatorsAllowed ? '允许观战' : '禁止观战'}</span></div>
         <div><Shield className="h-5 w-5" /><span>标准竞技借用库</span></div>
-        {room?.matchId ? <button type="button" onClick={() => navigate(`/pvp/game/${room.matchId}`)}>进入加载验证<ChevronRight className="h-4 w-4" /></button> : null}
+        {room?.matchId ? <button type="button" onClick={() => navigate(`/pvp/game/${room.matchId}`)}>入阵<ChevronRight className="h-4 w-4" /></button> : null}
         {room && !room.matchId && isMember ? <button type="button" disabled={service.isMutating} onClick={() => void service.setReady(room.roomId, !currentPlayer?.ready)}>{currentPlayer?.ready ? '取消准备' : '准备斗法'}</button> : null}
         {room && !room.matchId && !isMember ? <form className="pvp-room-join" onSubmit={(event) => void join(event)}>{room.hasPassword ? <label><span>房间密码</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} maxLength={16} autoComplete="current-password" /></label> : <span>加入后才能准备</span>}<button type="submit" disabled={service.isMutating || (room.hasPassword && !password)}>{service.isMutating ? '加入中…' : '加入房间'}</button></form> : null}
       </section>
@@ -302,23 +299,20 @@ function GamePage({ matchId }: { matchId: string }) {
     return () => window.clearTimeout(timer)
   }, [matchId, navigate, terminal])
   return (
-    <PvpShell title="两界斗法台" eyebrow={`TECHNICAL PREVIEW · ${matchId}`} actions={<button className="pvp-danger-button" type="button" disabled={terminal || preBattle || service.isMutating} onClick={() => setConfirmSurrender(true)}>投降</button>}>
+    <PvpShell title="两界斗法台" eyebrow="镜像战场 · 生死一局" actions={<button className="pvp-danger-button" type="button" disabled={terminal || preBattle || service.isMutating} onClick={() => setConfirmSurrender(true)}>投降</button>}>
       <ServiceNotice error={service.error} notice={service.notice} loading={service.isLoading} />
-      <div className="pvp-realtime-state"><Wifi className="h-4 w-4" /><span>实时通道：{service.realtimeStatus === 'live' ? '已连接' : service.realtimeStatus === 'fallback' ? 'REST 补偿中' : '连接中'}</span><small>页面转入后台时暂停流，恢复后先请求全量状态。</small></div>
-      {terminal ? <div className="pvp-service-state pvp-service-success"><Check className="h-4 w-4" />权威对局已结束，正在进入服务器结算…</div> : null}
+      {terminal ? <div className="pvp-service-state pvp-service-success"><Check className="h-4 w-4" />此局已落幕</div> : null}
       {preBattle ? <section className="pvp-loading-stage">
-        <span className="pvp-kicker">VERSIONED CLIENT LOAD ACK</span><h2>{state?.status === 'countdown' ? '双方加载完成' : '等待真人客户端加载'}</h2>
-        <p>客户端仅在校验规则、地图路线与资产版本后发送 ACK；服务端不会代替玩家标记已加载。</p>
+        <span className="pvp-kicker">斗法台 · 候场</span><h2>{state?.status === 'countdown' ? '双方已就位' : '等待对手入阵'}</h2>
+        <p>战旗已立，待双方落子。</p>
         <div className="pvp-load-players"><LoadPlayer label="我方" name={state?.self.playerName} connected={state?.self.connected} status={state?.self.loadStatus ?? service.loadAckStatus} /><LoadPlayer label="对方" name={state?.opponent.playerName} connected={state?.opponent.connected} status={state?.opponent.loadStatus ?? 'idle'} /></div>
-        <div className="pvp-load-manifest"><span>规则 <b>{state?.loading.rulesetVersion || state?.rulesetVersion || '—'}</b></span><span>地图 <b>{state?.loading.mapId || state?.mapId || '—'} v{state?.loading.mapVersion || state?.mapVersion || '—'}</b></span><span>资产 <b>{state?.loading.assetsVersion || '—'}</b></span><span>超时 <b>{state ? Math.ceil(state.loading.remainingMs / 1000) : '—'}s</b></span></div>
-        {service.loadAckStatus === 'failed' ? <button type="button" onClick={service.retryLoad}>重试预载与 ACK</button> : null}
+        {service.loadAckStatus === 'failed' ? <button type="button" onClick={service.retryLoad}>重新入阵</button> : null}
       </section> : null}
-      {!preBattle ? <div className="pvp-development-warning"><ShieldAlert className="h-5 w-5" /><div><strong>首版防守纵向切片</strong><p>可招募、部署、移动/合成与遣妖；目标、射程、攻速、减伤与结算全部由服务器执行，客户端不提交伤害。</p></div></div> : null}
       {!preBattle ? <>
       <section className="pvp-game-hud">
         <div><span>我方核心</span><strong>{state?.self.coreHp ?? 10}</strong></div><div><span>斋饭</span><strong>{state?.self.rations ?? 10}</strong></div><div><span>真经</span><strong>{state?.self.scripture ?? 0}</strong></div><div><span>当前阵次</span><strong>{state?.round ?? 0}</strong></div><div><span>对方核心</span><strong>{state?.opponent.coreHp ?? 10}</strong></div>
       </section>
-      {state ? <PvpPlayableBattlefield state={state} matchId={matchId} service={service} /> : <div className="pvp-game-empty"><LoaderCircle className="h-7 w-7" /><strong>等待 PVP 权威状态</strong><span>这里不会读取或复用 PVE GameState。</span></div>}
+      {state ? <PvpPlayableBattlefield state={state} matchId={matchId} service={service} /> : <div className="pvp-game-empty"><LoaderCircle className="h-7 w-7" /><strong>等待战场显形</strong></div>}
       <section className="pvp-pressure-bar"><div><Sparkles className="h-5 w-5" /><span>遣妖</span><small>{service.pressureMessage ?? '消耗 5 真经，向对方安全队列加入压力怪'}</small></div><button type="button" disabled={!state || state.status !== 'playing' || state.self.scripture < 5 || service.isMutating} onClick={() => void service.sendPressure(matchId)}>{service.isMutating ? '发送中…' : '发送压力'}</button></section>
       </> : null}
       {confirmSurrender ? <div className="pvp-modal-backdrop"><div ref={surrenderDialogRef} className="pvp-modal" role="dialog" aria-modal="true" aria-labelledby="pvp-surrender-title" tabIndex={-1}><span className="pvp-kicker">SURRENDER</span><h2 id="pvp-surrender-title">确认投降？</h2><p>投降将由服务器立即判负；排位照常结算段位，恶意短局不发奖励。</p><div className="pvp-modal-buttons"><button className="pvp-secondary-button" type="button" onClick={() => setConfirmSurrender(false)}>继续战斗</button><button className="pvp-danger-button" type="button" onClick={() => { setConfirmSurrender(false); void service.surrender(matchId) }}>确认投降</button></div></div></div> : null}
@@ -351,12 +345,12 @@ function PvpPlayableBattlefield({ state, matchId, service }: { state: PvpMatchPu
     setSelectedUnitId(null)
     setSelectedEntityId(occupantId && occupantId !== selectedEntityId ? occupantId : null)
   }
-  return <section className="pvp-playable-battle" aria-label="PVP 权威防守战场">
+  return <section className="pvp-playable-battle" aria-label="两界斗法战场">
     <header className="pvp-battle-rules"><span>借用库 <b>{state.rulesSnapshot?.catalogVersion ?? '未知'}</b></span><span>人口 <b>{state.self.populationUsed}/{state.self.populationCap}</b></span><span>招募 <b>{state.rulesSnapshot?.recruitCost ?? 3} 斋饭</b></span><span>只读战斗 Tick <b>{state.tick}</b></span></header>
     <div className="pvp-live-lanes">
       <PvpDefenseLane label="对手公开防线" coreHp={state.opponent.coreHp} enemies={state.opponent.enemies} pieces={state.opponent.boardPieces} />
       <div className="pvp-versus-seal">斗</div>
-      <PvpDefenseLane label="我方权威防线" coreHp={state.self.coreHp} enemies={state.self.enemies} pieces={state.self.boardPieces} own />
+      <PvpDefenseLane label="我方防线" coreHp={state.self.coreHp} enemies={state.self.enemies} pieces={state.self.boardPieces} own />
     </div>
     <div className="pvp-deployment-zones">
       <div className="pvp-deployment-zone pvp-opponent-zone"><strong>对手布阵 · 公开只读</strong><div className="pvp-slot-grid">{opponentSlots.map((slot) => {
@@ -371,7 +365,7 @@ function PvpPlayableBattlefield({ state, matchId, service }: { state: PvpMatchPu
     <div className="pvp-recruit-dock">
       <div><strong>我方私有托盘</strong><small>对手投影不包含此数据</small></div>
       <div className="pvp-tray-units">{recruits.length ? recruits.map((unit) => <button type="button" key={unit.unitId} disabled={service.isMutating} className={cx(unit.unitId === selectedUnitId && 'selected')} onClick={() => { setSelectedEntityId(null); setSelectedUnitId(unit.unitId === selectedUnitId ? null : unit.unitId) }}><b>{unit.glyph}</b><span>{state.rulesSnapshot?.soldiers[unit.soldierType]?.name ?? unit.soldierType}</span></button>) : <span>托盘暂空，先招募天兵</span>}</div>
-      <button className="pvp-recruit-button" type="button" disabled={service.isMutating || state.status !== 'playing' || state.self.rations < (state.rulesSnapshot?.recruitCost ?? 3)} onClick={() => void service.recruit(matchId)}>{service.isMutating ? '权威确认中…' : `招募 · ${state.rulesSnapshot?.recruitCost ?? 3}斋饭`}</button>
+      <button className="pvp-recruit-button" type="button" disabled={service.isMutating || state.status !== 'playing' || state.self.rations < (state.rulesSnapshot?.recruitCost ?? 3)} onClick={() => void service.recruit(matchId)}>{service.isMutating ? '召唤中…' : `招募 · ${state.rulesSnapshot?.recruitCost ?? 3}斋饭`}</button>
     </div>
     <div className="pvp-battle-receipt" role="status" aria-live="polite"><span>{service.battleActionMessage ?? '选中托盘天兵后点击空位部署；选中已部署天兵后点同类同级可合成。'}</span>{recentCombat.map((event) => <small key={event.eventId}>{event.type.replaceAll('_', ' ')} · tick {event.tick}</small>)}</div>
   </section>
@@ -387,10 +381,10 @@ function HistoryPage() {
   const [result, setResult] = useState<'all' | PvpMatchResult>('all')
   const matches = service.data.history.filter((match) => (mode === 'all' || match.mode === mode) && (result === 'all' || match.result === result))
   return (
-    <PvpShell title="对局记录" eyebrow="MY MATCH HISTORY · 权威结算摘要" actions={<button className="pvp-secondary-button" type="button" onClick={() => void service.refresh()}><RefreshCcw className="h-4 w-4" />刷新</button>}>
+      <PvpShell title="对局记录" eyebrow="刀光留痕 · 每一局都算数" actions={<button className="pvp-secondary-button" type="button" onClick={() => void service.refresh()}><RefreshCcw className="h-4 w-4" />翻新</button>}>
       <ServiceNotice error={service.error} notice={service.notice} loading={service.isLoading} />
       <section className="pvp-filter-bar"><label>模式<select value={mode} onChange={(event) => setMode(event.target.value as typeof mode)}><option value="all">全部模式</option><option value="ranked_1v1">排位斗法</option><option value="casual_1v1">休闲斗法</option><option value="custom_1v1">自定义房</option></select></label><label>结果<select value={result} onChange={(event) => setResult(event.target.value as typeof result)}><option value="all">全部结果</option><option value="win">胜利</option><option value="loss">失败</option><option value="draw">平局</option><option value="void">无效局</option></select></label></section>
-      <section className="pvp-panel pvp-history-list">{matches.length ? matches.map((match) => <HistoryRow key={match.matchId} match={match} />) : <EmptyState icon={History} title="暂无符合条件的对局" copy="完成首场防守联调后，权威结算摘要会出现在这里。" />}</section>
+      <section className="pvp-panel pvp-history-list">{matches.length ? matches.map((match) => <HistoryRow key={match.matchId} match={match} />) : <EmptyState icon={History} title="还没有战绩" copy="完成第一场斗法后，战果会留在这里。" />}</section>
     </PvpShell>
   )
 }
@@ -405,13 +399,13 @@ function MatchDetailPage({ matchId, resultPage = false }: { matchId: string; res
   return (
     <PvpShell title={resultPage ? '斗法结算' : '对局详情'} eyebrow={`MATCH · ${matchId}`} actions={<Link className="pvp-secondary-button" to={resultPage ? '/pvp' : '/pvp/history'}><ArrowLeft className="h-4 w-4" />{resultPage ? '返回竞技中心' : '返回记录'}</Link>}>
       <ServiceNotice error={service.error} notice={service.notice} loading={service.isLoading} />
-      {match ? <MatchDetail match={match} resultPage={resultPage} /> : <section className="pvp-panel"><EmptyState icon={BookOpenCheck} title="结算详情尚未就绪" copy="等待服务器完成唯一结算事务；客户端不会估算 LP、奖励或胜负原因。" /></section>}
+      {match ? <MatchDetail match={match} resultPage={resultPage} /> : <section className="pvp-panel"><EmptyState icon={BookOpenCheck} title="战果尚未显现" copy="稍后再来查看。" /></section>}
     </PvpShell>
   )
 }
 
 function MatchDetail({ match, resultPage }: { match: PvpMatchDetail; resultPage: boolean }) {
-  return <><section className={cx('pvp-result-banner', `pvp-result-${match.result}`)}><span>{MODE_LABEL[match.mode]}</span><h2>{RESULT_LABEL[match.result]}</h2><p>{match.resultReason} · {formatDuration(match.durationMs)}</p><strong>{match.lpDelta > 0 ? '+' : ''}{match.lpDelta} LP</strong></section><section className="pvp-stat-grid">{match.participants.map((participant) => <article key={participant.playerId} className="pvp-panel"><span className="pvp-kicker">{participant.side} SIDE · {RESULT_LABEL[participant.result]}</span><h2>{participant.playerName}</h2><div className="pvp-stats"><span>核心剩余<strong>{participant.coreHpRemaining}</strong></span><span>基础击杀<strong>{participant.baseKills}</strong></span><span>压力击杀<strong>{participant.pressureKills}</strong></span><span>泄漏<strong>{participant.leaks}</strong></span><span>造成伤害<strong>{participant.damageDealt}</strong></span><span>真经消耗<strong>{participant.scriptureSpent}</strong></span></div><p>{participant.tierBefore} {participant.lpBefore} LP → {participant.tierAfter} {participant.lpAfter} LP</p></article>)}</section><section className="pvp-panel pvp-reward-row"><div><Coins className="h-5 w-5" /><span>权威奖励</span></div>{match.rewards.length ? match.rewards.map((reward) => <span key={`${reward.type}-${reward.label}`}>{reward.label} +{reward.amount}</span>) : <span>{match.result === 'void' ? '无效局不发奖励' : '奖励流水待同步'}</span>}<button type="button" disabled={match.replayStatus !== 'available'}>{match.replayStatus === 'available' ? '观看回放' : `回放：${match.replayStatus}`}</button>{resultPage ? <Link to="/pvp/matchmaking?mode=ranked_1v1">再来一局</Link> : null}</section></>
+  return <><section className={cx('pvp-result-banner', `pvp-result-${match.result}`)}><span>{MODE_LABEL[match.mode]}</span><h2>{RESULT_LABEL[match.result]}</h2><p>{match.resultReason} · {formatDuration(match.durationMs)}</p><strong>{match.lpDelta > 0 ? '+' : ''}{match.lpDelta} LP</strong></section><section className="pvp-stat-grid">{match.participants.map((participant) => <article key={participant.playerId} className="pvp-panel"><span className="pvp-kicker">{participant.side} SIDE · {RESULT_LABEL[participant.result]}</span><h2>{participant.playerName}</h2><div className="pvp-stats"><span>核心剩余<strong>{participant.coreHpRemaining}</strong></span><span>基础击杀<strong>{participant.baseKills}</strong></span><span>压力击杀<strong>{participant.pressureKills}</strong></span><span>泄漏<strong>{participant.leaks}</strong></span><span>造成伤害<strong>{participant.damageDealt}</strong></span><span>真经消耗<strong>{participant.scriptureSpent}</strong></span></div><p>{participant.tierBefore} {participant.lpBefore} LP → {participant.tierAfter} {participant.lpAfter} LP</p></article>)}</section><section className="pvp-panel pvp-reward-row"><div><Coins className="h-5 w-5" /><span>战果奖励</span></div>{match.rewards.length ? match.rewards.map((reward) => <span key={`${reward.type}-${reward.label}`}>{reward.label} +{reward.amount}</span>) : <span>{match.result === 'void' ? '无效局不发奖励' : '暂无奖励'}</span>}<button type="button" disabled={match.replayStatus !== 'available'}>{match.replayStatus === 'available' ? '观看回放' : '回放未留存'}</button>{resultPage ? <Link to="/pvp/matchmaking?mode=ranked_1v1">再来一局</Link> : null}</section></>
 }
 
 function LeaderboardPage() {
@@ -421,7 +415,7 @@ function LeaderboardPage() {
     <PvpShell title="赛季天梯榜" eyebrow="RANKED 1V1 · 仅真人玩家" actions={<button className="pvp-secondary-button" type="button" onClick={() => void service.refresh()}><RefreshCcw className="h-4 w-4" />刷新榜单</button>}>
       <ServiceNotice error={service.error} notice={service.notice} loading={service.isLoading} />
       {board?.self ? <section className="pvp-self-rank"><Target className="h-5 w-5" /><span>我的排名</span><strong>#{board.self.rank}</strong><span>{board.self.tier} {board.self.division ?? ''}</span><span>{board.self.visibleLp} LP</span></section> : null}
-      <section className="pvp-panel pvp-leaderboard"><header><span>名次</span><span>玩家</span><span>段位</span><span>LP</span><span>胜负</span><span>胜率</span></header>{board?.entries.length ? board.entries.map((entry) => <LeaderboardRow key={entry.playerId} entry={entry} />) : <EmptyState icon={Trophy} title="赛季榜尚未生成" copy="榜单按 LP、MMR、胜场和达成时间稳定排序，不沿用旧双榜或 PVE 最高波次。" />}</section>
+      <section className="pvp-panel pvp-leaderboard"><header><span>名次</span><span>玩家</span><span>段位</span><span>LP</span><span>胜负</span><span>胜率</span></header>{board?.entries.length ? board.entries.map((entry) => <LeaderboardRow key={entry.playerId} entry={entry} />) : <EmptyState icon={Trophy} title="天榜尚未显现" copy="待更多斗法者留下姓名。" />}</section>
     </PvpShell>
   )
 }

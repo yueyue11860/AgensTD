@@ -14,14 +14,12 @@ export function FrontendShell({ children }: FrontendShellProps) {
         <header className="rounded-3xl border border-white/10 bg-black/25 px-5 py-5 backdrop-blur-md">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <p className="text-[11px] uppercase tracking-[0.32em] text-cold-blue">AgensTD Frontend</p>
-              <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white lg:text-4xl">Server-Driven Tower Defense UI</h1>
-              <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">
-                前端仅消费 TICK_UPDATE 推送并通过 SEND_ACTION 上报玩家操作，不再维护任何本地战斗推演、金币扣减或敌潮生成逻辑。
-              </p>
+            <p className="text-[11px] uppercase tracking-[0.32em] text-cold-blue">万字天关 · 天庭卷</p>
+            <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white lg:text-4xl">同道集结，守住西游章回</h1>
+            <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">落字成阵，召神将破敌潮；花果山的灯火正等你点亮。</p>
             </div>
             <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300">
-              同源部署默认连接当前站点 WebSocket，可直接配合 Nginx 反向代理。
+              南天门已开，战旗可立。
             </div>
           </div>
         </header>

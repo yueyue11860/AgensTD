@@ -1421,7 +1421,7 @@ export function GamingPage() {
         setError('登录凭证已失效，请重新登录。')
         return
       }
-      setError(`暂时无法连接服务器：${connectError.message}`)
+      setError('天门暂闭，请稍后再试。')
     }
     const handleConnectionReplaced = () => {
       socket.io.opts.reconnection = false
@@ -1488,14 +1488,14 @@ export function GamingPage() {
     const rejected = [...(gameState?.recentEvents ?? [])].reverse().find((event) => event.type === 'ACTIVE_ITEM_REJECTED')
     if (!rejected || lastItemRejectionRef.current === rejected.id) return
     lastItemRejectionRef.current = rejected.id
-    const reason = typeof rejected.data.error === 'string' ? rejected.data.error : '服务端拒绝了该道具目标'
-    setError(`道具使用失败：${reason}（未在客户端预扣次数）`)
+    const reason = typeof rejected.data.error === 'string' ? rejected.data.error : '法器没有回应'
+    setError(`法器未能生效：${reason}`)
   }, [gameState?.recentEvents])
 
   function emitAction(payload: Record<string, unknown>) {
     const socket = socketRef.current
     if (!socket?.connected || interactionLocked || awaitingCheckpointRef.current) {
-      setError('权威战局尚未恢复，操作已锁定且不会发送。')
+      setError('战局尚未归位，暂缓落子。')
       return false
     }
     const requestId = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `pve-${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -1960,7 +1960,7 @@ export function GamingPage() {
     if (!socket?.connected || interactionLocked || awaitingCheckpointRef.current) {
       setPendingStageSelection(null)
       setMissionBriefingDismissed(false)
-      setError('权威战局尚未恢复，请等待重连完成。')
+      setError('战局尚未归位，请稍候。')
       return
     }
     // `selectedGeneralIds` is an additive payload field. Legacy gateways parse only
@@ -2019,7 +2019,7 @@ export function GamingPage() {
                           ? '登录状态已失效'
                           : '重连期限已过'}
                 </h2>
-                <p className="mt-1 text-sm leading-6 text-slate-300">{connectionRecovery.message ?? '等待服务器返回完整权威快照；期间所有操作均不会发送。'}</p>
+                <p className="mt-1 text-sm leading-6 text-slate-300">{connectionRecovery.message ?? '战局重连中，暂缓落子。'}</p>
               </div>
               {(connectionRecovery.phase === 'reconnecting' || connectionRecovery.phase === 'awaiting_snapshot') ? <RefreshCw className="mt-1 h-5 w-5 shrink-0 animate-spin text-amber-300" /> : <ShieldAlert className="mt-1 h-5 w-5 shrink-0 text-red-300" />}
             </div>
@@ -2062,7 +2062,7 @@ export function GamingPage() {
           <div className="gaming-command-mission">
             <span>DEFENSE GRID</span>
             <strong>{selectedLevelPreview?.label ?? '节点防线'}</strong>
-            <small>{selectedLevelPreview ? ({ easy: '简单', normal: '普通', hard: '困难' } as const)[selectedLevelPreview.difficulty] : '等待关卡同步'}</small>
+            <small>{selectedLevelPreview ? ({ easy: '简单', normal: '普通', hard: '困难' } as const)[selectedLevelPreview.difficulty] : '未选关卡'}</small>
           </div>
           <div className="gaming-command-metrics">
             <div data-onboarding-anchor="rice"><Coins className="h-4 w-4" /><span>斋饭</span><strong>{gameState?.rice ?? 0}</strong></div>
@@ -2162,7 +2162,7 @@ export function GamingPage() {
                 <div className="mb-2 flex items-center justify-between"><p className="gaming-section-label">联机路况</p><small className="text-slate-500">{roomSlots.filter((slot) => slot.connected).length}/{roomSlots.filter((slot) => slot.playerId).length || 1} 在线</small></div>
                 <div className="space-y-2">
                   {roomSlots.filter((slot) => slot.playerId).map((slot) => <TeammateConnectionRow key={slot.slotId} slot={slot} selfPlayerId={playerId} />)}
-                  {roomSlots.every((slot) => !slot.playerId) ? <p className="text-xs text-slate-500">等待房间成员同步…</p> : null}
+                  {roomSlots.every((slot) => !slot.playerId) ? <p className="text-xs text-slate-500">等待同道入列…</p> : null}
                 </div>
               </section>
               <section className="gaming-panel-card gaming-recruit-panel">
@@ -2287,7 +2287,7 @@ export function GamingPage() {
 
               <section className="gaming-panel-card gaming-active-items-panel">
                 <div className="gaming-active-items-heading">
-                  <div><p className="gaming-section-label">主动道具</p><p className="gaming-recruit-help">2 槽 · 服务端确认后才扣除次数</p></div>
+                  <div><p className="gaming-section-label">主动道具</p><p className="gaming-recruit-help">2 个法器槽</p></div>
                   {targetingItemSlot !== null ? <button type="button" onClick={() => {
                     setTargetingItemSlot(null)
                     setSelectedDiscardedTokenId(null)

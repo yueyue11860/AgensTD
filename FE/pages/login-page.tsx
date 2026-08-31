@@ -3,11 +3,10 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/use-auth'
 
 const BOOT_LINES = [
-  '>_ MYRIAD_TD :: TACTICAL GATEWAY v2.6.0 ............... [INIT]',
-  '>_ KERNEL_MODULES loading ................................ [ OK ]',
-  '>_ SEC_LAYER :: asymmetric cipher established ........... [ OK ]',
-  '>_ SUPABASE_AUTH :: identity service online ............. [ OK ]',
-  '>_ WAITING FOR IDENTITY VERIFICATION .................... [HALT]',
+  '天庭传令 · 万字天关 · 第 2.6 纪元 ................. [启阵]',
+  '云门机关与花果山战场校准 .......................... [完成]',
+  '护界符印已点亮 · 灵脉连接稳定 ...................... [完成]',
+  '仙籍司正在等待你的名号 ............................ [待命]',
 ]
 
 function BootLog() {
@@ -67,7 +66,7 @@ export function LoginPage() {
 
   return (
     <main
-      className="relative flex min-h-screen w-full items-center justify-center overflow-hidden bg-slate-950"
+      className="login-page relative flex min-h-screen w-full items-center justify-center overflow-hidden bg-slate-950"
       style={{
         backgroundImage: 'linear-gradient(rgba(56,189,248,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(56,189,248,0.04) 1px, transparent 1px)',
         backgroundSize: '40px 40px',
@@ -80,8 +79,8 @@ export function LoginPage() {
 
       <div className="relative z-10 mx-4 w-full max-w-2xl border border-sky-400/30 bg-black/65 backdrop-blur-xl">
         <div className="flex items-center justify-between border-b border-sky-400/15 px-5 py-2.5">
-          <span className="font-mono text-[0.6rem] tracking-widest text-sky-400/50">TACTICAL_GATEWAY :: SUPABASE NODE</span>
-          <span className="font-mono text-[0.6rem] tracking-widest text-emerald-400/70">● ONLINE</span>
+          <span className="font-mono text-[0.6rem] tracking-widest text-sky-400/50">南天门 · 仙籍入口</span>
+          <span className="font-mono text-[0.6rem] tracking-widest text-emerald-400/70">● 灵脉在线</span>
         </div>
 
         <div className="border-b border-sky-400/10 px-5 py-4"><BootLog /></div>
@@ -91,7 +90,7 @@ export function LoginPage() {
             <h1 className="text-4xl font-black uppercase tracking-[0.18em] text-white sm:text-6xl" style={{ textShadow: '0 0 30px rgba(56,189,248,0.6)' }}>
               MYRIAD<span className="text-sky-400"> TD</span>
             </h1>
-            <p className="mt-1 font-mono text-[0.65rem] uppercase tracking-[0.35em] text-sky-400/70">{'< 零域身份终端 >'}</p>
+            <p className="mt-1 font-mono text-[0.65rem] uppercase tracking-[0.35em] text-sky-400/70">{'< 天庭仙籍 · 入阵凭证 >'}</p>
           </div>
 
           <div className="grid w-full grid-cols-2 border border-sky-400/20 p-1 font-mono text-xs tracking-widest">
@@ -111,7 +110,7 @@ export function LoginPage() {
             {mode === 'login' && localTestAccount && (
               <div className="border border-amber-300/25 bg-amber-950/20 px-3 py-2.5 font-mono text-xs text-amber-100/80">
                 <div className="flex items-center justify-between gap-3">
-                  <span>本地测试账号（无需数据库）</span>
+                  <span>演示仙籍 · 直接入阵</span>
                   <button
                     type="button"
                     className="border border-amber-300/30 px-2 py-1 text-[0.65rem] text-amber-200 transition hover:bg-amber-300/10"
@@ -120,21 +119,21 @@ export function LoginPage() {
                     一键填入
                   </button>
                 </div>
-                <p className="mt-1 text-[0.65rem] text-amber-100/55">{localTestAccount.email} / {localTestAccount.password}</p>
+                  <p className="mt-1 text-[0.65rem] text-amber-100/55">试炼用仙籍：{localTestAccount.email}</p>
               </div>
             )}
             {mode === 'register' && (
               <label className="block">
-                <span className="mb-1.5 block font-mono text-[0.62rem] tracking-widest text-sky-400/55">CALLSIGN / 玩家代号</span>
+                <span className="mb-1.5 block font-mono text-[0.62rem] tracking-widest text-sky-400/55">CALLSIGN / 仙号</span>
                 <input className={inputClass} value={name} onChange={(event) => setName(event.target.value)} autoComplete="nickname" maxLength={40} required placeholder="输入玩家代号" />
               </label>
             )}
             <label className="block">
-              <span className="mb-1.5 block font-mono text-[0.62rem] tracking-widest text-sky-400/55">EMAIL / 邮箱</span>
+              <span className="mb-1.5 block font-mono text-[0.62rem] tracking-widest text-sky-400/55">SUMMONER / 传令邮箱</span>
               <input className={inputClass} type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required placeholder="commander@example.com" />
             </label>
             <label className="block">
-              <span className="mb-1.5 block font-mono text-[0.62rem] tracking-widest text-sky-400/55">PASSWORD / 密码</span>
+              <span className="mb-1.5 block font-mono text-[0.62rem] tracking-widest text-sky-400/55">SEAL / 护界密令</span>
               <input className={inputClass} type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} minLength={6} required placeholder="至少 6 位" />
             </label>
 
@@ -146,15 +145,15 @@ export function LoginPage() {
               disabled={busy}
               className="w-full border border-sky-400/60 px-6 py-3.5 font-mono text-sm uppercase tracking-[0.2em] text-sky-100 transition hover:bg-sky-400 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {busy ? '>_ VERIFYING IDENTITY...' : mode === 'login' ? '[ 进入战区 ]' : '[ 建立作战档案 ]'}
+              {busy ? '正在验符……' : mode === 'login' ? '[ 踏入天关 ]' : '[ 立下仙籍 ]'}
             </button>
           </form>
 
-          <p className="font-mono text-[0.6rem] tracking-wider text-sky-400/35">AUTH_PROVIDER :: SUPABASE AUTH · JWT · TLS 1.3</p>
+          <p className="font-mono text-[0.6rem] tracking-wider text-sky-400/35">护界协议 · 灵脉加密 · 仙籍司</p>
         </div>
 
         <div className="flex items-center justify-between border-t border-sky-400/10 px-5 py-2 font-mono text-[0.55rem] tracking-widest text-sky-400/30">
-          <span>SYS :: SECTOR ZERO</span><span>CLEARANCE :: DELTA</span>
+          <span>天庭 · 花果山战区</span><span>仙籍等级 · 初入门庭</span>
         </div>
       </div>
     </main>

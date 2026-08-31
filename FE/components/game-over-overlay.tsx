@@ -139,21 +139,21 @@ export function GameOverOverlay({ outcome, currentLevelId, matchId, onReplay, on
           <div className={cx('game-over-icon-wrap', isVictory ? 'game-over-icon-victory' : 'game-over-icon-defeat')}>
             {isVictory ? <Trophy className="h-8 w-8" /> : <XCircle className="h-8 w-8" />}
           </div>
-          <div><p className={cx('game-over-eyebrow', isVictory ? 'game-over-eyebrow-victory' : 'game-over-eyebrow-defeat')}>{settlement ? '服务端已落签' : '等待结算'}</p>
+          <div><p className={cx('game-over-eyebrow', isVictory ? 'game-over-eyebrow-victory' : 'game-over-eyebrow-defeat')}>{settlement ? '战果已定' : '结算中'}</p>
             <h1 id="game-over-title" className={cx('game-over-title', isVictory ? 'game-over-title-victory' : 'game-over-title-defeat')}>{isVictory ? '守关已成' : '此回暂终'}</h1>
             <p id="game-over-summary" className="game-over-subtitle">{detail?.story.title ?? (isVictory ? `PVE-${currentLevelId ?? '?'} 防线稳固` : '调整构筑后可再战此回')}</p></div>
           {settlement && revealStage !== 'actions' ? <button type="button" className="game-over-skip" onClick={() => setRevealStage('actions')}><SkipForward className="h-4 w-4" />跳过揭晓</button> : null}
         </div>
 
-        {settlementView.status === 'pending' ? <section className="game-over-settlement game-over-settlement-pending" aria-live="polite"><LoaderCircle className="game-over-spinner h-5 w-5" /><div><strong>权威结算处理中</strong><p>{settlementView.message}</p></div></section> : null}
-        {settlementView.status === 'error' ? <section className="game-over-settlement game-over-settlement-error" role="alert"><AlertTriangle className="h-5 w-5" /><div><strong>奖励状态暂不可用</strong><p>{settlementView.message} 对局结果不会在客户端补算。</p>{settlementView.lastError ? <small className="game-over-last-error">服务端记录：{settlementView.lastError}</small> : null}</div><button type="button" onClick={() => setRetryKey(key => key + 1)}><RefreshCw className="h-4 w-4" />重试</button></section> : null}
+        {settlementView.status === 'pending' ? <section className="game-over-settlement game-over-settlement-pending" aria-live="polite"><LoaderCircle className="game-over-spinner h-5 w-5" /><div><strong>战果结算中</strong><p>请稍候……</p></div></section> : null}
+        {settlementView.status === 'error' ? <section className="game-over-settlement game-over-settlement-error" role="alert"><AlertTriangle className="h-5 w-5" /><div><strong>奖励暂未显现</strong><p>稍后再试。</p></div><button type="button" onClick={() => setRetryKey(key => key + 1)}><RefreshCw className="h-4 w-4" />重试</button></section> : null}
 
         {settlement ? <div className="game-over-reveal" data-stage={revealStage}>
-          <section className="game-over-verdict"><span>{detail?.outcome.reason ?? settlement.reason}</span><strong>{settlement.highestCompletedWave} / {detail?.outcome.maxWaves || 20} 波</strong><small>{detail ? `规则 ${detail.rules.combatRulesetVersion} · 奖励 ${detail.rules.rewardTableRevision}` : '旧版结算记录'}</small></section>
+          <section className="game-over-verdict"><span>{detail?.outcome.reason ?? settlement.reason}</span><strong>{settlement.highestCompletedWave} / {detail?.outcome.maxWaves || 20} 波</strong></section>
 
           {stageIndex >= 1 ? <section className="game-over-story game-over-reveal-section">
             <header><BookOpenText className="h-4 w-4" /><strong>本局故事</strong></header>
-            <p>{detail?.story.summary ?? `最高完成第 ${settlement.highestCompletedWave} 波，结算已持久化。`}</p>
+            <p>{detail?.story.summary ?? `最高完成第 ${settlement.highestCompletedWave} 波。`}</p>
             {detail?.story.failureSuggestion ? <aside><ShieldCheck className="h-4 w-4" /><span><b>下一局可执行建议</b>{detail.story.failureSuggestion}</span></aside> : null}
             {detail ? <div className="game-over-performance">
               {detail.performance.damageDealt !== null ? <span><Swords />伤害 <b>{detail.performance.damageDealt.toLocaleString()}</b></span> : null}
@@ -173,12 +173,11 @@ export function GameOverOverlay({ outcome, currentLevelId, matchId, onReplay, on
             <header><Sparkles className="h-4 w-4" /><strong>奖励揭晓</strong><small>已入账</small></header>
             {rewards.length > 0 ? <div className="game-over-reward-list">{rewards.map(reward => <article key={reward.rewardId} className={`game-over-reward game-over-rarity-${reward.rarity}`}>
               {reward.kind === 'gold' ? <Coins /> : reward.kind === 'purchase_right' ? <Hammer /> : reward.kind === 'first_clear' ? <Trophy /> : <Sparkles />}
-              <div><strong>{reward.label}</strong><small>{sourceLabels[reward.source] ?? reward.source}{reward.milestoneWave ? ` · 第 ${reward.milestoneWave} 波` : ''}</small></div><span className="game-over-rarity">{rarityLabels[reward.rarity] ?? reward.rarity}</span><b>+{reward.amount}</b>
-            </article>)}</div> : <div className="game-over-zero-reward"><ShieldCheck /><span><strong>本局无额外奖励</strong><small>服务端返回的奖励列表为空，未在客户端补算。</small></span></div>}
+              <div><strong>{reward.label}</strong><small>{reward.milestoneWave ? `第 ${reward.milestoneWave} 波` : '战果奖励'}</small></div><span className="game-over-rarity">{rarityLabels[reward.rarity] ?? reward.rarity}</span><b>+{reward.amount}</b>
+              </article>)}</div> : <div className="game-over-zero-reward"><ShieldCheck /><span><strong>本局无额外奖励</strong></span></div>}
           </section> : null}
         </div> : null}
 
-        <p className="game-over-authority-note">奖励、首通与 MVP 完全以服务端持久记录为准 · {matchId ? `MATCH ${matchId}` : 'MATCH ID 缺失'}</p>
         <div className={cx('game-over-actions', revealStage === 'actions' && 'game-over-actions-revealed')}>
           <button type="button" onClick={onReplay} className={cx('game-over-btn game-over-btn-primary', isVictory ? 'game-over-btn-victory' : 'game-over-btn-defeat')}><RotateCcw className="h-4 w-4" />再来一局</button>
           <button type="button" onClick={onAdjustBuild} className="game-over-btn game-over-btn-secondary"><Hammer className="h-4 w-4" />调整构筑</button>

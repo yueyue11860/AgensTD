@@ -3,12 +3,26 @@
 生产发布、migration 003–008、outbox 重启恢复和回滚步骤见
 [PRODUCTION_RELEASE_RUNBOOK.md](PRODUCTION_RELEASE_RUNBOOK.md)。发布前统一执行 `pnpm release:verify`。
 
+## 运行拓扑
+
+Node 进程默认只承担权威游戏服务，不直接托管前端页面：
+
+- `http://127.0.0.1:5173`：Vite 前端开发服务器；
+- `http://127.0.0.1:3000/api/*`：REST API；
+- `http://127.0.0.1:3000/socket.io/*`：Socket.IO 实时网关；
+- `http://127.0.0.1:3000/health`：无需登录的健康检查。
+
+开发时只应把 `5173` 作为玩家入口。生产环境由 Nginx/静态站点提供前端，并将 `/api` 与
+`/socket.io` 反向代理到 Node。只有兼容旧式单进程部署时才设置 `SERVE_FRONTEND=true`；该模式要求
+先生成 `FE/dist`，否则后端会拒绝启动，避免意外发布过期页面。
+
 ## Supabase 接入
 
 1. 在 Supabase SQL Editor 中执行 [supabase/schema.sql](supabase/schema.sql)。
 2. 复制 [.env.example](.env.example) 为 `.env`，填写：
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
+   `.env` 已被 Git 忽略，不得把 service role key 提交到仓库；若密钥曾进入 Git 历史，必须在 Supabase 侧轮换。
 3. 前端 `.env` 配置 `VITE_SUPABASE_URL` 与浏览器可公开使用的 `VITE_SUPABASE_ANON_KEY`。登录、注册、会话刷新与 Realtime 共用这一 Supabase 客户端。
 4. 启动后端：
 

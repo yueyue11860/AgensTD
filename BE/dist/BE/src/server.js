@@ -75,7 +75,11 @@ const pveCheckpointCoordinator = new pve_checkpoint_v1_1.PveCheckpointCoordinato
 const app = (0, express_1.default)();
 const frontendDistDir = path_1.default.resolve(process.cwd(), '../FE/dist');
 const frontendIndexFile = path_1.default.join(frontendDistDir, 'index.html');
-const hasFrontendBuild = (0, fs_1.existsSync)(frontendIndexFile);
+const frontendBuildExists = (0, fs_1.existsSync)(frontendIndexFile);
+if (config.serveFrontend && !frontendBuildExists) {
+    throw new Error(`SERVE_FRONTEND=true requires a frontend build at ${frontendIndexFile}`);
+}
+const servesFrontend = config.serveFrontend && frontendBuildExists;
 function isFrontendPageRequest(request) {
     if (request.path.startsWith('/api') || request.path.startsWith('/health') || request.path.startsWith('/socket.io')) {
         return false;
@@ -91,8 +95,17 @@ function isFrontendPageRequest(request) {
 }
 app.use((0, cors_1.default)({ origin: config.corsOrigin === '*' ? true : config.corsOrigin, credentials: true }));
 app.use(express_1.default.json());
-if (hasFrontendBuild) {
+if (servesFrontend) {
     app.use(express_1.default.static(frontendDistDir));
+}
+if (!servesFrontend) {
+    app.get('/', (_request, response) => {
+        response.status(404).json({
+            ok: false,
+            code: 'FRONTEND_NOT_SERVED',
+            message: 'This process only serves the game API and Socket.IO gateway. Open the frontend server instead.',
+        });
+    });
 }
 app.get('/health', (_request, response) => {
     const persistence = persistenceReadiness.snapshot();
@@ -107,6 +120,7 @@ app.get('/health', (_request, response) => {
             pvp: persistencePolicy.pvpStoreMode,
             pveCheckpoint: checkpointStoreMode,
         },
+        frontend: servesFrontend ? 'served' : 'external',
         pveCheckpoint: pveCheckpointReadiness,
     });
 });
@@ -157,7 +171,7 @@ app.use('/api/e2e', (0, e2e_control_api_1.createE2eControlRouter)(config, gatewa
 app.use('/api/pvp', (0, pvp_rest_api_1.createPvpRestApiRouter)(config, pvpPlatform));
 app.use('/api', (0, rest_api_1.createRestApiRouter)(engine, roomManager, config, actionLimiter, replayRecorder, competitionStore, progressStore, accountService, pveRewardStore, pveCheckpointCoordinator));
 app.use('/api/agent', (0, agent_api_1.createAgentApiRouter)(projectedTickStream, config, replayRecorder, competitionStore, performanceTelemetry));
-if (hasFrontendBuild) {
+if (servesFrontend) {
     app.use((request, response, next) => {
         if (!isFrontendPageRequest(request)) {
             next();

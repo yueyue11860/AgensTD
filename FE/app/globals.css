@@ -514,6 +514,238 @@
   }
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   MYRIAD VISUAL PASS · turn every screen into a playable world, not a
+   dashboard.  This is intentionally last so it skins the legacy surfaces
+   without changing their behavior or data contracts.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --game-ink: #060914;
+  --game-ink-soft: #0d1424;
+  --game-jade: #7fe4c4;
+  --game-gold: #f0c875;
+  --game-paper: #f8efd9;
+  --game-muted: rgba(234, 226, 205, 0.66);
+  --game-cinnabar: #df7566;
+  --game-line: rgba(240, 200, 117, 0.24);
+}
+
+body {
+  background: var(--game-ink);
+  color: var(--game-paper);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+button:not(:disabled), a { cursor: pointer; }
+
+/* Ambient world layer shared by home, halls, codex, shop and PVP. */
+.celestial-home-page,
+.celestial-hall-page,
+.meta-page,
+.pvp-page,
+.login-page {
+  isolation: isolate;
+  background-color: var(--game-ink) !important;
+}
+
+.celestial-home-page::after,
+.celestial-hall-page::after,
+.meta-page::after,
+.pvp-page::after,
+.login-page::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 18%, rgba(127, 228, 196, 0.12), transparent 30%),
+    radial-gradient(circle at 8% 88%, rgba(223, 117, 102, 0.12), transparent 24%),
+    linear-gradient(115deg, rgba(255,255,255,0.02), transparent 45%);
+  mix-blend-mode: screen;
+}
+
+.celestial-home-page .celestial-home-wash {
+  background:
+    linear-gradient(180deg, rgba(5, 8, 18, 0.22), rgba(5, 8, 18, 0.8)),
+    url('/art/backgrounds/myriad-celestial-menu-v1.webp') center / cover no-repeat;
+  opacity: 0.8;
+  mask-image: linear-gradient(180deg, #000 0%, rgba(0,0,0,.9) 65%, transparent 100%);
+}
+
+.celestial-home-page::before,
+.celestial-hall-page::before,
+.meta-page::before,
+.pvp-page::before {
+  opacity: 0.16;
+  background-image:
+    radial-gradient(circle at 12% 22%, rgba(240,200,117,.8) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 82% 34%, rgba(127,228,196,.65) 0 1px, transparent 1.5px),
+    repeating-linear-gradient(90deg, transparent 0 78px, rgba(240,200,117,.035) 79px),
+    repeating-linear-gradient(0deg, transparent 0 78px, rgba(127,228,196,.025) 79px);
+  background-size: 230px 190px, 310px 260px, auto, auto;
+}
+
+/* Shared game chrome: inset corners, no spreadsheet rectangles. */
+.celestial-lobby-panel,
+.celestial-room-panel,
+.meta-panel,
+.meta-header,
+.codex-toolbar,
+.pvp-panel,
+.pvp-hero,
+.pvp-topbar,
+.mission-briefing-panel {
+  border-color: var(--game-line) !important;
+  background:
+    linear-gradient(145deg, rgba(240,200,117,.07), transparent 34%),
+    linear-gradient(180deg, rgba(13,20,36,.92), rgba(7,11,23,.92)) !important;
+  box-shadow: inset 0 1px rgba(255,255,255,.07), inset 0 0 0 1px rgba(127,228,196,.035), 0 24px 60px rgba(0,0,0,.34) !important;
+}
+
+.celestial-lobby-panel::after,
+.celestial-room-panel::after,
+.meta-panel::after,
+.pvp-panel::after,
+.mission-briefing-panel::after {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border: 1px solid rgba(240,200,117,.08);
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.celestial-mode-card,
+.mission-chapter-card,
+.meta-catalog-card,
+.meta-weapon-card,
+.meta-offer-card,
+.codex-card,
+.pvp-mode-card,
+.pvp-room-row {
+  border-color: rgba(240,200,117,.22) !important;
+  background:
+    linear-gradient(135deg, rgba(127,228,196,.075), transparent 44%),
+    rgba(10,16,31,.86) !important;
+  box-shadow: inset 0 1px rgba(255,255,255,.045), 0 12px 28px rgba(0,0,0,.18);
+}
+
+.celestial-mode-card:hover,
+.mission-chapter-card:hover,
+.meta-catalog-card:hover,
+.meta-weapon-card:hover,
+.meta-offer-card:hover,
+.codex-card:hover,
+.pvp-mode-card:hover,
+.pvp-room-row:hover {
+  border-color: rgba(127,228,196,.72) !important;
+  box-shadow: inset 0 0 0 1px rgba(127,228,196,.14), 0 0 28px rgba(127,228,196,.12);
+  transform: translateY(-3px);
+}
+
+.celestial-home-brand > h1,
+.celestial-mode-content h2,
+.celestial-lobby-heading h1,
+.celestial-room-title h1,
+.meta-title-row h1,
+.meta-panel-heading h2,
+.codex-card-title h3,
+.pvp-hero h1,
+.pvp-panel h2,
+.mission-briefing-title,
+.mission-chapter-heading h3 {
+  font-family: ui-serif, "Songti SC", "STSong", serif !important;
+  text-shadow: 0 2px 18px rgba(0,0,0,.52);
+}
+
+.celestial-mode-cta,
+.cyber-primary-button,
+.cyber-start-button,
+.meta-primary-button,
+.pvp-primary-button,
+.pvp-secondary-button,
+.room-deploy-btn,
+.mission-difficulty-button {
+  border-color: rgba(240,200,117,.6) !important;
+  background: linear-gradient(135deg, rgba(240,200,117,.19), rgba(127,228,196,.1)) !important;
+  color: var(--game-paper) !important;
+  box-shadow: inset 0 1px rgba(255,255,255,.08), 0 6px 18px rgba(0,0,0,.22);
+  letter-spacing: .12em;
+}
+
+.celestial-mode-cta:hover,
+.cyber-primary-button:hover,
+.cyber-start-button:hover,
+.meta-primary-button:hover,
+.pvp-primary-button:hover,
+.pvp-secondary-button:hover,
+.room-deploy-btn:hover,
+.mission-difficulty-button:not(:disabled):hover {
+  border-color: var(--game-jade) !important;
+  background: linear-gradient(135deg, rgba(127,228,196,.28), rgba(240,200,117,.16)) !important;
+  box-shadow: 0 0 26px rgba(127,228,196,.2);
+  transform: translateY(-2px);
+}
+
+.home-meta-entry button,
+.split-nav,
+.split-nav-item,
+.meta-nav,
+.meta-nav-link,
+.cyber-nav-chip,
+.pvp-nav button,
+.pvp-back {
+  border-color: rgba(240,200,117,.24) !important;
+  background: rgba(7,12,25,.74) !important;
+  color: var(--game-muted) !important;
+}
+
+.home-meta-entry button:hover,
+.split-nav-item:hover,
+.split-nav-item-active,
+.meta-nav-link-active,
+.cyber-nav-chip:hover,
+.pvp-nav button:hover,
+.pvp-back:hover {
+  border-color: rgba(127,228,196,.68) !important;
+  color: var(--game-paper) !important;
+  background: rgba(127,228,196,.12) !important;
+}
+
+/* Make the account terminal read like a player sigil. */
+.celestial-home-account button,
+.login-page button,
+.login-page input { border-radius: 10px !important; }
+
+.celestial-home-account button { border: 1px solid rgba(240,200,117,.32); background: rgba(7,12,25,.66); padding: .45rem .7rem; }
+
+/* Login is an arrival scene, not an auth console. */
+.login-page {
+  min-height: 100dvh;
+  background:
+    linear-gradient(180deg, rgba(4,7,16,.68), rgba(4,7,16,.9)),
+    url('/art/backgrounds/myriad-celestial-menu-v1.webp') center / cover no-repeat !important;
+}
+
+.login-page > div.relative.z-10 {
+  border: 1px solid rgba(240,200,117,.4) !important;
+  border-radius: 22px;
+  background: linear-gradient(145deg, rgba(13,20,36,.94), rgba(5,9,20,.94)) !important;
+  box-shadow: 0 30px 90px rgba(0,0,0,.55), inset 0 1px rgba(255,255,255,.08);
+}
+
+.login-page h1 { font-family: ui-serif, "Songti SC", serif !important; letter-spacing: .24em !important; }
+.login-page .font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.login-page input { border-color: rgba(127,228,196,.24) !important; background: rgba(4,9,20,.82) !important; color: var(--game-paper) !important; }
+.login-page input:focus { border-color: var(--game-jade) !important; box-shadow: 0 0 22px rgba(127,228,196,.16) !important; }
+.login-page form > button { border-color: rgba(240,200,117,.65) !important; background: linear-gradient(135deg, rgba(240,200,117,.2), rgba(127,228,196,.12)) !important; color: var(--game-paper) !important; }
+
+/* Keep generated art lightweight and stop accidental horizontal scroll. */
+.celestial-home-page, .celestial-hall-page, .meta-page, .pvp-page, .login-page { overflow-x: hidden; }
+
 /* PVE 可访问交互与章回导演 */
 :where(button, a[href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])):focus-visible {
   outline: 2px solid #f1c766 !important;
@@ -8222,3 +8454,109 @@ body.crisis-overload-active {
     flex: none;
   }
 }
+
+/* Final skin pass (kept at EOF so legacy responsive rules cannot flatten it). */
+.celestial-home-page .celestial-home-wash {
+  background:
+    linear-gradient(180deg, rgba(5, 8, 18, 0.22), rgba(5, 8, 18, 0.8)),
+    url('/art/backgrounds/myriad-celestial-menu-v1.webp') center / cover no-repeat;
+  opacity: .8;
+  mask-image: linear-gradient(180deg, #000 0%, rgba(0,0,0,.92) 64%, transparent 100%);
+}
+.celestial-home-page,
+.celestial-hall-page,
+.meta-page,
+.codex-page,
+.pvp-page,
+.login-page { background-color: var(--game-ink, #060914) !important; overflow-x: hidden; }
+.celestial-lobby-panel,
+.celestial-room-panel,
+.meta-panel,
+.meta-header,
+.pvp-panel,
+.pvp-hero,
+.pvp-topbar,
+.mission-briefing-panel {
+  border-color: rgba(240,200,117,.28) !important;
+  background: linear-gradient(145deg, rgba(240,200,117,.07), transparent 34%), linear-gradient(180deg, rgba(13,20,36,.94), rgba(7,11,23,.94)) !important;
+  box-shadow: inset 0 1px rgba(255,255,255,.07), 0 24px 60px rgba(0,0,0,.34) !important;
+}
+.celestial-mode-card,
+.mission-chapter-card,
+.meta-catalog-card,
+.meta-weapon-card,
+.meta-offer-card,
+.codex-card,
+.pvp-mode-card,
+.pvp-room-row {
+  border-color: rgba(240,200,117,.22) !important;
+  background: linear-gradient(135deg, rgba(127,228,196,.075), transparent 44%), rgba(10,16,31,.86) !important;
+  box-shadow: inset 0 1px rgba(255,255,255,.045), 0 12px 28px rgba(0,0,0,.18);
+}
+.celestial-mode-card:hover,
+.mission-chapter-card:hover,
+.meta-catalog-card:hover,
+.meta-weapon-card:hover,
+.meta-offer-card:hover,
+.codex-card:hover,
+.pvp-mode-card:hover,
+.pvp-room-row:hover {
+  border-color: rgba(127,228,196,.72) !important;
+  box-shadow: inset 0 0 0 1px rgba(127,228,196,.14), 0 0 28px rgba(127,228,196,.12);
+  transform: translateY(-3px);
+}
+.celestial-home-brand > h1,
+.celestial-mode-content h2,
+.celestial-lobby-heading h1,
+.celestial-room-title h1,
+.meta-title-row h1,
+.meta-panel-heading h2,
+.codex-card-title h3,
+.pvp-hero h1,
+.pvp-panel h2,
+.mission-briefing-title,
+.mission-chapter-heading h3 { font-family: ui-serif, "Songti SC", "STSong", serif !important; text-shadow: 0 2px 18px rgba(0,0,0,.52); }
+.celestial-mode-cta,
+.cyber-primary-button,
+.cyber-start-button,
+.meta-primary-button,
+.pvp-primary-button,
+.pvp-secondary-button,
+.room-deploy-btn,
+.mission-difficulty-button {
+  border-color: rgba(240,200,117,.6) !important;
+  background: linear-gradient(135deg, rgba(240,200,117,.19), rgba(127,228,196,.1)) !important;
+  color: #f8efd9 !important;
+  box-shadow: inset 0 1px rgba(255,255,255,.08), 0 6px 18px rgba(0,0,0,.22);
+}
+.celestial-mode-cta:hover,
+.cyber-primary-button:hover,
+.cyber-start-button:hover,
+.meta-primary-button:hover,
+.pvp-primary-button:hover,
+.pvp-secondary-button:hover,
+.room-deploy-btn:hover,
+.mission-difficulty-button:not(:disabled):hover { border-color: #7fe4c4 !important; box-shadow: 0 0 26px rgba(127,228,196,.2); transform: translateY(-2px); }
+.home-meta-entry button,
+.split-nav,
+.split-nav-item,
+.meta-nav,
+.meta-nav-link,
+.cyber-nav-chip,
+.pvp-nav button,
+.pvp-back { border-color: rgba(240,200,117,.24) !important; background: rgba(7,12,25,.74) !important; color: rgba(234,226,205,.66) !important; }
+.home-meta-entry button:hover,
+.split-nav-item:hover,
+.split-nav-item-active,
+.meta-nav-link-active,
+.cyber-nav-chip:hover,
+.pvp-nav button:hover,
+.pvp-back:hover { border-color: rgba(127,228,196,.68) !important; color: #f8efd9 !important; background: rgba(127,228,196,.12) !important; }
+.login-page {
+  background: linear-gradient(180deg, rgba(4,7,16,.68), rgba(4,7,16,.9)), url('/art/backgrounds/myriad-celestial-menu-v1.webp') center / cover no-repeat !important;
+}
+.login-page > div.relative.z-10 { border: 1px solid rgba(240,200,117,.4) !important; border-radius: 22px; background: linear-gradient(145deg, rgba(13,20,36,.94), rgba(5,9,20,.94)) !important; box-shadow: 0 30px 90px rgba(0,0,0,.55), inset 0 1px rgba(255,255,255,.08); }
+.login-page h1 { font-family: ui-serif, "Songti SC", serif !important; letter-spacing: .24em !important; }
+.login-page input { border-color: rgba(127,228,196,.24) !important; background: rgba(4,9,20,.82) !important; color: #f8efd9 !important; }
+.login-page input:focus { border-color: #7fe4c4 !important; box-shadow: 0 0 22px rgba(127,228,196,.16) !important; }
+.login-page form > button { border-color: rgba(240,200,117,.65) !important; background: linear-gradient(135deg, rgba(240,200,117,.2), rgba(127,228,196,.12)) !important; color: #f8efd9 !important; }

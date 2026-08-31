@@ -78,7 +78,7 @@ function itemTargetLabel(targetingKind: string) {
 
 function MetaNav({ mode }: { mode: MetaSystemMode }) {
   return (
-    <nav className="meta-nav" aria-label="局外系统导航">
+    <nav className="meta-nav" aria-label="天庭卷库导航">
       {(Object.keys(MODE_INFO) as MetaSystemMode[]).map((key) => {
         const entry = MODE_INFO[key]
         const Icon = entry.icon
@@ -101,7 +101,7 @@ function LoadingState() {
   return (
     <section className="meta-empty-state" aria-busy="true">
       <RefreshCw className="h-7 w-7 animate-spin text-cyan-300" />
-      <div><strong>正在同步局外账户</strong><p>正在获取解锁、碎片和构筑版本……</p></div>
+      <div><strong>正在展开天庭卷库</strong><p>请稍候……</p></div>
     </section>
   )
 }
@@ -111,8 +111,8 @@ function ApiEmptyState({ error, onRetry }: { error: string | null; onRetry: () =
     <section className="meta-empty-state meta-empty-state-error">
       <ShieldQuestion className="h-8 w-8 text-orange-300" />
       <div>
-        <strong>账户服务尚未就绪</strong>
-        <p>{error ?? '暂时没有可展示的局外数据。'} 页面不会伪造本地库存或预先修改账户。</p>
+        <strong>卷库暂时闭合</strong>
+        <p>{error ?? '请稍后再来。'}</p>
       </div>
       <button type="button" className="meta-action-button" onClick={onRetry}><RefreshCw className="h-4 w-4" />重试</button>
     </section>
@@ -224,7 +224,7 @@ function ItemBuildView({ account, items, busy, onSave }: {
               choose(item.itemId)
             }}
           />
-        ))}</div> : <p className="meta-inline-empty">服务端尚未下发道具目录。</p>}
+        ))}</div> : <p className="meta-inline-empty">卷库中还没有道具。</p>}
       </section>
     </div>
   )
@@ -304,7 +304,7 @@ function ArsenalView({ account, weapons, generals, generalSelection, busy, onSav
     setSlots(account.weapon.loadoutsByGeneralId[general.generalId]?.slots ?? [null, null])
   }, [general, account.weapon.loadoutsByGeneralId, account.version])
 
-  if (!general || unlockedGenerals.length === 0) return <p className="meta-inline-empty">当前账户暂无已解锁神将，无法编辑武器方案。</p>
+  if (!general || unlockedGenerals.length === 0) return <p className="meta-inline-empty">尚未召得神将。</p>
 
   function equip(weapon: WeaponCatalogEntry) {
     const otherSlot = editingSlot === 0 ? 1 : 0
@@ -353,7 +353,7 @@ function ArsenalView({ account, weapons, generals, generalSelection, busy, onSav
         <div className="meta-compatibility-hint"><Sparkles className="h-4 w-4" /><span>已优先展示{ARCHETYPE_LABEL[general.archetype]}适配武器；红色专武只能由对应神将佩戴。已解锁通用武器可被多名神将同时配置。</span></div>
         {orderedWeapons.length > 0 ? <div className="meta-weapon-grid">{orderedWeapons.map((weapon) => (
           <WeaponCard key={weapon.weaponId} weapon={weapon} account={account} general={general} equipped={slots[editingSlot] === weapon.weaponId} busy={busy} onEquip={() => equip(weapon)} onCraft={() => void onCraft(weapon.weaponId)} />
-        ))}</div> : <p className="meta-inline-empty">当前神将暂无已拥有或已有碎片的适配武器。</p>}
+        ))}</div> : <p className="meta-inline-empty">这位神将还没有可用兵器。</p>}
       </section>
     </div>
   )
@@ -389,12 +389,12 @@ function ShopView({ account, entitlements, offers, busy, onLoadOffers, onPurchas
         <div className="meta-panel-heading"><div><span>FIXED OFFERS</span><h2>三选一</h2></div><div className="meta-gold-badge"><Coins className="h-4 w-4" />{account.gold}</div></div>
         {selected && offers.length === 0 ? (
           <div className="meta-inline-empty meta-shop-empty">
-            <ShoppingBag className="h-8 w-8" /><p>选中购买权后请加载候选。候选由服务端按购买权 ID 固定，重复打开不会刷新。</p><button type="button" disabled={busy} className="meta-action-button" onClick={() => void onLoadOffers(selected.entitlementId)}><RefreshCw className="h-4 w-4" />加载 3 个候选</button>
+            <ShoppingBag className="h-8 w-8" /><p>选中一枚购买权，查看今日宝物。</p><button type="button" disabled={busy} className="meta-action-button" onClick={() => void onLoadOffers(selected.entitlementId)}><RefreshCw className="h-4 w-4" />显现候选</button>
           </div>
         ) : offers.length > 0 && selected ? <div className="meta-offer-grid">{offers.map((offer) => (
           <article key={offer.offerId} className={cx('meta-offer-card', offer.quality && `meta-quality-${offer.quality}`)}>
             <span>{offer.kind === 'weapon_fragment' ? '武器碎片' : offer.kind === 'item' ? '永久道具' : offer.kind}</span>
-            <h3>{offer.name}</h3><p>{offer.description || '服务端候选，购买成功后永久写入账户。'}</p>
+            <h3>{offer.name}</h3><p>{offer.description || '收入囊中后永久生效。'}</p>
             <button type="button" disabled={busy || account.gold < offer.priceGold} onClick={() => void onPurchase(selected.entitlementId, offer.offerId)}><Coins className="h-4 w-4" />{account.gold < offer.priceGold ? `需要 ${offer.priceGold} 金币` : `${offer.priceGold} 金币购买`}</button>
           </article>
         ))}</div> : <p className="meta-inline-empty">请先获得一张购买权。</p>}
@@ -416,7 +416,7 @@ export function MetaSystemPage({ mode }: { mode: MetaSystemMode }) {
         <header className="meta-header">
           <button type="button" className="meta-back-button" onClick={() => navigate('/home')}><ArrowLeft className="h-4 w-4" />返回主页</button>
           <MetaNav mode={mode} />
-          <div className="meta-title-row"><div className="meta-title-icon"><Icon className="h-7 w-7" /></div><div><span>OUT-OF-MATCH SYSTEM</span><h1>{info.title}</h1><p>{info.subtitle}</p></div>{service.data ? <div className="meta-account-summary"><span><Coins className="h-4 w-4" /><strong>{service.data.account.gold}</strong><small>金币</small></span><span><Sparkles className="h-4 w-4" /><strong>{service.data.account.honor}</strong><small>荣誉</small></span></div> : null}</div>
+          <div className="meta-title-row"><div className="meta-title-icon"><Icon className="h-7 w-7" /></div><div><span>天庭卷库</span><h1>{info.title}</h1><p>{info.subtitle}</p></div>{service.data ? <div className="meta-account-summary"><span><Coins className="h-4 w-4" /><strong>{service.data.account.gold}</strong><small>金币</small></span><span><Sparkles className="h-4 w-4" /><strong>{service.data.account.honor}</strong><small>荣誉</small></span></div> : null}</div>
         </header>
 
         {service.error && service.data ? <div className="meta-feedback meta-feedback-error">{service.error}</div> : null}

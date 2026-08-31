@@ -43,7 +43,7 @@ function GeneralSelectionPanel({
         <div><span>GENERAL POOL</span><strong>本局神将预选</strong></div>
         <small>{selected.size}/{config.maxPerMatch}</small>
       </div>
-      <p>{config.unlockStateKnown ? '仅可选择已解锁神将；开局后预选池锁定。' : '正在等待账户解锁矩阵；未确认解锁状态的神将暂不可选。'}</p>
+      <p>择最多 {config.maxPerMatch} 位神将，随你踏入这一回。</p>
       <div className="mission-general-grid">
         {generals.map((general) => {
           const explicitlyLocked = config.unlockStateKnown

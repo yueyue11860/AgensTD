@@ -76,7 +76,11 @@ const pveCheckpointCoordinator = new PveCheckpointCoordinator(pveCheckpointStore
 const app = express()
 const frontendDistDir = path.resolve(process.cwd(), '../FE/dist')
 const frontendIndexFile = path.join(frontendDistDir, 'index.html')
-const hasFrontendBuild = existsSync(frontendIndexFile)
+const frontendBuildExists = existsSync(frontendIndexFile)
+if (config.serveFrontend && !frontendBuildExists) {
+  throw new Error(`SERVE_FRONTEND=true requires a frontend build at ${frontendIndexFile}`)
+}
+const servesFrontend = config.serveFrontend && frontendBuildExists
 
 function isFrontendPageRequest(request: express.Request) {
   if (request.path.startsWith('/api') || request.path.startsWith('/health') || request.path.startsWith('/socket.io')) {
@@ -98,8 +102,18 @@ function isFrontendPageRequest(request: express.Request) {
 app.use(cors({ origin: config.corsOrigin === '*' ? true : config.corsOrigin, credentials: true }))
 app.use(express.json())
 
-if (hasFrontendBuild) {
+if (servesFrontend) {
   app.use(express.static(frontendDistDir))
+}
+
+if (!servesFrontend) {
+  app.get('/', (_request, response) => {
+    response.status(404).json({
+      ok: false,
+      code: 'FRONTEND_NOT_SERVED',
+      message: 'This process only serves the game API and Socket.IO gateway. Open the frontend server instead.',
+    })
+  })
 }
 
 app.get('/health', (_request, response) => {
@@ -115,6 +129,7 @@ app.get('/health', (_request, response) => {
       pvp: persistencePolicy.pvpStoreMode,
       pveCheckpoint: checkpointStoreMode,
     },
+    frontend: servesFrontend ? 'served' : 'external',
     pveCheckpoint: pveCheckpointReadiness,
   })
 })
@@ -192,7 +207,7 @@ app.use('/api', createRestApiRouter(
 ))
 app.use('/api/agent', createAgentApiRouter(projectedTickStream, config, replayRecorder, competitionStore, performanceTelemetry))
 
-if (hasFrontendBuild) {
+if (servesFrontend) {
   app.use((request, response, next) => {
     if (!isFrontendPageRequest(request)) {
       next()

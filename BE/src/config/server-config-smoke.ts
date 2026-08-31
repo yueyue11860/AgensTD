@@ -3,15 +3,22 @@ import { createServerConfig } from './server-config'
 import { isE2eControlAvailable } from '../network/e2e-control-api'
 import { stressCombatBatch, stressEnemies, stressFullState, stressPatch } from '../network/e2e-renderer-stress'
 
-const keys = ['NODE_ENV', 'TICK_RATE_MS', 'PVE_E2E_ENABLED', 'HOST_LOOP_INTERVAL_MS', 'PORT', 'BROADCAST_INTERVAL_MS', 'FULL_SNAPSHOT_INTERVAL_MS'] as const
+const keys = ['NODE_ENV', 'TICK_RATE_MS', 'PVE_E2E_ENABLED', 'HOST_LOOP_INTERVAL_MS', 'PORT', 'BROADCAST_INTERVAL_MS', 'FULL_SNAPSHOT_INTERVAL_MS', 'SERVE_FRONTEND'] as const
 const original = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
 
 try {
   process.env.NODE_ENV = 'test'
   process.env.TICK_RATE_MS = '100'
+  delete process.env.SERVE_FRONTEND
   delete process.env.PVE_E2E_ENABLED
   process.env.HOST_LOOP_INTERVAL_MS = '20'
-  assert.equal(createServerConfig().hostLoopIntervalMs, 100, 'host acceleration requires the explicit E2E gate')
+  const defaultConfig = createServerConfig()
+  assert.equal(defaultConfig.hostLoopIntervalMs, 100, 'host acceleration requires the explicit E2E gate')
+  assert.equal(defaultConfig.serveFrontend, false, 'the game server must not expose the frontend unless explicitly enabled')
+
+  process.env.SERVE_FRONTEND = 'true'
+  assert.equal(createServerConfig().serveFrontend, true, 'frontend hosting may be explicitly enabled for compatibility')
+  delete process.env.SERVE_FRONTEND
 
   process.env.PVE_E2E_ENABLED = 'true'
   const e2eConfig = createServerConfig()

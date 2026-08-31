@@ -25,9 +25,9 @@ function CodexCard({ locked, glyph, title, subtitle, description, lockedDescript
 
 function PveCatalogEmpty({ category, hasEncyclopedia, hasQuery }: { category: '怪物' | 'Boss'; hasEncyclopedia: boolean; hasQuery: boolean }) {
   if (!hasEncyclopedia) {
-    return <p className="meta-inline-empty">PVE V2 图鉴数据未下发，无法显示{category}。页面不会回退到旧版目录。</p>
+    return <p className="meta-inline-empty">{category}图鉴尚未显现。</p>
   }
-  return <p className="meta-inline-empty">{hasQuery ? `没有匹配的${category}图鉴条目。` : `服务端 PVE V2 图鉴尚无${category}条目。`}</p>
+  return <p className="meta-inline-empty">{hasQuery ? `没有匹配的${category}。` : `${category}图鉴尚未显现。`}</p>
 }
 
 export function CodexPage() {
@@ -54,7 +54,7 @@ export function CodexPage() {
     <header className="meta-header"><button type="button" className="meta-back-button" onClick={() => navigate('/home')}><ArrowLeft className="h-4 w-4" />返回主页</button>
       <div className="meta-title-row"><div className="meta-title-icon"><BookOpen className="h-7 w-7" /></div><div><span>COLLECTION ARCHIVE</span><h1>全量图鉴</h1><p>神将、道具、怪物与 Boss 的完整档案。未解锁内容会以灰色剪影展示。</p></div></div>
     </header>
-    {service.isLoading && !data ? <section className="meta-empty-state"><BookOpen className="h-7 w-7 text-cyan-300" /><div><strong>正在同步图鉴目录</strong><p>正在获取账户解锁状态……</p></div></section> : !data ? <section className="meta-empty-state meta-empty-state-error"><div><strong>图鉴服务暂不可用</strong><p>{service.error ?? '请稍后重试。'}</p></div></section> : <>
+    {service.isLoading && !data ? <section className="meta-empty-state"><BookOpen className="h-7 w-7 text-cyan-300" /><div><strong>正在展开图鉴</strong><p>请稍候……</p></div></section> : !data ? <section className="meta-empty-state meta-empty-state-error"><div><strong>图鉴暂时闭合</strong><p>{service.error ?? '请稍后再来。'}</p></div></section> : <>
       <div className="codex-toolbar"><nav className="codex-tabs" aria-label="图鉴分类">{TABS.map(({ id, label, icon: Icon }) => <button key={id} type="button" className={cx('codex-tab', tab === id && 'codex-tab-active')} onClick={() => setTab(id)}><Icon className="h-4 w-4" />{label}<span>{counts[id]}</span></button>)}</nav><label className="codex-search"><Search className="h-4 w-4" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称…" /></label></div>
       <section className="codex-grid">
         {tab === 'generals' && generals.filter((entry) => match(entry.name)).map((entry) => <CodexCard key={entry.generalId} locked={!isGeneralUnlocked(entry.generalId, entry.unlocked)} glyph={entry.name.slice(0, 1)} title={entry.name} subtitle={`${ARCHETYPE_LABEL[entry.archetype]} · ${entry.quality ?? '神将'}`} description="可在对局中选用的神将，拥有独特技能与成长曲线。" tags={[entry.generalId]} />)}

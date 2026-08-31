@@ -151,9 +151,9 @@ export function PhaserBattlefield({ snapshot, terrainMatrix, sceneTheme, hovered
     <section className="gaming-board-frame" aria-label="29×29西游汉字战场" data-onboarding-anchor="battlefield" data-pending-client-actions={clientActionIntents.length}>
       {clientActionIntents.length > 0 ? (
         <div className="gaming-client-intent-status" role="status" aria-live="polite">
-          <span>本地响应</span>
+          <span>行动</span>
           <strong>{clientActionIntents.at(-1)?.label}</strong>
-          <small>{clientActionIntents.some(intent => intent.acceptedAtServerTick !== null) ? '服务器已接收 · 等待权威帧' : '正在发送 · 不修改权威数值'}</small>
+          <small>{clientActionIntents.some(intent => intent.acceptedAtServerTick !== null) ? '已落子' : '施法中'}</small>
         </div>
       ) : null}
       <div className="gaming-board-viewport">

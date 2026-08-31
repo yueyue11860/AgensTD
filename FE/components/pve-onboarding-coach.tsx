@@ -12,8 +12,8 @@ interface CoachCopy {
 function copyForStep(step: PveOnboardingStepId, facts: PveOnboardingFacts): CoachCopy {
   if (step === 'recruit') return {
     anchor: 'recruit', eyebrow: '第一步 · 斋饭与召唤', title: '先看斋饭，再落召唤令',
-    body: `首次召唤从 5 斋饭起；此刻服务端确认的费用是 ${facts.nextRecruitCost} 斋饭。费用变化始终以按钮为准。`,
-    note: '召唤只发送请求，不会在客户端先扣资源。',
+    body: `首次召唤需要 ${facts.nextRecruitCost} 斋饭，点下召唤令即可。`,
+    note: '斋饭不足时，先守住这一波。',
   }
   if (step === 'select-tray') return {
     anchor: 'tray', eyebrow: '第二步 · 选择托盘', title: '点一个已有字灵',
@@ -22,14 +22,14 @@ function copyForStep(step: PveOnboardingStepId, facts: PveOnboardingFacts): Coac
   }
   if (step === 'deploy') return {
     anchor: 'battlefield', eyebrow: '第三步 · 合法部署', title: '把选择落到可部署格',
-    body: '选择后点击战场的可部署格。路线与核心格不会接受部署，服务器确认后棋盘才会更新。',
+    body: '选择后点击战场的可部署格。路线与核心格不可落子。',
     note: '方向键移动格游标，Enter 或空格确认，Escape 取消。',
   }
   if (step === 'merge') return {
     anchor: 'tray', eyebrow: '第四步 · 同字同级合成', title: facts.mergeAvailable ? '阵中已有可合成的一对' : '记住合成方向，不必等字池',
     body: facts.mergeAvailable
-      ? '把同兵种、同等级的两名天兵叠到一起，服务器会生成更高一级单位。'
-      : '只有同兵种、同等级天兵才能合成。当前权威字池没有成对单位，这一步不会阻止你继续守关。',
+      ? '把同兵种、同等级的两名天兵叠到一起，合成更高一级单位。'
+      : '只有同兵种、同等级天兵才能合成。没有成对单位时，继续守关即可。',
     note: '不承诺本轮召唤必定出现相同单位。',
   }
   if (step === 'general') return {
@@ -37,12 +37,12 @@ function copyForStep(step: PveOnboardingStepId, facts: PveOnboardingFacts): Coac
     body: facts.generalFormed
       ? '选中成将字符，在详情中可固定神将；固定后组合整体迁移，解除后才能拆分。'
       : '把正确神将字符按配方相邻摆放即可成将。召唤不保证出现指定字，当前没有配方时继续守关即可。',
-    note: '神将与羁绊都以服务器 formation 状态为准。',
+    note: '神将成形后，可在详情中固定阵眼。',
   }
   return {
     anchor: 'boss', eyebrow: '第六步 · 首领预警', title: 'Boss 信号优先于普通提示',
     body: `当前第 ${facts.currentWave} 波。首领登场或读条时，顶部会显示名称、阶段、生命与技能倒计时。`,
-    note: '预警来自服务器事件；可跳过提示，先完成当前战术动作。',
+    note: '首领读条出现时，优先处理眼前战局。',
   }
 }
 
